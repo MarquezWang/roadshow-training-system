@@ -1,0 +1,20 @@
+[
+  {
+    "contestName": "虚构创新路演赛",
+    "projectField": "智能制造",
+    "dimension": "科技含量",
+    "commentText": "项目技术路线较清晰，但关键指标与行业标杆的量化对比仍需补充。",
+    "problemType": "技术指标不足",
+    "suggestionType": "补充验证数据",
+    "scoreRange": "14-17"
+  },
+  {
+    "contestName": "虚构创新路演赛",
+    "projectField": null,
+    "dimension": "路演表达",
+    "commentText": "路演结构完整，但开场价值主张不够直接，建议先说明客户痛点和差异化价值。",
+    "problemType": "表达重点后置",
+    "suggestionType": "优化叙事结构",
+    "scoreRange": "3-4"
+  }
+]

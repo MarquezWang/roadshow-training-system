@@ -1,0 +1,93 @@
+{
+  "name": "路演大赛真实评审规则",
+  "contestName": "路演大赛",
+  "version": "2026-v1",
+  "totalScore": 100,
+  "description": "依据项目团队、科技含量、市场机会三个一级指标进行综合评价。",
+  "criteria": [
+    {
+      "category": "项目团队",
+      "name": "知识水平及工作经验",
+      "description": "团队带头人及核心团队专业知识水平、工作经历、创新思想、价值观念等情况。",
+      "weight": 8,
+      "sortOrder": 1
+    },
+    {
+      "category": "项目团队",
+      "name": "团队结构",
+      "description": "团队成员年龄、知识背景、能力结构是否合理。",
+      "weight": 6,
+      "sortOrder": 2
+    },
+    {
+      "category": "项目团队",
+      "name": "稳定程度",
+      "description": "团队成员投入时间与投入精力有保证，团队合作稳定性，持续研发计划及支持经费来源。",
+      "weight": 6,
+      "sortOrder": 3
+    },
+    {
+      "category": "科技含量",
+      "name": "主体技术水平",
+      "description": "在关键技术上有所突破，整体技术和核心技术指标达到先进水平的情况。",
+      "weight": 10,
+      "sortOrder": 4
+    },
+    {
+      "category": "科技含量",
+      "name": "技术优势",
+      "description": "核心技术不易被模仿或被替代。",
+      "weight": 10,
+      "sortOrder": 5
+    },
+    {
+      "category": "科技含量",
+      "name": "进入壁垒",
+      "description": "不存在政策、环境、市场准入等方面的制约。",
+      "weight": 10,
+      "sortOrder": 6
+    },
+    {
+      "category": "市场机会",
+      "name": "市场需求",
+      "description": "目标客户明确，市场需求较大，产品或服务市场认可度高并能快速进入。",
+      "weight": 7,
+      "sortOrder": 7
+    },
+    {
+      "category": "市场机会",
+      "name": "市场价值",
+      "description": "产品在供应链上下游具有话语权、专业能力及不可替代性。",
+      "weight": 8,
+      "sortOrder": 8
+    },
+    {
+      "category": "市场机会",
+      "name": "知识产权保护",
+      "description": "成果知识产权清晰无争议，有知识产权成果池或完善的知识产权保护计划。",
+      "weight": 10,
+      "sortOrder": 9
+    },
+    {
+      "category": "市场机会",
+      "name": "核心技术成熟度",
+      "description": "核心技术比较成熟，配套技术基本具备。",
+      "weight": 7,
+      "sortOrder": 10
+    },
+    {
+      "category": "市场机会",
+      "name": "成果转化可靠性",
+      "description": "能够实现技术成果转化，形成主导产品重要技术指标稳定可靠。",
+      "weight": 8,
+      "sortOrder": 11
+    },
+    {
+      "category": "市场机会",
+      "name": "实施计划",
+      "description": "成果转化路线合理、可持续；研发方案全面严谨；采用方法可靠；风险分析及应对措施得当；有合理的投融资计划。",
+      "weight": 10,
+      "sortOrder": 12
+    }
+  ]
+}

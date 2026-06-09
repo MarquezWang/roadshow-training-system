@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String    @id @default(cuid())
+  name      String
+  email     String    @unique
+  role      String    @default("TEAM")
+  projects  Project[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Project {
+  id                  String        @id @default(cuid())
+  ownerId             String
+  owner               User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name                String
+  field               String
+  stage               String
+  summary             String
+  coreTechnology      String
+  applicationScenario String
+  businessModel       String
+  cooperationDemand   String
+  fileAssets          FileAsset[]
+  diagnoses           Diagnosis[]
+  scoreResults        ScoreResult[]
+  questions           Question[]
+  reports             Report[]
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([ownerId])
+}
+
+model FileAsset {
+  id                 String   @id @default(cuid())
+  projectId          String
+  project            Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  originalName       String
+  fileType           String
+  filePath           String
+  fileSize           Int
+  extractedText      String?
+  parseStatus        String   @default("PENDING")
+  parseError         String?
+  includeInAIContext Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([projectId])
+}
+
+model Diagnosis {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  summary      String
+  completeness String
+  issues       String
+  risks        String
+  suggestions  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([projectId])
+}
+
+model ScoreResult {
+  id          String          @id @default(cuid())
+  projectId   String
+  project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ruleId      String?
+  rule        EvaluationRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  totalScore  Int
+  scoreDetail String
+  comments    String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([projectId])
+  @@index([ruleId])
+}
+
+model Question {
+  id                 String   @id @default(cuid())
+  projectId          String
+  project            Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type               String
+  perspective        String
+  content            String
+  focus              String
+  suggestedDirection String
+  evidenceText       String?
+  evidenceLocation   String?
+  factCheckNote      String?
+  answers            Answer[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([projectId])
+}
+
+model Answer {
+  id         String    @id @default(cuid())
+  questionId String
+  question   Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  content    String
+  feedback   Feedback?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([questionId])
+}
+
+model Feedback {
+  id              String   @id @default(cuid())
+  answerId        String   @unique
+  answer          Answer   @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  evaluation      String
+  missingPoints   String
+  risks           String
+  suggestedAnswer String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Report {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+}
+
+model EvaluationRule {
+  id           String                @id @default(cuid())
+  name         String
+  contestName  String
+  version      String
+  totalScore   Int                   @default(100)
+  description  String?
+  rawText      String?
+  criteria     EvaluationCriterion[]
+  scoreResults ScoreResult[]
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@unique([contestName, version])
+}
+
+model EvaluationCriterion {
+  id           String         @id @default(cuid())
+  ruleId       String
+  rule         EvaluationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  category     String?
+  name         String
+  weight       Int
+  description  String
+  scoringGuide String?
+  sortOrder    Int
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([ruleId])
+}
+
+model ExpertComment {
+  id             String   @id @default(cuid())
+  contestName    String?
+  projectField   String?
+  dimension      String
+  commentText    String
+  problemType    String?
+  suggestionType String?
+  scoreRange     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([dimension])
+}
+
+model HistoricalQuestion {
+  id           String   @id @default(cuid())
+  contestName  String?
+  projectField String?
+  perspective  String
+  questionText String
+  focus        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([perspective])
+  @@index([projectField])
+}
+
+model KnowledgeSource {
+  id        String   @id @default(cuid())
+  title     String
+  type      String
+  filePath  String?
+  rawText   String?
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([status])
+}

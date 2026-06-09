@@ -1,0 +1,16 @@
+[
+  {
+    "contestName": "虚构创新路演赛",
+    "projectField": "新能源",
+    "perspective": "技术专家",
+    "questionText": "核心技术相较现有替代方案的关键性能优势是什么？",
+    "focus": "技术差异、性能指标、验证数据"
+  },
+  {
+    "contestName": "虚构创新路演赛",
+    "projectField": null,
+    "perspective": "投资机构",
+    "questionText": "未来三年的收入预测依据是什么？",
+    "focus": "市场规模、客户转化、财务假设"
+  }
+]

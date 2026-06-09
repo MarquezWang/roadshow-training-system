@@ -1,0 +1,28 @@
+[
+  {
+    "name": "样例路演评审规则",
+    "contestName": "虚构创新路演赛",
+    "version": "sample-v1",
+    "totalScore": 100,
+    "description": "脱敏虚构评审规则样例，用于说明字段结构。",
+    "rawText": "本规则仅为样例，不对应真实赛事。",
+    "criteria": [
+      {
+        "category": "项目团队",
+        "name": "团队结构",
+        "weight": 10,
+        "description": "评价团队成员能力结构和岗位分工是否合理。",
+        "scoringGuide": "核心岗位完整、分工清晰、经验匹配得分较高。",
+        "sortOrder": 1
+      },
+      {
+        "category": "科技含量",
+        "name": "技术先进性",
+        "weight": 20,
+        "description": "评价核心技术的先进性和可验证性。",
+        "scoringGuide": "有明确技术指标和对比数据得分较高。",
+        "sortOrder": 2
+      }
+    ]
+  }
+]
