@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { abortableTrainingStatuses } from "@/lib/training-status";
 
 type TrainingSessionRouteContext = Readonly<{
   params: Promise<{
@@ -25,15 +26,28 @@ export async function POST(
     return NextResponse.json({ error: "项目不存在。" }, { status: 404 });
   }
 
-  const session = await prisma.trainingSession.create({
-    data: {
-      projectId: id,
-      status: "CREATED",
-    },
-    select: {
-      id: true,
-    },
-  });
+  const [, session] = await prisma.$transaction([
+    prisma.trainingSession.updateMany({
+      where: {
+        projectId: id,
+        status: {
+          in: [...abortableTrainingStatuses],
+        },
+      },
+      data: {
+        status: "ABORTED",
+      },
+    }),
+    prisma.trainingSession.create({
+      data: {
+        projectId: id,
+        status: "CREATED",
+      },
+      select: {
+        id: true,
+      },
+    }),
+  ]);
 
   if (request.nextUrl.searchParams.get("redirect") === "1") {
     return NextResponse.redirect(

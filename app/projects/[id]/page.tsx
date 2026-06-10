@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { formatFileSize } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
+import { trainingStatusLabel } from "@/lib/training-status";
 
 type ProjectDetailPageProps = Readonly<{
   params: Promise<{
@@ -64,14 +65,6 @@ const formatDateTime = (date: Date) =>
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
-
-const trainingStatusLabel: Record<string, string> = {
-  CREATED: "待开始",
-  PITCHING: "路演中",
-  PITCH_ENDED: "路演已结束",
-  QA_READY: "问答准备中",
-  FINISHED: "已完成",
-};
 
 function formatDurationSec(durationSec: number | null) {
   if (durationSec === null) {

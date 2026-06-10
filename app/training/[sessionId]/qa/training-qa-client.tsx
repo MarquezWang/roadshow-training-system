@@ -7,6 +7,7 @@ import type {
   PDFDocumentProxy,
   RenderTask,
 } from "pdfjs-dist";
+import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 
 type TrainingQaQuestion = {
   id: string;
@@ -42,7 +43,7 @@ type TrainingQaClientProps = Readonly<{
   files: QaFile[];
 }>;
 
-type QaPhase = "ready" | "judgeSpeaking" | "preAnswer" | "answering";
+type QaPhase = "READY" | "ASKING" | "COUNTDOWN" | "ANSWERING" | "SAVING" | "DONE";
 type QaRecordingStatus = "idle" | "recording" | "saving" | "saved" | "disabled";
 type PreviewMode = "standard" | "compatible";
 
@@ -157,7 +158,7 @@ export function TrainingQaClient({
   const initialQuestionIndex = findInitialQuestionIndex(initialQuestions);
   const [status, setStatus] = useState(initialStatus);
   const [qaPhase, setQaPhase] = useState<QaPhase>(
-    initialStatus === "QAING" ? "answering" : "ready",
+    initialStatus === "QAING" ? "ASKING" : "READY",
   );
   const [questions, setQuestions] =
     useState<TrainingQaQuestion[]>(initialQuestions);
@@ -198,6 +199,8 @@ export function TrainingQaClient({
   const speechTimeoutRef = useRef<number | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
   const hasAutoEndedRef = useRef(false);
+  const hasResumedQaingRef = useRef(false);
+  const isCompletingNormallyRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -224,6 +227,12 @@ export function TrainingQaClient({
   const pageLabel = totalPages
     ? `${currentPageNumber} / ${totalPages}`
     : String(currentPageNumber);
+
+  useTrainingAbortGuard({
+    sessionId,
+    enabled: status === "QA_READY" || status === "QAING",
+    isCompletingNormallyRef,
+  });
 
   function clearSpeechTimer() {
     if (speechTimeoutRef.current !== null) {
@@ -257,7 +266,7 @@ export function TrainingQaClient({
   );
 
   const getCurrentUsedAnswerSec = useCallback(() => {
-    if (qaPhase !== "answering" || answerPhaseStartedMsRef.current === null) {
+    if (qaPhase !== "ANSWERING" || answerPhaseStartedMsRef.current === null) {
       return usedAnswerSec;
     }
 
@@ -559,17 +568,23 @@ export function TrainingQaClient({
 
   const beginAnswering = useCallback(async () => {
     clearCountdownTimer();
+    const currentUsedAnswerSec = Math.max(
+      answerElapsedBeforePhaseRef.current,
+      usedAnswerSec,
+    );
+
     currentAnswerStartedAtRef.current = new Date();
     answerPhaseStartedMsRef.current = Date.now();
-    answerElapsedBeforePhaseRef.current = usedAnswerSec;
-    setQaPhase("answering");
+    answerElapsedBeforePhaseRef.current = currentUsedAnswerSec;
+    setUsedAnswerSec(currentUsedAnswerSec);
+    setQaPhase("ANSWERING");
     await startQuestionRecording();
   }, [startQuestionRecording, usedAnswerSec]);
 
   const beginPreAnswerCountdown = useCallback(() => {
     clearSpeechTimer();
     clearCountdownTimer();
-    setQaPhase("preAnswer");
+    setQaPhase("COUNTDOWN");
     setPreAnswerCountdown(3);
 
     let nextValue = 3;
@@ -598,7 +613,7 @@ export function TrainingQaClient({
       clearCountdownTimer();
       window.speechSynthesis?.cancel();
       setCurrentQuestionIndex(questionIndex);
-      setQaPhase("judgeSpeaking");
+      setQaPhase("ASKING");
       setMessage("");
       setQaRecordingStatus("idle");
       setQaRecordingMessage("");
@@ -609,7 +624,6 @@ export function TrainingQaClient({
         typeof SpeechSynthesisUtterance === "undefined"
       ) {
         setMessage("当前浏览器不支持语音提问，已切换为文字提问。");
-        setRevealedQuestionIds((current) => new Set(current).add(question.id));
         beginPreAnswerCountdown();
         return;
       }
@@ -636,8 +650,7 @@ export function TrainingQaClient({
       utterance.pitch = 0.92;
       utterance.onend = moveOn;
       utterance.onerror = () => {
-        setMessage("语音提问不可用，已切换为文字提问。");
-        setRevealedQuestionIds((current) => new Set(current).add(question.id));
+        setMessage("语音提问不可用，请点击“查看问题文字”确认题目。");
         moveOn();
       };
       speechTimeoutRef.current = window.setTimeout(
@@ -657,6 +670,7 @@ export function TrainingQaClient({
 
       hasAutoEndedRef.current = true;
       setIsSaving(true);
+      setQaPhase("SAVING");
       setMessage("");
       clearSpeechTimer();
       clearCountdownTimer();
@@ -688,9 +702,12 @@ export function TrainingQaClient({
           throw new Error(body?.error ?? "完成答辩失败。");
         }
 
+        setQaPhase("DONE");
+        isCompletingNormallyRef.current = true;
         router.push(`/training/${sessionId}/report`);
       } catch (error) {
         hasAutoEndedRef.current = false;
+        setQaPhase("ANSWERING");
         setMessage(error instanceof Error ? error.message : "完成答辩失败。");
       } finally {
         setIsSaving(false);
@@ -706,7 +723,7 @@ export function TrainingQaClient({
   );
 
   useEffect(() => {
-    if (!isQaing || qaPhase !== "answering") {
+    if (!isQaing || qaPhase !== "ANSWERING") {
       return;
     }
 
@@ -737,6 +754,19 @@ export function TrainingQaClient({
 
     return () => window.clearInterval(timer);
   }, [currentQuestion, finishQaWithCurrentQuestion, isQaing, qaPhase]);
+
+  useEffect(() => {
+    if (
+      initialStatus !== "QAING" ||
+      hasResumedQaingRef.current ||
+      questions.length === 0
+    ) {
+      return;
+    }
+
+    hasResumedQaingRef.current = true;
+    beginJudgeQuestion(initialQuestionIndex);
+  }, [beginJudgeQuestion, initialQuestionIndex, initialStatus, questions.length]);
 
   useEffect(() => {
     return () => {
@@ -820,7 +850,7 @@ export function TrainingQaClient({
   }
 
   async function saveAndContinue() {
-    if (!currentQuestion || qaPhase !== "answering") {
+    if (!currentQuestion || qaPhase !== "ANSWERING") {
       return;
     }
 
@@ -829,6 +859,8 @@ export function TrainingQaClient({
 
     try {
       const currentUsedAnswerSec = getCurrentUsedAnswerSec();
+
+      setQaPhase("SAVING");
       const recordingId = await stopAndUploadCurrentRecording();
       const response = await fetch(
         `/training/${sessionId}/qa/questions/${currentQuestion.id}/answer`,
@@ -857,6 +889,8 @@ export function TrainingQaClient({
       }
 
       if (body?.completed) {
+        setQaPhase("DONE");
+        isCompletingNormallyRef.current = true;
         router.push(`/training/${sessionId}/report`);
         return;
       }
@@ -871,6 +905,7 @@ export function TrainingQaClient({
       answerElapsedBeforePhaseRef.current = currentUsedAnswerSec;
       beginJudgeQuestion(resolvedNextIndex);
     } catch (error) {
+      setQaPhase("ANSWERING");
       setMessage(error instanceof Error ? error.message : "保存本题回答失败。");
     } finally {
       setIsSaving(false);
@@ -892,13 +927,17 @@ export function TrainingQaClient({
   }
 
   const phaseLabel =
-    qaPhase === "judgeSpeaking"
+    qaPhase === "ASKING"
       ? "评委正在提问"
-      : qaPhase === "preAnswer"
+      : qaPhase === "COUNTDOWN"
         ? "准备回答"
-        : qaPhase === "answering"
+        : qaPhase === "ANSWERING"
           ? "回答中"
-          : "答辩准备";
+          : qaPhase === "SAVING"
+            ? "保存当前题"
+            : qaPhase === "DONE"
+              ? "答辩已完成"
+              : "答辩准备";
   const recordingLabel: Record<QaRecordingStatus, string> = {
     idle: "录音未开始",
     recording: "本题录音中",
@@ -913,184 +952,220 @@ export function TrainingQaClient({
       : "回答完毕，进入下一题";
 
   return (
-    <div className="grid min-h-[calc(100vh-140px)] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <section className="flex min-h-[calc(100vh-150px)] flex-col rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex flex-col gap-3 border-b border-slate-200 pb-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="grid h-[calc(100vh-24px)] w-full gap-3 overflow-hidden bg-slate-950 text-white lg:grid-cols-[minmax(0,1fr)_300px]">
+      <section className="flex min-h-0 flex-col rounded-lg border border-slate-700 bg-slate-900/95 p-3 shadow-2xl">
+        <div className="flex flex-col gap-3 border-b border-slate-700 pb-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-500">材料参考区</p>
-            <h2 className="text-lg font-semibold text-slate-950">
-              {projectName}
+            <p className="text-xs font-medium text-slate-400">{projectName}</p>
+            <p className="mt-1 text-xs font-medium text-slate-400">
+              当前阶段：模拟答辩
+            </p>
+            <h2 className="mt-1 text-2xl font-semibold text-white">
+              {phaseLabel}
             </h2>
-            {previewFile ? (
-              <p className="mt-1 text-xs text-slate-500">
-                {previewFile.originalName}，当前 {pageLabel}
-              </p>
-            ) : null}
+            <p className="mt-1 text-sm text-slate-300">
+              答辩阶段可翻阅材料，不写入路演翻页事件。
+            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {previewFile ? (
-              <div className="inline-flex rounded-md border border-slate-200 bg-white p-1">
-                <button
-                  type="button"
-                  onClick={() => setPreviewMode("standard")}
-                  className={
-                    previewMode === "standard"
-                      ? "rounded bg-slate-950 px-2.5 py-1 text-xs font-medium text-white"
-                      : "rounded px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
-                  }
-                >
-                  标准预览
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewMode("compatible")}
-                  className={
-                    previewMode === "compatible"
-                      ? "rounded bg-slate-950 px-2.5 py-1 text-xs font-medium text-white"
-                      : "rounded px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
-                  }
-                >
-                  兼容预览
-                </button>
-              </div>
-            ) : null}
-            <span className="inline-flex rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
-              翻页不写入路演事件
-            </span>
+          <div className="text-left sm:text-right">
+            <p className="text-xs font-medium text-slate-400">剩余答题时间</p>
+            <p
+              className={
+                remainingSec <= 30
+                  ? "mt-1 text-5xl font-semibold text-red-300"
+                  : "mt-1 text-5xl font-semibold text-white"
+              }
+            >
+              {formatDuration(remainingSec)}
+            </p>
+            <p className="mt-1 text-sm text-slate-300">
+              {questions.length > 0 && currentQuestion
+                ? `${currentQuestion.orderIndex} / ${questions.length}`
+                : `0 / ${questions.length}`}
+            </p>
           </div>
         </div>
 
-        {previewFile ? (
-          <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3">
-            <div
-              ref={previewContainerRef}
-              className={
-                previewMode === "standard"
-                  ? "grid min-h-[calc(100vh-300px)] place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-4"
-                  : "grid min-h-[calc(100vh-300px)] overflow-hidden rounded-lg border border-slate-200 bg-slate-100"
-              }
-            >
-              {previewMode === "compatible" && compatiblePreviewUrl ? (
-                <iframe
-                  title={`${previewFile.originalName} 兼容预览`}
-                  src={compatiblePreviewUrl}
-                  className="h-full min-h-[calc(100vh-300px)] w-full border-0 bg-white"
-                />
-              ) : isPdfLoading ? (
-                <p className="rounded-md bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
-                  PDF 加载中...
-                </p>
-              ) : pdfError ? (
-                <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {pdfError}
-                </p>
-              ) : (
-                <canvas
-                  ref={canvasRef}
-                  className="max-h-full max-w-full rounded-sm bg-white shadow"
-                />
-              )}
-            </div>
+        <div className="mt-3 grid min-h-0 flex-1 place-items-center rounded-lg border border-slate-700 bg-slate-950 p-2 text-center">
+          {previewFile ? (
+            <div className="grid h-full min-h-0 w-full grid-rows-[auto_minmax(0,1fr)] gap-3">
+              <div className="flex flex-col gap-2 text-left sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-white">
+                    {previewFile.originalName}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-300">
+                    PDF 单页预览，当前 {pageLabel}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex rounded-md border border-slate-700 bg-slate-900 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode("standard")}
+                      className={
+                        previewMode === "standard"
+                          ? "rounded bg-white px-2.5 py-1 text-xs font-medium text-slate-950"
+                          : "rounded px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                      }
+                    >
+                      标准预览
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode("compatible")}
+                      className={
+                        previewMode === "compatible"
+                          ? "rounded bg-white px-2.5 py-1 text-xs font-medium text-slate-950"
+                          : "rounded px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                      }
+                    >
+                      兼容预览
+                    </button>
+                  </div>
+                  <span className="inline-flex rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-medium text-slate-300">
+                    辅助翻页
+                  </span>
+                </div>
+              </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-slate-600">当前页码：{pageLabel}</p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => changeMaterialPage("PREV")}
-                  disabled={!canGoPrev}
-                  className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                >
-                  上一页
-                </button>
-                <button
-                  type="button"
-                  onClick={() => changeMaterialPage("NEXT")}
-                  disabled={!canGoNext}
-                  className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                >
-                  下一页
-                </button>
+              <div
+                ref={previewContainerRef}
+                className={
+                  previewMode === "standard"
+                    ? "grid h-full min-h-0 place-items-center overflow-hidden rounded-md border border-slate-700 bg-slate-950 p-2"
+                    : "grid h-full min-h-0 overflow-hidden rounded-md border border-slate-700 bg-slate-950"
+                }
+              >
+                {previewMode === "compatible" && compatiblePreviewUrl ? (
+                  <iframe
+                    title={`${previewFile.originalName} 兼容预览`}
+                    src={compatiblePreviewUrl}
+                    className="h-full min-h-0 w-full border-0 bg-white"
+                  />
+                ) : isPdfLoading ? (
+                  <p className="rounded-md bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+                    PDF 加载中...
+                  </p>
+                ) : pdfError ? (
+                  <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {pdfError}
+                  </p>
+                ) : (
+                  <canvas
+                    ref={canvasRef}
+                    className="max-h-full max-w-full rounded-sm bg-white shadow"
+                  />
+                )}
               </div>
             </div>
-          </div>
-        ) : (
-          <div className="grid min-h-[620px] flex-1 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+          ) : (
             <div>
-              <p className="text-base font-semibold text-slate-950">
+              <p className="text-sm font-medium text-slate-300">
                 当前没有可预览的 PDF 材料
               </p>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
+              <p className="mt-3 text-sm text-slate-400">
                 仍可继续答辩，右侧会显示当前纳入 AI 上下文的材料清单。
               </p>
             </div>
+          )}
+        </div>
+
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-slate-300">当前页码：{pageLabel}</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => changeMaterialPage("PREV")}
+              disabled={!canGoPrev}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
+            >
+              上一页
+            </button>
+            <button
+              type="button"
+              onClick={() => changeMaterialPage("NEXT")}
+              disabled={!canGoNext}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
+            >
+              下一页
+            </button>
           </div>
-        )}
+        </div>
       </section>
 
-      <aside className="grid content-start gap-4">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">语音评委答辩舱</p>
-          <h3 className="mt-2 text-xl font-semibold text-slate-950">
-            {phaseLabel}
-          </h3>
-
-          <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-              <dt className="text-slate-500">当前题号</dt>
-              <dd className="mt-1 font-semibold text-slate-950">
+      <aside className="grid min-h-0 gap-3 overflow-hidden lg:grid-rows-[auto_minmax(0,1fr)]">
+        <section className="rounded-lg border border-slate-700 bg-slate-900/90 p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-white">答辩信息</h3>
+          <dl className="mt-4 grid gap-3 text-sm">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
+              <dt className="text-slate-300">当前题号</dt>
+              <dd className="font-medium text-white">
                 {questions.length > 0 && currentQuestion
                   ? `${currentQuestion.orderIndex} / ${questions.length}`
                   : `0 / ${questions.length}`}
               </dd>
             </div>
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-              <dt className="text-slate-500">剩余答题时间</dt>
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
+              <dt className="text-slate-300">剩余答题时间</dt>
               <dd
                 className={
                   remainingSec <= 30
-                    ? "mt-1 text-lg font-semibold text-red-700"
-                    : "mt-1 text-lg font-semibold text-slate-950"
+                    ? "font-semibold text-red-300"
+                    : "font-medium text-white"
                 }
               >
                 {formatDuration(remainingSec)}
               </dd>
             </div>
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-              <dt className="text-slate-500">答辩状态</dt>
-              <dd className="mt-1 font-semibold text-slate-950">{status}</dd>
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
+              <dt className="text-slate-300">答辩状态</dt>
+              <dd className="font-medium text-white">{status}</dd>
             </div>
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-              <dt className="text-slate-500">录音状态</dt>
-              <dd className="mt-1 font-semibold text-slate-950">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
+              <dt className="text-slate-300">录音状态</dt>
+              <dd className="font-medium text-white">
                 {recordingLabel[qaRecordingStatus]}
               </dd>
             </div>
+            <div className="flex items-center justify-between">
+              <dt className="text-slate-300">查看问题文字</dt>
+              <dd className="font-medium text-white">
+                {currentQuestion && revealedQuestionIds.has(currentQuestion.id)
+                  ? "是"
+                  : "否"}
+              </dd>
+            </div>
           </dl>
+        </section>
+
+        <section className="min-h-0 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900/90 p-4 shadow-sm">
+          <p className="text-sm font-medium text-slate-400">语音评委答辩舱</p>
+          <h3 className="mt-2 text-xl font-semibold text-white">
+            {phaseLabel}
+          </h3>
 
           {!isQaing ? (
             <div className="mt-5 grid gap-4">
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-                <h4 className="text-sm font-semibold text-slate-950">
-                  答辩规则
-                </h4>
-                <ul className="mt-3 grid gap-2 text-sm leading-6 text-slate-700">
-                  <li>总答题时间 3 分钟，评委提问期间不扣时。</li>
+              <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4">
+                <h4 className="text-sm font-semibold text-white">答辩规则</h4>
+                <ul className="mt-3 grid gap-2 text-sm leading-6 text-slate-300">
+                  <li>总答题时间 3 分钟，评委提问和 3、2、1 期间不扣时。</li>
                   <li>系统一次只进入一道题。</li>
                   <li>问题默认语音播报，可按需查看文字。</li>
                   <li>回答完毕后点击进入下一题，最后一题点击完成答辩。</li>
                 </ul>
               </div>
 
-              <p className="text-sm leading-6 text-slate-600">
-                已生成问题数量：{questions.length}。开始前不展示完整问题正文。
+              <p className="text-sm leading-6 text-slate-300">
+                已生成问题数量：{questions.length}。开始前不展示完整题目正文。
               </p>
 
               <button
                 type="button"
                 onClick={() => void generateQuestions()}
                 disabled={isGenerating || questions.length > 0}
-                className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
               >
                 {isGenerating
                   ? "生成中..."
@@ -1102,29 +1177,29 @@ export function TrainingQaClient({
                 type="button"
                 onClick={() => void startQa()}
                 disabled={isStarting || questions.length === 0}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
               >
                 {isStarting ? "开始中..." : "开始答辩"}
               </button>
             </div>
           ) : currentQuestion ? (
             <div className="mt-5 grid gap-4">
-              {qaPhase === "judgeSpeaking" ? (
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-center">
-                  <p className="text-base font-semibold text-slate-950">
+              {qaPhase === "ASKING" ? (
+                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4 text-center">
+                  <p className="text-base font-semibold text-white">
                     评委正在提问，请认真听题
                   </p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    第 {currentQuestion.orderIndex} 题语音播报中，提问结束后将进入
-                    3、2、1 准备倒计时。
+                  <p className="mt-2 text-sm leading-6 text-slate-300">
+                    第 {currentQuestion.orderIndex} 题语音播报中。提问结束后将进入
+                    3、2、1，期间不扣答题时间。
                   </p>
                 </div>
               ) : null}
 
-              {qaPhase === "preAnswer" ? (
-                <div className="grid h-40 place-items-center rounded-md border border-slate-200 bg-slate-950 text-white">
+              {qaPhase === "COUNTDOWN" ? (
+                <div className="grid h-40 place-items-center rounded-md border border-slate-700 bg-white text-slate-950">
                   <div className="text-center">
-                    <p className="text-sm text-slate-300">准备回答</p>
+                    <p className="text-sm text-slate-500">准备回答</p>
                     <p className="mt-2 text-6xl font-semibold">
                       {preAnswerCountdown}
                     </p>
@@ -1132,50 +1207,56 @@ export function TrainingQaClient({
                 </div>
               ) : null}
 
-              {qaPhase === "answering" ? (
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-base font-semibold text-slate-950">
+              {qaPhase === "ANSWERING" ? (
+                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4">
+                  <p className="text-base font-semibold text-white">
                     请开始口头回答
                   </p>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">
-                    回答期间答题倒计时持续减少。答完后点击下方按钮保存本题用时和录音。
+                  <p className="mt-2 text-sm leading-6 text-slate-300">
+                    仅回答期间扣减答题时间。答完后点击下方按钮保存本题用时和录音。
                   </p>
                   {remainingSec < 30 && !isLastQuestion ? (
-                    <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-800">
+                    <p className="mt-3 rounded-md border border-amber-400/40 bg-amber-500/10 p-3 text-sm leading-6 text-amber-100">
                       剩余答题时间较少，建议保存本题并完成答辩。
                     </p>
                   ) : null}
                 </div>
               ) : null}
 
-              <div className="rounded-md border border-slate-200 bg-white p-4">
+              {qaPhase === "SAVING" ? (
+                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4 text-sm leading-6 text-slate-300">
+                  正在保存当前题用时和录音...
+                </div>
+              ) : null}
+
+              <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs font-medium uppercase text-slate-500">
+                  <p className="text-xs font-medium uppercase text-slate-400">
                     Q{currentQuestion.orderIndex} /{" "}
                     {currentQuestion.questionType ?? "QUESTION"}
                   </p>
                   <button
                     type="button"
                     onClick={revealQuestionText}
-                    className="inline-flex h-8 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                    className="inline-flex h-8 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-3 text-xs font-medium text-white transition-colors hover:bg-slate-800"
                   >
                     查看问题文字
                   </button>
                 </div>
 
                 {revealedQuestionIds.has(currentQuestion.id) ? (
-                  <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-sm font-semibold leading-6 text-slate-950">
+                  <div className="mt-3 rounded-md border border-slate-700 bg-slate-900 p-3">
+                    <p className="text-sm font-semibold leading-6 text-white">
                       {currentQuestion.questionText}
                     </p>
                     {currentQuestion.basis ? (
-                      <p className="mt-2 text-xs leading-5 text-slate-500">
+                      <p className="mt-2 text-xs leading-5 text-slate-400">
                         依据：{currentQuestion.basis}
                       </p>
                     ) : null}
                   </div>
                 ) : (
-                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                  <p className="mt-3 text-sm leading-6 text-slate-300">
                     问题文字默认隐藏。若没听清，可点击“查看问题文字”。
                   </p>
                 )}
@@ -1184,8 +1265,8 @@ export function TrainingQaClient({
               <button
                 type="button"
                 onClick={() => void saveAndContinue()}
-                disabled={isSaving || qaPhase !== "answering"}
-                className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                disabled={isSaving || qaPhase !== "ANSWERING"}
+                className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
               >
                 {isSaving ? "保存中..." : mainButtonLabel}
               </button>
@@ -1193,42 +1274,42 @@ export function TrainingQaClient({
           ) : null}
 
           {message ? (
-            <p className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+            <p className="mt-4 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm leading-6 text-slate-300">
               {message}
             </p>
           ) : null}
           {qaRecordingMessage ? (
-            <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+            <p className="mt-3 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm leading-6 text-slate-300">
               {qaRecordingMessage}
             </p>
           ) : null}
-        </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-base font-semibold text-slate-950">
-            纳入 AI 上下文的材料
-          </h3>
-          {files.length > 0 ? (
-            <ul className="mt-3 grid gap-2">
-              {files.map((file) => (
-                <li
-                  key={file.id}
-                  className="rounded-md border border-slate-200 bg-slate-50 p-3"
-                >
-                  <p className="break-words text-sm font-medium text-slate-900">
-                    {file.originalName}
-                  </p>
-                  <p className="mt-1 text-xs uppercase text-slate-500">
-                    {file.fileType}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-3 text-sm leading-6 text-slate-600">
-              暂无已解析且纳入 AI 上下文的材料。
-            </p>
-          )}
+          <div className="mt-5 rounded-md border border-slate-700 bg-slate-950/60 p-4">
+            <h4 className="text-sm font-semibold text-white">
+              纳入 AI 上下文的材料
+            </h4>
+            {files.length > 0 ? (
+              <ul className="mt-3 grid gap-2">
+                {files.map((file) => (
+                  <li
+                    key={file.id}
+                    className="rounded-md border border-slate-700 bg-slate-900 p-3"
+                  >
+                    <p className="break-words text-sm font-medium text-slate-100">
+                      {file.originalName}
+                    </p>
+                    <p className="mt-1 text-xs uppercase text-slate-400">
+                      {file.fileType}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                暂无已解析且纳入 AI 上下文的材料。
+              </p>
+            )}
+          </div>
         </section>
       </aside>
     </div>

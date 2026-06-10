@@ -75,6 +75,11 @@ export function TrainingReportClient({
   recording,
   initialAnalysis,
 }: TrainingReportClientProps) {
+  const isAborted = sessionStatus === "ABORTED";
+  const isQaCompleted =
+    sessionStatus === "QA_ENDED" ||
+    sessionStatus === "REPORT_READY" ||
+    sessionStatus === "FINISHED";
   const [transcript, setTranscript] = useState<TrainingTranscript | null>(
     recording?.transcript ?? null,
   );
@@ -82,7 +87,7 @@ export function TrainingReportClient({
     recording?.transcript?.text ?? "",
   );
   const [isTranscriptEditing, setIsTranscriptEditing] = useState(
-    recording !== null && !recording.transcript,
+    !isAborted && recording !== null && !recording.transcript,
   );
   const [isTranscriptSaving, setIsTranscriptSaving] = useState(false);
   const [transcriptMessage, setTranscriptMessage] = useState("");
@@ -93,6 +98,11 @@ export function TrainingReportClient({
   const [analysisMessage, setAnalysisMessage] = useState("");
 
   async function saveTranscript() {
+    if (isAborted) {
+      setTranscriptMessage("本轮训练已中止，报告页仅支持只读查看。");
+      return;
+    }
+
     const text = transcriptDraft.trim();
 
     if (!recording) {
@@ -150,6 +160,11 @@ export function TrainingReportClient({
   }
 
   async function generateAnalysis() {
+    if (isAborted) {
+      setAnalysisMessage("本轮训练已中止，不能继续生成路演表现分析。");
+      return;
+    }
+
     setIsAnalysisLoading(true);
     setAnalysisMessage("");
 
@@ -186,18 +201,22 @@ export function TrainingReportClient({
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <p className="text-sm font-medium text-slate-500">综合报告占位</p>
         <h2 className="mt-2 text-2xl font-semibold text-slate-950">
-          本轮训练已完成
+          {isAborted ? "本轮训练已中止" : "本轮训练已完成"}
         </h2>
         <p className="mt-4 text-sm leading-6 text-slate-600">
-          后续将在此展示材料表现、路演表现、答辩表现、综合评分和雷达图。本阶段不生成完整综合报告。
+          {isAborted
+            ? "本轮训练在正式流程中被中止，已完成内容会保留，但不能继续本轮路演或答辩。"
+            : "后续将在此展示材料表现、路演表现、答辩表现、综合评分和雷达图。本阶段不生成完整综合报告。"}
         </p>
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-base font-semibold text-slate-950">答辩摘要</h3>
-        {sessionStatus === "QA_ENDED" ||
-        sessionStatus === "REPORT_READY" ||
-        sessionStatus === "FINISHED" ? (
+        {isAborted ? (
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            本轮训练已中止。若需要继续训练，请回到项目详情重新开始一轮。
+          </p>
+        ) : isQaCompleted ? (
           <p className="mt-2 text-sm leading-6 text-slate-600">
             答辩已完成
             {qaDurationSec !== null ? `，用时 ${qaDurationSec} 秒` : ""}。
@@ -303,7 +322,7 @@ export function TrainingReportClient({
                 <h4 className="text-sm font-semibold text-slate-950">
                   手动转写文本
                 </h4>
-                {transcript && !isTranscriptEditing ? (
+                {transcript && !isTranscriptEditing && !isAborted ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -318,7 +337,7 @@ export function TrainingReportClient({
                 ) : null}
               </div>
 
-              {isTranscriptEditing ? (
+              {isTranscriptEditing && !isAborted ? (
                 <div className="mt-3 grid gap-3">
                   <textarea
                     value={transcriptDraft}
@@ -356,6 +375,10 @@ export function TrainingReportClient({
                 <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                   {transcript.text}
                 </p>
+              ) : isAborted ? (
+                <p className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-600">
+                  本轮训练已中止，暂无可编辑转写文本。
+                </p>
               ) : null}
 
               {transcriptMessage ? (
@@ -385,7 +408,7 @@ export function TrainingReportClient({
           <button
             type="button"
             onClick={() => void generateAnalysis()}
-            disabled={isAnalysisLoading || !transcript?.text.trim()}
+            disabled={isAborted || isAnalysisLoading || !transcript?.text.trim()}
             className="inline-flex h-9 items-center justify-center rounded-md bg-slate-950 px-3 text-xs font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {isAnalysisLoading
@@ -396,7 +419,11 @@ export function TrainingReportClient({
           </button>
         </div>
 
-        {!transcript?.text.trim() ? (
+        {isAborted ? (
+          <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">
+            本轮训练已中止，路演表现分析不再继续生成。
+          </p>
+        ) : !transcript?.text.trim() ? (
           <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">
             请先保存转写文本，再生成路演表现分析。
           </p>

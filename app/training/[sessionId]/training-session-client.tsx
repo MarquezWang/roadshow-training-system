@@ -7,6 +7,7 @@ import type {
   RenderTask,
 } from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 
 type TrainingFile = {
   id: string;
@@ -290,6 +291,7 @@ export function TrainingSessionClient({
   const recordingMimeTypeRef = useRef("");
   const hasHandledPitchRecordingPreferenceRef = useRef(false);
   const hasAutoEndedPitchRef = useRef(false);
+  const isCompletingNormallyRef = useRef(false);
   const isPitching = status === "PITCHING";
   const isEnded = status === "PITCH_ENDED" || status === "FINISHED";
   const primaryFileId = previewFile?.id ?? null;
@@ -309,10 +311,15 @@ export function TrainingSessionClient({
   const statusLabel = useMemo(() => {
     const labels: Record<string, string> = {
       CREATED: "待开始",
+      PITCH_READY: "路演准备中",
       PITCHING: "路演中",
       PITCH_ENDED: "路演已结束",
-      QA_READY: "问答准备中",
+      QA_READY: "答辩准备中",
+      QAING: "答辩中",
+      QA_ENDED: "答辩已完成",
+      REPORT_READY: "报告准备中",
       FINISHED: "已完成",
+      ABORTED: "已中止",
     };
 
     return labels[status] ?? status;
@@ -347,6 +354,12 @@ export function TrainingSessionClient({
 
     return labels[recordingStatus];
   }, [recordingStatus]);
+
+  useTrainingAbortGuard({
+    sessionId,
+    enabled: isPitching,
+    isCompletingNormallyRef,
+  });
 
   useEffect(() => {
     if (!isPitching) {
@@ -1253,6 +1266,7 @@ export function TrainingSessionClient({
       }
 
       if (redirectToQaAfterPitchEnd) {
+        isCompletingNormallyRef.current = true;
         router.push(`/training/${sessionId}/qa`);
       }
     } catch (error) {

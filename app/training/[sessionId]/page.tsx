@@ -1,31 +1,12 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getTrainingFlowPath } from "@/lib/training-status";
 
 type TrainingSessionPageProps = Readonly<{
   params: Promise<{
     sessionId: string;
   }>;
 }>;
-
-function getTrainingFlowPath(sessionId: string, status: string) {
-  if (status === "PITCHING") {
-    return `/training/${sessionId}/pitch`;
-  }
-
-  if (status === "PITCH_ENDED" || status === "QA_READY" || status === "QAING") {
-    return `/training/${sessionId}/qa`;
-  }
-
-  if (
-    status === "QA_ENDED" ||
-    status === "REPORT_READY" ||
-    status === "FINISHED"
-  ) {
-    return `/training/${sessionId}/report`;
-  }
-
-  return `/training/${sessionId}/prepare`;
-}
 
 export default async function TrainingSessionPage({
   params,

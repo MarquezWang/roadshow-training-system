@@ -137,6 +137,10 @@ export default async function TrainingSessionPage({
     notFound();
   }
 
+  if (session.status === "ABORTED") {
+    redirect(`/training/${session.id}/report`);
+  }
+
   if (session.status === "CREATED" || session.status === "PITCH_READY") {
     redirect(`/training/${session.id}/prepare`);
   }

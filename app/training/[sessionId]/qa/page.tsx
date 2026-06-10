@@ -1,6 +1,4 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { PageHeader } from "@/components/page-header";
 import { prisma } from "@/lib/prisma";
 import { TrainingQaClient } from "./training-qa-client";
 
@@ -66,6 +64,10 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
     notFound();
   }
 
+  if (session.status === "ABORTED") {
+    redirect(`/training/${session.id}/report`);
+  }
+
   if (session.status === "CREATED" || session.status === "PITCH_READY") {
     redirect(`/training/${session.id}/prepare`);
   }
@@ -100,56 +102,34 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
     ) ?? null;
 
   return (
-    <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
-      <PageHeader
-        title="语音评委答辩舱"
-        description={`当前项目：${session.project.name}`}
+    <main className="w-full flex-1 bg-slate-950 p-3">
+      <TrainingQaClient
+        sessionId={session.id}
+        projectName={session.project.name}
+        initialStatus={session.status}
+        initialQaStartedAt={session.qaStartedAt?.toISOString() ?? null}
+        initialRemainingSec={initialRemainingSec}
+        initialQuestions={session.trainingQuestions.map((question) => ({
+          id: question.id,
+          orderIndex: question.orderIndex,
+          questionText: question.questionText,
+          questionType: question.questionType,
+          source: question.source,
+          basis: question.basis,
+          answer: question.answer
+            ? {
+                id: question.answer.id,
+                answerText: question.answer.answerText,
+                revealedQuestionText: question.answer.revealedQuestionText,
+                startedAt: question.answer.startedAt?.toISOString() ?? null,
+                endedAt: question.answer.endedAt?.toISOString() ?? null,
+                durationSec: question.answer.durationSec,
+              }
+            : null,
+        }))}
+        previewFile={previewFile}
+        files={session.project.fileAssets}
       />
-
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-        <Link
-          href={`/projects/${session.project.id}`}
-          className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-        >
-          返回项目详情
-        </Link>
-        <Link
-          href={`/training/${session.id}/report`}
-          className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-        >
-          进入报告页
-        </Link>
-      </div>
-
-      <div className="mt-6">
-        <TrainingQaClient
-          sessionId={session.id}
-          projectName={session.project.name}
-          initialStatus={session.status}
-          initialQaStartedAt={session.qaStartedAt?.toISOString() ?? null}
-          initialRemainingSec={initialRemainingSec}
-          initialQuestions={session.trainingQuestions.map((question) => ({
-            id: question.id,
-            orderIndex: question.orderIndex,
-            questionText: question.questionText,
-            questionType: question.questionType,
-            source: question.source,
-            basis: question.basis,
-            answer: question.answer
-              ? {
-                  id: question.answer.id,
-                  answerText: question.answer.answerText,
-                  revealedQuestionText: question.answer.revealedQuestionText,
-                  startedAt: question.answer.startedAt?.toISOString() ?? null,
-                  endedAt: question.answer.endedAt?.toISOString() ?? null,
-                  durationSec: question.answer.durationSec,
-                }
-              : null,
-          }))}
-          previewFile={previewFile}
-          files={session.project.fileAssets}
-        />
-      </div>
     </main>
   );
 }

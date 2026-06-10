@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 
 type PrepareFile = {
   id: string;
@@ -31,6 +32,7 @@ export function TrainingPrepareClient({
   previewFile,
 }: TrainingPrepareClientProps) {
   const router = useRouter();
+  const isCompletingNormallyRef = useRef(false);
   const [recordingPreference, setRecordingPreference] =
     useState<RecordingPreference>(null);
   const [microphoneMessage, setMicrophoneMessage] = useState("");
@@ -38,6 +40,12 @@ export function TrainingPrepareClient({
   const [isPreparingMicrophone, setIsPreparingMicrophone] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [message, setMessage] = useState("");
+
+  useTrainingAbortGuard({
+    sessionId,
+    enabled: true,
+    isCompletingNormallyRef,
+  });
 
   async function markReady(preference: Exclude<RecordingPreference, null>) {
     window.sessionStorage.setItem(getRecordingPreferenceKey(sessionId), preference);
@@ -140,6 +148,7 @@ export function TrainingPrepareClient({
         throw new Error(body?.error ?? "正式开始路演失败。");
       }
 
+      isCompletingNormallyRef.current = true;
       router.push(`/training/${sessionId}/pitch`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "正式开始路演失败。");
