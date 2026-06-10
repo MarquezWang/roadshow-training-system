@@ -65,6 +65,27 @@ const formatDateTime = (date: Date) =>
     minute: "2-digit",
   }).format(date);
 
+const trainingStatusLabel: Record<string, string> = {
+  CREATED: "待开始",
+  PITCHING: "路演中",
+  PITCH_ENDED: "路演已结束",
+  QA_READY: "问答准备中",
+  FINISHED: "已完成",
+};
+
+function formatDurationSec(durationSec: number | null) {
+  if (durationSec === null) {
+    return "未记录";
+  }
+
+  const minutes = Math.floor(durationSec / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = (durationSec % 60).toString().padStart(2, "0");
+
+  return `${minutes}:${seconds}`;
+}
+
 const projectFields = [
   { key: "field", label: "所属赛道" },
   { key: "stage", label: "项目阶段" },
@@ -261,6 +282,19 @@ export default async function ProjectDetailPage({
           createdAt: true,
         },
       },
+      trainingSessions: {
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: 5,
+        select: {
+          id: true,
+          status: true,
+          pitchDurationSec: true,
+          currentPageIndex: true,
+          createdAt: true,
+        },
+      },
       _count: {
         select: {
           fileAssets: true,
@@ -351,6 +385,76 @@ export default async function ProjectDetailPage({
             </p>
           </div>
         ))}
+      </section>
+
+      <section className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-2 border-b border-slate-200 pb-5">
+          <h2 className="text-base font-semibold text-slate-950">训练记录</h2>
+          <p className="text-sm text-slate-600">
+            查看最近几次路演训练场次，继续回看训练状态、用时和当前页码。
+          </p>
+        </div>
+
+        {project.trainingSessions.length > 0 ? (
+          <div className="mt-5 overflow-x-auto">
+            <table className="min-w-full border-separate border-spacing-0 text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500">
+                  <th className="border-b border-slate-200 py-2 pr-4 font-medium">
+                    创建时间
+                  </th>
+                  <th className="border-b border-slate-200 py-2 pr-4 font-medium">
+                    状态
+                  </th>
+                  <th className="border-b border-slate-200 py-2 pr-4 font-medium">
+                    路演用时
+                  </th>
+                  <th className="border-b border-slate-200 py-2 pr-4 font-medium">
+                    当前页码
+                  </th>
+                  <th className="border-b border-slate-200 py-2 font-medium">
+                    操作
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {project.trainingSessions.map((session) => (
+                  <tr key={session.id} className="align-middle">
+                    <td className="border-b border-slate-100 py-3 pr-4 text-slate-700">
+                      {formatDateTime(session.createdAt)}
+                    </td>
+                    <td className="border-b border-slate-100 py-3 pr-4 text-slate-700">
+                      {trainingStatusLabel[session.status] ?? session.status}
+                    </td>
+                    <td className="border-b border-slate-100 py-3 pr-4 text-slate-700">
+                      {formatDurationSec(session.pitchDurationSec)}
+                    </td>
+                    <td className="border-b border-slate-100 py-3 pr-4 text-slate-700">
+                      {session.currentPageIndex + 1}
+                    </td>
+                    <td className="border-b border-slate-100 py-3">
+                      <Link
+                        href={`/training/${session.id}`}
+                        className="text-sm font-medium text-teal-700 hover:text-teal-900"
+                      >
+                        查看训练
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-lg border border-dashed border-slate-300 p-6 text-center">
+            <h3 className="text-sm font-semibold text-slate-950">
+              暂无训练记录
+            </h3>
+            <p className="mt-2 text-sm text-slate-600">
+              点击“开始路演训练”创建第一条训练场次。
+            </p>
+          </div>
+        )}
       </section>
 
       <section className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">

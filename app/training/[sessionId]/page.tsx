@@ -4,6 +4,8 @@ import { PageHeader } from "@/components/page-header";
 import { prisma } from "@/lib/prisma";
 import { TrainingSessionClient } from "./training-session-client";
 
+const pitchLimitSec = 9 * 60;
+
 type TrainingSessionPageProps = Readonly<{
   params: Promise<{
     sessionId: string;
@@ -42,22 +44,26 @@ export default async function TrainingSessionPage({
           },
         },
       },
-      slideEvents: {
-        where: {
-          eventType: {
-            in: ["NEXT", "PREV", "JUMP"],
-          },
-        },
-        select: {
-          id: true,
-        },
-      },
     },
   });
 
   if (!session) {
     notFound();
   }
+
+  const [serverClock] = await prisma.$queryRaw<Array<{ nowSec: number }>>`
+    SELECT CAST(strftime('%s', 'now') AS INTEGER) AS nowSec
+  `;
+  const serverNowSec = Number(serverClock?.nowSec ?? 0);
+  const initialElapsedSec =
+    session.pitchDurationSec ??
+    (session.status === "PITCHING" && session.pitchStartedAt
+      ? Math.max(
+          0,
+          serverNowSec - Math.floor(session.pitchStartedAt.getTime() / 1000),
+        )
+      : 0);
+  const initialRemainingSec = Math.max(0, pitchLimitSec - initialElapsedSec);
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
@@ -81,8 +87,9 @@ export default async function TrainingSessionPage({
           initialStatus={session.status}
           initialPageIndex={session.currentPageIndex}
           initialPitchStartedAt={session.pitchStartedAt?.toISOString() ?? null}
+          initialElapsedSec={initialElapsedSec}
+          initialRemainingSec={initialRemainingSec}
           initialPitchDurationSec={session.pitchDurationSec}
-          initialSlideEventCount={session.slideEvents.length}
           files={session.project.fileAssets}
         />
       </div>

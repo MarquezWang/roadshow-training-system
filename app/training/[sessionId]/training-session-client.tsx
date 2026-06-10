@@ -13,8 +13,9 @@ type TrainingSessionClientProps = Readonly<{
   initialStatus: string;
   initialPageIndex: number;
   initialPitchStartedAt: string | null;
+  initialElapsedSec: number;
+  initialRemainingSec: number;
   initialPitchDurationSec: number | null;
-  initialSlideEventCount: number;
   files: TrainingFile[];
 }>;
 
@@ -45,25 +46,23 @@ export function TrainingSessionClient({
   initialStatus,
   initialPageIndex,
   initialPitchStartedAt,
+  initialElapsedSec,
+  initialRemainingSec,
   initialPitchDurationSec,
-  initialSlideEventCount,
   files,
 }: TrainingSessionClientProps) {
   const [status, setStatus] = useState(initialStatus);
   const [pageIndex, setPageIndex] = useState(initialPageIndex);
   const [pitchStartedAt, setPitchStartedAt] = useState(initialPitchStartedAt);
   const [elapsedSec, setElapsedSec] = useState(
-    initialPitchDurationSec ?? getElapsedSec(initialPitchStartedAt, 0),
+    initialPitchDurationSec ?? initialElapsedSec,
   );
-  const [slideEventCount, setSlideEventCount] = useState(
-    initialSlideEventCount,
-  );
+  const [remainingSec, setRemainingSec] = useState(initialRemainingSec);
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isPitching = status === "PITCHING";
   const isEnded = status === "PITCH_ENDED" || status === "FINISHED";
   const primaryFileId = files[0]?.id ?? null;
-  const remainingSec = Math.max(0, pitchLimitSec - elapsedSec);
   const statusLabel = useMemo(() => {
     const labels: Record<string, string> = {
       CREATED: "待开始",
@@ -81,12 +80,21 @@ export function TrainingSessionClient({
       return;
     }
 
+    const updateTimer = () => {
+      const nextElapsedSec = getElapsedSec(pitchStartedAt, 0);
+
+      setElapsedSec(nextElapsedSec);
+      setRemainingSec(Math.max(0, pitchLimitSec - nextElapsedSec));
+    };
+
+    updateTimer();
+
     const timer = window.setInterval(() => {
-      setElapsedSec(getElapsedSec(pitchStartedAt, elapsedSec));
+      updateTimer();
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [elapsedSec, isPitching, pitchStartedAt]);
+  }, [isPitching, pitchStartedAt]);
 
   const recordSlideEvent = useCallback(
     async (eventType: "NEXT" | "PREV" | "JUMP", nextPageIndex: number) => {
@@ -111,7 +119,6 @@ export function TrainingSessionClient({
         throw new Error(body?.error ?? "翻页事件记录失败。");
       }
 
-      setSlideEventCount((count) => count + 1);
     },
     [elapsedSec, primaryFileId, sessionId],
   );
@@ -189,6 +196,7 @@ export function TrainingSessionClient({
       setStatus(body.session.status);
       setPitchStartedAt(body.session.pitchStartedAt);
       setElapsedSec(0);
+      setRemainingSec(pitchLimitSec);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "开始路演失败。");
     } finally {
@@ -228,6 +236,9 @@ export function TrainingSessionClient({
 
       setStatus(body.session.status);
       setElapsedSec(body.session.pitchDurationSec);
+      setRemainingSec(
+        Math.max(0, pitchLimitSec - body.session.pitchDurationSec),
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "结束路演失败。");
     } finally {
@@ -318,7 +329,7 @@ export function TrainingSessionClient({
 
       <aside className="grid gap-4">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-base font-semibold text-slate-950">本次统计</h2>
+          <h2 className="text-base font-semibold text-slate-950">路演信息</h2>
           <dl className="mt-4 grid gap-3 text-sm">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <dt className="text-slate-500">路演用时</dt>
@@ -327,8 +338,8 @@ export function TrainingSessionClient({
               </dd>
             </div>
             <div className="flex items-center justify-between">
-              <dt className="text-slate-500">翻页次数</dt>
-              <dd className="font-medium text-slate-950">{slideEventCount}</dd>
+              <dt className="text-slate-500">当前页码</dt>
+              <dd className="font-medium text-slate-950">{pageIndex + 1}</dd>
             </div>
           </dl>
         </section>
