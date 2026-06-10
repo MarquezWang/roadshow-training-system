@@ -43,6 +43,16 @@ function readOptionalDate(value: FormDataEntryValue | null) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function readRecordingPhase(value: FormDataEntryValue | null) {
+  if (typeof value !== "string") {
+    return "PITCH";
+  }
+
+  const phase = value.trim().toUpperCase();
+
+  return phase === "QA" ? "QA" : "PITCH";
+}
+
 function buildRecordingPath(sessionId: string, extension: string) {
   const safeFileName = `${randomUUID()}.${extension}`;
   const uploadRoot = path.resolve(process.cwd(), "uploads");
@@ -131,7 +141,7 @@ export async function POST(
       data: {
         sessionId,
         projectId: session.projectId,
-        phase: "PITCH",
+        phase: readRecordingPhase(formData.get("phase")),
         status: "RECORDED",
         originalName: file.name || null,
         fileName: safeFileName,

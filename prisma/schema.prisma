@@ -38,6 +38,7 @@ model Project {
   trainingRecordings  TrainingRecording[]
   trainingTranscripts TrainingTranscript[]
   trainingAnalyses    TrainingAnalysis[]
+  trainingQuestions   TrainingQuestion[]
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 
@@ -64,23 +65,25 @@ model FileAsset {
 }
 
 model TrainingSession {
-  id               String               @id @default(cuid())
-  projectId        String
-  project          Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  status           String               @default("CREATED")
-  pitchStartedAt   DateTime?
-  pitchEndedAt     DateTime?
-  pitchDurationSec Int?
-  qaStartedAt      DateTime?
-  qaEndedAt        DateTime?
-  qaDurationSec    Int?
-  currentPageIndex Int                  @default(0)
-  slideEvents      SlideEvent[]
-  recordings       TrainingRecording[]
-  transcripts      TrainingTranscript[]
-  analyses         TrainingAnalysis[]
-  createdAt        DateTime             @default(now())
-  updatedAt        DateTime             @updatedAt
+  id                String               @id @default(cuid())
+  projectId         String
+  project           Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status            String               @default("CREATED")
+  pitchStartedAt    DateTime?
+  pitchEndedAt      DateTime?
+  pitchDurationSec  Int?
+  qaStartedAt       DateTime?
+  qaEndedAt         DateTime?
+  qaDurationSec     Int?
+  currentPageIndex  Int                  @default(0)
+  slideEvents       SlideEvent[]
+  recordings        TrainingRecording[]
+  transcripts       TrainingTranscript[]
+  analyses          TrainingAnalysis[]
+  trainingQuestions TrainingQuestion[]
+  trainingAnswers   TrainingAnswer[]
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
 
   @@index([projectId])
   @@index([status])
@@ -118,6 +121,7 @@ model TrainingRecording {
   startedAt    DateTime?
   endedAt      DateTime?
   transcript   TrainingTranscript?
+  answer       TrainingAnswer?
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
@@ -185,6 +189,47 @@ model TrainingAnalysis {
   @@index([transcriptId])
   @@index([status])
   @@index([analysisType])
+}
+
+model TrainingQuestion {
+  id           String          @id @default(cuid())
+  sessionId    String
+  session      TrainingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  projectId    String
+  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  orderIndex   Int
+  questionText String
+  questionType String?
+  source       String          @default("AI")
+  basis        String?
+  answer       TrainingAnswer?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([sessionId, orderIndex])
+  @@index([sessionId])
+  @@index([projectId])
+  @@index([source])
+}
+
+model TrainingAnswer {
+  id                   String             @id @default(cuid())
+  sessionId            String
+  session              TrainingSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  questionId           String             @unique
+  question             TrainingQuestion   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  recordingId          String?            @unique
+  recording            TrainingRecording? @relation(fields: [recordingId], references: [id], onDelete: SetNull)
+  answerText           String?
+  revealedQuestionText Boolean            @default(false)
+  startedAt            DateTime?
+  endedAt              DateTime?
+  durationSec          Int?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([sessionId])
+  @@index([recordingId])
 }
 
 model Diagnosis {

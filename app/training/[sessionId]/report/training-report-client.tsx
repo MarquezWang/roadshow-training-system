@@ -20,6 +20,7 @@ type TrainingTranscript = {
 
 type TrainingRecording = {
   id: string;
+  phase: string;
   playbackUrl: string;
   mimeType: string;
   sizeBytes: number;
@@ -36,14 +37,41 @@ type TrainingAnalysis = {
   updatedAt: string;
 };
 
+type TrainingQaQuestion = {
+  id: string;
+  orderIndex: number;
+  questionText: string;
+  questionType: string | null;
+  basis: string | null;
+  answer: {
+    id: string;
+    answerText: string | null;
+    revealedQuestionText: boolean;
+    startedAt: string | null;
+    endedAt: string | null;
+    durationSec: number | null;
+    recording: TrainingRecording | null;
+  } | null;
+};
+
 type TrainingReportClientProps = Readonly<{
   sessionId: string;
+  sessionStatus: string;
+  qaStartedAt: string | null;
+  qaEndedAt: string | null;
+  qaDurationSec: number | null;
+  qaQuestions: TrainingQaQuestion[];
   recording: TrainingRecording | null;
   initialAnalysis: TrainingAnalysis | null;
 }>;
 
 export function TrainingReportClient({
   sessionId,
+  sessionStatus,
+  qaStartedAt,
+  qaEndedAt,
+  qaDurationSec,
+  qaQuestions,
   recording,
   initialAnalysis,
 }: TrainingReportClientProps) {
@@ -166,8 +194,103 @@ export function TrainingReportClient({
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="text-base font-semibold text-slate-950">答辩摘要</h3>
+        {sessionStatus === "QA_ENDED" ||
+        sessionStatus === "REPORT_READY" ||
+        sessionStatus === "FINISHED" ? (
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            答辩已完成
+            {qaDurationSec !== null ? `，用时 ${qaDurationSec} 秒` : ""}。
+          </p>
+        ) : (
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            尚未完成答辩。完成模拟答辩后，本页会展示问题与回答摘要。
+          </p>
+        )}
+
+        {qaStartedAt ? (
+          <p className="mt-1 text-xs text-slate-500">
+            开始时间：{new Date(qaStartedAt).toLocaleString()}
+            {qaEndedAt ? `；结束时间：${new Date(qaEndedAt).toLocaleString()}` : ""}
+          </p>
+        ) : null}
+
+        {qaQuestions.length > 0 ? (
+          <div className="mt-4 grid gap-3">
+            {qaQuestions.map((question) => (
+              <article
+                key={question.id}
+                className="rounded-md border border-slate-200 bg-slate-50 p-4"
+              >
+                <p className="text-xs font-medium uppercase text-slate-500">
+                  Q{question.orderIndex} · {question.questionType ?? "QUESTION"}
+                </p>
+                <h4 className="mt-2 text-sm font-semibold leading-6 text-slate-950">
+                  {question.questionText}
+                </h4>
+                {question.basis ? (
+                  <p className="mt-2 text-xs leading-5 text-slate-500">
+                    依据：{question.basis}
+                  </p>
+                ) : null}
+                <div className="mt-3 grid gap-2 text-xs leading-5 text-slate-500 sm:grid-cols-3">
+                  <p>
+                    回答用时：
+                    {question.answer?.durationSec !== null &&
+                    question.answer?.durationSec !== undefined
+                      ? `${question.answer.durationSec} 秒`
+                      : "未记录"}
+                  </p>
+                  <p>
+                    查看文字：
+                    {question.answer?.revealedQuestionText ? "是" : "否"}
+                  </p>
+                  <p>
+                    回答方式：
+                    {question.answer?.answerText?.trim() ? "文字记录" : "语音回答"}
+                  </p>
+                </div>
+                <p className="mt-3 whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
+                  {question.answer?.answerText?.trim()
+                    ? question.answer.answerText
+                    : "语音回答已记录，待转写。"}
+                </p>
+                {question.answer?.recording ? (
+                  <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+                    <p className="text-xs font-medium text-slate-500">
+                      本题录音回放
+                    </p>
+                    <audio
+                      controls
+                      src={question.answer.recording.playbackUrl}
+                      className="mt-2 w-full"
+                    >
+                      <track kind="captions" />
+                    </audio>
+                    <p className="mt-2 text-xs text-slate-500">
+                      {question.answer.recording.durationSec !== null
+                        ? `录音时长 ${question.answer.recording.durationSec} 秒`
+                        : "录音时长未记录"}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-600">
+                    本题未保存录音。
+                  </p>
+                )}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 rounded-md border border-dashed border-slate-300 p-4 text-sm leading-6 text-slate-600">
+            暂无答辩问题。
+          </p>
+        )}
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-base font-semibold text-slate-950">
-          录音与转写文本
+          路演录音与转写文本
         </h3>
         {recording ? (
           <div className="mt-4 grid gap-4">

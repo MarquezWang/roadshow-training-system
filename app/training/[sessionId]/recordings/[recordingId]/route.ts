@@ -1,7 +1,5 @@
-import { createReadStream } from "fs";
-import { stat } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import path from "path";
-import { Readable } from "stream";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
@@ -42,8 +40,57 @@ async function resolveRecordingPath(filePath: string) {
   };
 }
 
+function parseRangeHeader(rangeHeader: string | null, size: number) {
+  if (!rangeHeader) {
+    return null;
+  }
+
+  const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const [, startText, endText] = match;
+
+  if (!startText && !endText) {
+    return null;
+  }
+
+  if (!startText) {
+    const suffixLength = Number(endText);
+
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+
+    return {
+      start: Math.max(0, size - suffixLength),
+      end: size - 1,
+    };
+  }
+
+  const start = Number(startText);
+  const end = endText ? Number(endText) : size - 1;
+
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= size
+  ) {
+    return null;
+  }
+
+  return {
+    start,
+    end: Math.min(end, size - 1),
+  };
+}
+
 export async function GET(
-  _request: Request,
+  request: Request,
   context: RecordingPlaybackRouteContext,
 ) {
   const { sessionId, recordingId } = await context.params;
@@ -67,16 +114,44 @@ export async function GET(
     const { absolutePath, size } = await resolveRecordingPath(
       recording.filePath,
     );
-    const stream = Readable.toWeb(createReadStream(absolutePath));
+    const bytes = await readFile(absolutePath);
+    const range = parseRangeHeader(request.headers.get("range"), size);
+    const baseHeaders = {
+      "Content-Type": recording.mimeType,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "private, max-age=0",
+      "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(
+        recording.fileName,
+      )}`,
+    };
 
-    return new Response(stream as ReadableStream<Uint8Array>, {
+    if (request.headers.get("range") && !range) {
+      return new Response(null, {
+        status: 416,
+        headers: {
+          ...baseHeaders,
+          "Content-Range": `bytes */${size}`,
+        },
+      });
+    }
+
+    if (range) {
+      const body = bytes.subarray(range.start, range.end + 1);
+
+      return new Response(body, {
+        status: 206,
+        headers: {
+          ...baseHeaders,
+          "Content-Length": String(body.byteLength),
+          "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
+        },
+      });
+    }
+
+    return new Response(bytes, {
       headers: {
-        "Content-Type": recording.mimeType,
+        ...baseHeaders,
         "Content-Length": String(size),
-        "Cache-Control": "private, max-age=0",
-        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(
-          recording.fileName,
-        )}`,
       },
     });
   } catch {
