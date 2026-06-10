@@ -326,6 +326,17 @@ export default async function ProjectDetailPage({
         >
           查看 AI 上下文
         </Link>
+        <form
+          action={`/projects/${project.id}/training-sessions?redirect=1`}
+          method="post"
+        >
+          <button
+            type="submit"
+            className="inline-flex h-10 items-center justify-center rounded-md border border-amber-200 bg-amber-50 px-4 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100"
+          >
+            开始路演训练
+          </button>
+        </form>
       </div>
 
       <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">

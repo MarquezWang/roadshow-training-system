@@ -18,9 +18,9 @@ model User {
 }
 
 model Project {
-  id                  String        @id @default(cuid())
+  id                  String            @id @default(cuid())
   ownerId             String
-  owner               User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner               User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   name                String
   field               String
   stage               String
@@ -34,28 +34,65 @@ model Project {
   scoreResults        ScoreResult[]
   questions           Question[]
   reports             Report[]
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  trainingSessions    TrainingSession[]
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
 
   @@index([ownerId])
 }
 
 model FileAsset {
-  id                 String   @id @default(cuid())
+  id                 String       @id @default(cuid())
   projectId          String
-  project            Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project            Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   originalName       String
   fileType           String
   filePath           String
   fileSize           Int
   extractedText      String?
-  parseStatus        String   @default("PENDING")
+  parseStatus        String       @default("PENDING")
   parseError         String?
-  includeInAIContext Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  includeInAIContext Boolean      @default(true)
+  slideEvents        SlideEvent[]
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
 
   @@index([projectId])
+}
+
+model TrainingSession {
+  id               String       @id @default(cuid())
+  projectId        String
+  project          Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status           String       @default("CREATED")
+  pitchStartedAt   DateTime?
+  pitchEndedAt     DateTime?
+  pitchDurationSec Int?
+  qaStartedAt      DateTime?
+  qaEndedAt        DateTime?
+  qaDurationSec    Int?
+  currentPageIndex Int          @default(0)
+  slideEvents      SlideEvent[]
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model SlideEvent {
+  id         String          @id @default(cuid())
+  sessionId  String
+  session    TrainingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  fileId     String?
+  file       FileAsset?      @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  pageIndex  Int
+  eventType  String
+  elapsedSec Int
+  createdAt  DateTime        @default(now())
+
+  @@index([sessionId])
+  @@index([fileId])
 }
 
 model Diagnosis {
