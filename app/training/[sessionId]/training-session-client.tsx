@@ -1,5 +1,6 @@
-"use client";
+﻿"use client";
 
+import { useRouter } from "next/navigation";
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
@@ -43,6 +44,37 @@ type TrainingRecording = {
   transcript: TrainingTranscript | null;
 };
 
+type TrainingCoverageItem = {
+  item: string;
+  covered: "true" | "false" | "partial";
+  evidence: string;
+  suggestion: string;
+};
+
+type TrainingAnalysis = {
+  id: string;
+  sessionId: string;
+  projectId: string;
+  transcriptId: string | null;
+  status: string;
+  analysisType: string;
+  durationSec: number;
+  pageCount: number | null;
+  slideEventCount: number | null;
+  overallScore: number | null;
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  suggestions: string[];
+  coverage: TrainingCoverageItem[];
+  timing: Record<string, unknown>;
+  slideSync: Record<string, unknown>;
+  riskQuestions: string[];
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type PreviewMode = "standard" | "compatible";
 type RecordingStatus =
   | "UNDECIDED"
@@ -68,6 +100,10 @@ type TrainingSessionClientProps = Readonly<{
   files: TrainingFile[];
   previewFile: TrainingFile | null;
   initialRecording: TrainingRecording | null;
+  initialAnalysis: TrainingAnalysis | null;
+  autoStartRecordingOnMount?: boolean;
+  redirectToQaAfterPitchEnd?: boolean;
+  showAnalysisPanel?: boolean;
 }>;
 
 const pitchLimitSec = 9 * 60;
@@ -149,6 +185,28 @@ function getRecordingFileExtension(mimeType: string) {
   return "webm";
 }
 
+function stringifyAnalysisValue(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return "暂无";
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+
+  return JSON.stringify(value);
+}
+
+function getCoverageLabel(value: TrainingCoverageItem["covered"]) {
+  const labels: Record<TrainingCoverageItem["covered"], string> = {
+    true: "已覆盖",
+    false: "未覆盖",
+    partial: "部分覆盖",
+  };
+
+  return labels[value] ?? value;
+}
+
 export function TrainingSessionClient({
   sessionId,
   projectId,
@@ -162,7 +220,12 @@ export function TrainingSessionClient({
   files,
   previewFile,
   initialRecording,
+  initialAnalysis,
+  autoStartRecordingOnMount = false,
+  redirectToQaAfterPitchEnd = false,
+  showAnalysisPanel = true,
 }: TrainingSessionClientProps) {
+  const router = useRouter();
   const [status, setStatus] = useState(initialStatus);
   const [pageIndex, setPageIndex] = useState(initialPageIndex);
   const [pitchStartedAt, setPitchStartedAt] = useState(initialPitchStartedAt);
@@ -198,6 +261,11 @@ export function TrainingSessionClient({
   );
   const [isTranscriptSaving, setIsTranscriptSaving] = useState(false);
   const [transcriptMessage, setTranscriptMessage] = useState("");
+  const [analysis, setAnalysis] = useState<TrainingAnalysis | null>(
+    initialAnalysis,
+  );
+  const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
+  const [analysisMessage, setAnalysisMessage] = useState("");
   const [showRecordingPrepDialog, setShowRecordingPrepDialog] = useState(
     initialStatus === "CREATED",
   );
@@ -220,6 +288,8 @@ export function TrainingSessionClient({
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingStartedAtRef = useRef<Date | null>(null);
   const recordingMimeTypeRef = useRef("");
+  const hasHandledPitchRecordingPreferenceRef = useRef(false);
+  const hasAutoEndedPitchRef = useRef(false);
   const isPitching = status === "PITCHING";
   const isEnded = status === "PITCH_ENDED" || status === "FINISHED";
   const primaryFileId = previewFile?.id ?? null;
@@ -750,6 +820,71 @@ export function TrainingSessionClient({
     }
   }, [recordingStatus, stopMediaStream]);
 
+  useEffect(() => {
+    if (
+      !autoStartRecordingOnMount ||
+      !isPitching ||
+      hasHandledPitchRecordingPreferenceRef.current ||
+      initialRecording
+    ) {
+      return;
+    }
+
+    hasHandledPitchRecordingPreferenceRef.current = true;
+    const preference =
+      window.sessionStorage.getItem(`training:${sessionId}:recordingPreference`) ??
+      "skip";
+
+    if (preference !== "record") {
+      window.setTimeout(() => {
+        setRecordingStatus("OPTED_OUT");
+        setRecordingMessage("本轮未启用录音，仅记录翻页和用时。");
+      }, 0);
+      return;
+    }
+
+    async function prepareAndStartRecording() {
+      if (
+        typeof navigator === "undefined" ||
+        !navigator.mediaDevices?.getUserMedia ||
+        typeof MediaRecorder === "undefined"
+      ) {
+        setRecordingStatus("UNSUPPORTED");
+        setRecordingMessage(
+          "当前浏览器不支持录音，本次仅记录翻页和用时。",
+        );
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        stopMediaStream();
+        mediaStreamRef.current = stream;
+        recordingMimeTypeRef.current =
+          getSupportedRecordingMimeType() || "audio/webm";
+        setRecordingStatus("READY_TO_RECORD");
+        setRecordingMessage("");
+        await startRecording();
+      } catch {
+        stopMediaStream();
+        setRecordingStatus("PERMISSION_DENIED");
+        setRecordingMessage(
+          "麦克风权限未开启，本轮将继续记录翻页和用时，但不会保存录音。",
+        );
+      }
+    }
+
+    void prepareAndStartRecording();
+  }, [
+    autoStartRecordingOnMount,
+    initialRecording,
+    isPitching,
+    sessionId,
+    startRecording,
+    stopMediaStream,
+  ]);
+
   const stopRecordingAndUpload = useCallback(async () => {
     const recorder = mediaRecorderRef.current;
 
@@ -856,6 +991,48 @@ export function TrainingSessionClient({
       setIsTranscriptSaving(false);
     }
   }, [recordingId, sessionId, transcriptDraft]);
+
+  const generateAnalysis = useCallback(async () => {
+    if (!isEnded) {
+      setAnalysisMessage("请先结束路演后再分析。");
+      return;
+    }
+
+    if (!transcript?.text.trim()) {
+      setAnalysisMessage("请先保存转写文本后再分析。");
+      return;
+    }
+
+    setIsAnalysisLoading(true);
+    setAnalysisMessage("");
+
+    try {
+      const response = await fetch(`/training/${sessionId}/analysis`, {
+        method: "POST",
+      });
+      const body = (await response.json().catch(() => null)) as {
+        analysis?: TrainingAnalysis;
+        error?: string;
+      } | null;
+
+      if (!response.ok) {
+        throw new Error(body?.error ?? "路演表现分析生成失败。");
+      }
+
+      if (!body?.analysis) {
+        throw new Error("路演表现分析接口未返回分析结果。");
+      }
+
+      setAnalysis(body.analysis);
+      setAnalysisMessage("路演表现分析已生成。");
+    } catch (error) {
+      setAnalysisMessage(
+        error instanceof Error ? error.message : "路演表现分析生成失败。",
+      );
+    } finally {
+      setIsAnalysisLoading(false);
+    }
+  }, [isEnded, sessionId, transcript]);
 
   const recordSlideEvent = useCallback(
     async (eventType: "NEXT" | "PREV" | "JUMP", nextPageIndex: number) => {
@@ -1009,6 +1186,7 @@ export function TrainingSessionClient({
       } else if (recordingStatus === "UNSUPPORTED") {
         setRecordingMessage("当前浏览器不支持录音，本次仅记录路演操作。");
       }
+
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "开始路演失败。");
     } finally {
@@ -1016,15 +1194,11 @@ export function TrainingSessionClient({
     }
   }
 
-  async function endPitch() {
+  const endPitch = useCallback(async () => {
     setIsSubmitting(true);
     setMessage("");
     const shouldUploadRecording =
       mediaRecorderRef.current?.state === "recording";
-
-    if (shouldUploadRecording) {
-      void stopRecordingAndUpload();
-    }
 
     try {
       const response = await fetch(`/training/${sessionId}/end-pitch`, {
@@ -1062,6 +1236,10 @@ export function TrainingSessionClient({
         Math.max(0, pitchLimitSec - body.session.pitchDurationSec),
       );
 
+      if (shouldUploadRecording) {
+        await stopRecordingAndUpload();
+      }
+
       if (!shouldUploadRecording) {
         stopMediaStream();
         setRecordingStatus((currentStatus) =>
@@ -1073,12 +1251,34 @@ export function TrainingSessionClient({
         );
         setRecordingMessage("本次未启用录音。");
       }
+
+      if (redirectToQaAfterPitchEnd) {
+        router.push(`/training/${sessionId}/qa`);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "结束路演失败。");
     } finally {
       setIsSubmitting(false);
     }
-  }
+  }, [
+    currentPageNumber,
+    elapsedSec,
+    primaryFileId,
+    redirectToQaAfterPitchEnd,
+    router,
+    sessionId,
+    stopMediaStream,
+    stopRecordingAndUpload,
+  ]);
+
+  useEffect(() => {
+    if (!isPitching || remainingSec > 0 || hasAutoEndedPitchRef.current) {
+      return;
+    }
+
+    hasAutoEndedPitchRef.current = true;
+    void endPitch();
+  }, [endPitch, isPitching, remainingSec]);
 
   const shellClassName = isBigScreenMode
     ? "fixed inset-0 z-50 grid h-screen w-screen gap-3 overflow-hidden bg-slate-950 p-3 text-white lg:grid-cols-[minmax(0,1fr)_280px]"
@@ -1600,6 +1800,204 @@ export function TrainingSessionClient({
             </p>
           ) : null}
         </section>
+
+        {showAnalysisPanel ? (
+        <section className={secondaryPanelClassName}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className={secondaryTitleClassName}>路演表现分析</h2>
+              <p
+                className={
+                  isBigScreenMode
+                    ? "mt-1 text-xs leading-5 text-slate-300"
+                    : "mt-1 text-xs leading-5 text-slate-600"
+                }
+              >
+                基于本轮转写文本、翻页事件和项目上下文生成。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void generateAnalysis()}
+              disabled={isAnalysisLoading || !isEnded || !transcript?.text.trim()}
+              className="inline-flex h-9 items-center justify-center rounded-md bg-slate-950 px-3 text-xs font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isAnalysisLoading
+                ? "分析中..."
+                : analysis
+                  ? "重新生成分析"
+                  : "生成路演表现分析"}
+            </button>
+          </div>
+
+          {!isEnded ? (
+            <p
+              className={
+                isBigScreenMode
+                  ? "mt-3 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-xs leading-5 text-slate-300"
+                  : "mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600"
+              }
+            >
+              结束路演后可生成分析。
+            </p>
+          ) : !transcript?.text.trim() ? (
+            <p
+              className={
+                isBigScreenMode
+                  ? "mt-3 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-xs leading-5 text-slate-300"
+                  : "mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600"
+              }
+            >
+              请先保存转写文本，再生成路演表现分析。
+            </p>
+          ) : null}
+
+          {analysisMessage ? (
+            <p
+              className={
+                isBigScreenMode
+                  ? "mt-3 text-xs leading-5 text-slate-300"
+                  : "mt-3 text-xs leading-5 text-slate-600"
+              }
+            >
+              {analysisMessage}
+            </p>
+          ) : null}
+
+          {analysis?.status === "FAILED" ? (
+            <p className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-700">
+              {analysis.errorMessage ?? "路演表现分析生成失败。"}
+            </p>
+          ) : null}
+
+          {analysis?.status === "COMPLETED" ? (
+            <div className="mt-4 grid gap-4 text-sm">
+              <div
+                className={
+                  isBigScreenMode
+                    ? "rounded-md border border-slate-700 bg-slate-950/60 p-3"
+                    : "rounded-md border border-slate-200 bg-slate-50 p-3"
+                }
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className={mutedTextClassName}>总体评分</span>
+                  <strong
+                    className={
+                      isBigScreenMode
+                        ? "text-xl font-semibold text-white"
+                        : "text-xl font-semibold text-slate-950"
+                    }
+                  >
+                    {analysis.overallScore ?? "-"} / 100
+                  </strong>
+                </div>
+                <p
+                  className={
+                    isBigScreenMode
+                      ? "mt-3 leading-6 text-slate-100"
+                      : "mt-3 leading-6 text-slate-700"
+                  }
+                >
+                  {analysis.summary}
+                </p>
+              </div>
+
+              <div className="grid gap-3">
+                <h3 className={secondaryTitleClassName}>优点</h3>
+                <ul className="grid gap-2">
+                  {analysis.strengths.map((item) => (
+                    <li key={item} className={transcriptTextClassName}>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="grid gap-3">
+                <h3 className={secondaryTitleClassName}>问题</h3>
+                <ul className="grid gap-2">
+                  {analysis.weaknesses.map((item) => (
+                    <li key={item} className={transcriptTextClassName}>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="grid gap-3">
+                <h3 className={secondaryTitleClassName}>改进建议</h3>
+                <ul className="grid gap-2">
+                  {analysis.suggestions.map((item) => (
+                    <li key={item} className={transcriptTextClassName}>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="grid gap-3">
+                <h3 className={secondaryTitleClassName}>内容覆盖情况</h3>
+                <div className="grid gap-2">
+                  {analysis.coverage.map((item) => (
+                    <div
+                      key={item.item}
+                      className={
+                        isBigScreenMode
+                          ? "rounded-md border border-slate-700 bg-slate-950/60 p-3"
+                          : "rounded-md border border-slate-200 bg-white p-3"
+                      }
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className={valueTextClassName}>{item.item}</span>
+                        <span className={mutedTextClassName}>
+                          {getCoverageLabel(item.covered)}
+                        </span>
+                      </div>
+                      <p className={`${transcriptTextClassName} mt-2`}>
+                        证据：{item.evidence}
+                      </p>
+                      <p className={`${transcriptTextClassName} mt-1`}>
+                        建议：{item.suggestion}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid gap-3">
+                <h3 className={secondaryTitleClassName}>时间节奏</h3>
+                <p className={transcriptTextClassName}>
+                  {stringifyAnalysisValue(analysis.timing.assessment)}
+                </p>
+                <p className={transcriptTextClassName}>
+                  建议：{stringifyAnalysisValue(analysis.timing.suggestion)}
+                </p>
+              </div>
+
+              <div className="grid gap-3">
+                <h3 className={secondaryTitleClassName}>翻页节奏</h3>
+                <p className={transcriptTextClassName}>
+                  {stringifyAnalysisValue(analysis.slideSync.assessment)}
+                </p>
+                <p className={transcriptTextClassName}>
+                  建议：{stringifyAnalysisValue(analysis.slideSync.suggestion)}
+                </p>
+              </div>
+
+              <div className="grid gap-3">
+                <h3 className={secondaryTitleClassName}>可能被追问的问题</h3>
+                <ul className="grid gap-2">
+                  {analysis.riskQuestions.map((item) => (
+                    <li key={item} className={transcriptTextClassName}>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : null}
+        </section>
+        ) : null}
 
         <section className={`${secondaryPanelClassName} min-h-0 overflow-auto`}>
           <h2 className={secondaryTitleClassName}>

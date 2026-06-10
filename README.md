@@ -621,3 +621,100 @@ node scripts/analyze-knowledge-base.mjs
 - 不要上传、提交或导入涉密、未公开、敏感项目资料。
 - 原始资料默认不建议提交到 Git。
 - 本阶段不会调用 AI API；后续如果把真实文本发送给模型服务，需要先确认数据保留、训练、删除和私有化部署策略。
+
+## 路演表现分析基础版
+
+训练页 `/training/{sessionId}` 已支持在路演结束并保存手动转写文本后生成“路演表现分析”。本功能只分析本轮路演表达表现，不开发自动 ASR、不开发答辩反馈、不生成综合报告。
+
+接口：
+
+```text
+POST /training/{sessionId}/analysis
+GET /training/{sessionId}/analysis
+```
+
+分析输入包括：
+
+- `TrainingSession`：路演状态、开始时间、结束时间、路演时长、当前页码。
+- `SlideEvent`：START、NEXT、PREV、JUMP、END、pageIndex、elapsedSec。
+- `TrainingTranscript`：优先读取该 session 下已完成的转写文本；没有转写文本时不会生成分析。
+- `buildProjectAIContext`：项目基本信息、纳入 AI 上下文的解析材料、真实评审规则、评分指标、专家评语和历史问题。
+
+生成前置条件：
+
+- 路演必须已经结束，否则返回“请先结束路演后再分析”。
+- 必须已经保存转写文本，否则返回“请先保存转写文本后再分析”。
+- AI 调用仍统一通过 `lib/ai.ts`，只发送文本上下文和转写文本，不上传原始 PDF、录音或其他文件。
+
+分析结果写入 `TrainingAnalysis`，当前 `analysisType` 为 `PITCH`，状态包括 `PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`。结果维度包括：
+
+- 总体评分 `overallScore`：0 到 100，表示本轮路演表达表现分，不是项目材料基础分。
+- 总体评价 `summary`。
+- 优点 `strengthsJson`。
+- 问题 `weaknessesJson`。
+- 改进建议 `suggestionsJson`。
+- 内容覆盖情况 `coverageJson`：项目背景、痛点问题、技术方案、核心创新、应用场景、市场空间、商业模式、团队能力、融资/合作需求。
+- 时间节奏 `timingJson`。
+- 翻页节奏 `slideSyncJson`。
+- 可能被追问的问题 `riskQuestionsJson`。
+- AI 原始结构化结果 `rawResultJson`。
+
+训练页刷新后会读取最近一次 `TrainingAnalysis` 并展示；已有结果时可以点击“重新生成分析”更新结果。
+
+注意：
+
+- 当前没有接入真实 ASR，不会自动把录音转成文字。
+- 手动转写文本质量会直接影响分析质量。
+- 如果使用外部模型服务，真实项目资料发送前仍需确认数据保留、训练、删除和私有化部署策略。
+
+## 训练流程重构基础版
+
+训练流程已从单页堆叠调整为分阶段路由：
+
+```text
+/training/{sessionId}/prepare
+/training/{sessionId}/pitch
+/training/{sessionId}/qa
+/training/{sessionId}/report
+```
+
+`/training/{sessionId}` 作为入口页，会根据 `TrainingSession.status` 自动跳转：
+
+- `CREATED`、`PITCH_READY`：进入准备页。
+- `PITCHING`：进入正式路演页。
+- `PITCH_ENDED`、`QA_READY`、`QAING`：进入答辩准备页。
+- `QA_ENDED`、`REPORT_READY`、`FINISHED`：进入报告页。
+
+准备页负责：
+
+- 展示项目名称、路演规则和材料预览入口。
+- 要求用户明确选择“开启麦克风并准备训练”或“暂不录音，继续训练”。
+- 麦克风授权和测试在准备页完成，正式进入路演页后不再首次弹出麦克风权限确认。
+- 准备完成后状态可推进到 `PITCH_READY`。
+
+路演页负责：
+
+- PDF 标准预览和兼容预览。
+- 大屏/全屏模式。
+- 9 分钟倒计时。
+- 翻页和 `SlideEvent` 记录。
+- 根据准备页选择的策略开始录音或跳过录音。
+- 主动结束或倒计时结束后写入 END 事件，并推进到 `QA_READY`。
+- 路演结束后跳转答辩准备页。
+- 不再直接展示完整路演表现分析长结果。
+
+答辩页当前是占位流程：
+
+- 显示路演已结束。
+- 展示 3 分钟答辩说明。
+- “开始答辩”暂未开放。
+- 可以进入报告页。
+
+报告页当前是占位流程：
+
+- 显示本轮训练已完成。
+- 保留录音回放、手动转写文本保存和编辑。
+- 展示路演表现分析的简要状态，并可生成或重新生成路演表现分析。
+- 暂不生成完整综合报告、答辩分析、雷达图。
+
+当前没有接入真实 ASR。录音不会自动转写，仍需手动保存转写文本。

@@ -37,6 +37,7 @@ model Project {
   trainingSessions    TrainingSession[]
   trainingRecordings  TrainingRecording[]
   trainingTranscripts TrainingTranscript[]
+  trainingAnalyses    TrainingAnalysis[]
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 
@@ -77,6 +78,7 @@ model TrainingSession {
   slideEvents      SlideEvent[]
   recordings       TrainingRecording[]
   transcripts      TrainingTranscript[]
+  analyses         TrainingAnalysis[]
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 
@@ -126,28 +128,63 @@ model TrainingRecording {
 }
 
 model TrainingTranscript {
-  id           String            @id @default(cuid())
-  recordingId  String            @unique
-  recording    TrainingRecording @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+  id           String             @id @default(cuid())
+  recordingId  String             @unique
+  recording    TrainingRecording  @relation(fields: [recordingId], references: [id], onDelete: Cascade)
   sessionId    String
-  session      TrainingSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session      TrainingSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   projectId    String
-  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  status       String            @default("PENDING")
-  source       String            @default("MANUAL")
-  language     String            @default("zh-CN")
+  project      Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status       String             @default("PENDING")
+  source       String             @default("MANUAL")
+  language     String             @default("zh-CN")
   text         String
   segmentsJson String?
   errorMessage String?
   startedAt    DateTime?
   completedAt  DateTime?
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  analyses     TrainingAnalysis[]
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
 
   @@index([sessionId])
   @@index([projectId])
   @@index([status])
   @@index([source])
+}
+
+model TrainingAnalysis {
+  id                String              @id @default(cuid())
+  sessionId         String
+  session           TrainingSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  projectId         String
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  transcriptId      String?
+  transcript        TrainingTranscript? @relation(fields: [transcriptId], references: [id], onDelete: SetNull)
+  status            String              @default("PENDING")
+  analysisType      String              @default("PITCH")
+  durationSec       Int
+  pageCount         Int?
+  slideEventCount   Int?
+  overallScore      Int?
+  summary           String
+  strengthsJson     String
+  weaknessesJson    String
+  suggestionsJson   String
+  coverageJson      String
+  timingJson        String
+  slideSyncJson     String
+  riskQuestionsJson String
+  rawResultJson     String
+  errorMessage      String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([sessionId])
+  @@index([projectId])
+  @@index([transcriptId])
+  @@index([status])
+  @@index([analysisType])
 }
 
 model Diagnosis {

@@ -37,7 +37,7 @@ export async function POST(
 
   if (request.nextUrl.searchParams.get("redirect") === "1") {
     return NextResponse.redirect(
-      new URL(`/training/${session.id}`, request.url),
+      new URL(`/training/${session.id}/prepare`, request.url),
       303,
     );
   }

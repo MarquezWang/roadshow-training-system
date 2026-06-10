@@ -91,7 +91,7 @@ export async function POST(
         id: sessionId,
       },
       data: {
-        status: "PITCH_ENDED",
+        status: "QA_READY",
         pitchEndedAt: now,
         pitchDurationSec,
         currentPageIndex: endPageIndex,

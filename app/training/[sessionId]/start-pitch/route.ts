@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 type StartPitchRouteContext = Readonly<{
@@ -19,11 +19,32 @@ export async function POST(
     select: {
       id: true,
       projectId: true,
+      status: true,
+      pitchStartedAt: true,
+      currentPageIndex: true,
     },
   });
 
   if (!session) {
     return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
+  }
+
+  if (session.status === "PITCHING") {
+    return NextResponse.json({
+      session: {
+        id: session.id,
+        status: session.status,
+        pitchStartedAt: session.pitchStartedAt,
+        currentPageIndex: session.currentPageIndex,
+      },
+    });
+  }
+
+  if (session.status !== "CREATED" && session.status !== "PITCH_READY") {
+    return NextResponse.json(
+      { error: "当前训练状态不能开始路演。" },
+      { status: 400 },
+    );
   }
 
   const body = (await request.json().catch(() => ({}))) as {
