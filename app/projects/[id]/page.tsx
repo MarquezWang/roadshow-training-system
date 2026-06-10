@@ -429,9 +429,9 @@ export default async function ProjectDetailPage({
                     <td className="border-b border-slate-100 py-3 pr-4 text-slate-700">
                       {formatDurationSec(session.pitchDurationSec)}
                     </td>
-                    <td className="border-b border-slate-100 py-3 pr-4 text-slate-700">
-                      {session.currentPageIndex + 1}
-                    </td>
+                      <td className="border-b border-slate-100 py-3 pr-4 text-slate-700">
+                        {Math.max(1, session.currentPageIndex)}
+                      </td>
                     <td className="border-b border-slate-100 py-3">
                       <Link
                         href={`/training/${session.id}`}

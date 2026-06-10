@@ -17,6 +17,14 @@ function readInteger(value: unknown, fieldName: string) {
   return value;
 }
 
+function readPageIndex(value: unknown) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new Error("pageIndex 必须是大于 0 的整数。");
+  }
+
+  return value;
+}
+
 export async function POST(
   request: NextRequest,
   context: TrainingEventRouteContext,
@@ -32,7 +40,7 @@ export async function POST(
     };
     const eventType =
       typeof body.eventType === "string" ? body.eventType.trim() : "";
-    const pageIndex = readInteger(body.pageIndex, "pageIndex");
+    const pageIndex = readPageIndex(body.pageIndex);
     const elapsedSec = readInteger(body.elapsedSec, "elapsedSec");
     const fileId =
       typeof body.fileId === "string" && body.fileId.trim()
@@ -53,11 +61,24 @@ export async function POST(
       select: {
         id: true,
         projectId: true,
+        status: true,
       },
     });
 
     if (!session) {
       return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
+    }
+
+    if (
+      (eventType === "NEXT" ||
+        eventType === "PREV" ||
+        eventType === "JUMP") &&
+      session.status !== "PITCHING"
+    ) {
+      return NextResponse.json(
+        { error: "只有路演中才能记录正式翻页事件。" },
+        { status: 409 },
+      );
     }
 
     if (fileId) {

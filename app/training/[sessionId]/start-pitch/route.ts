@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 type StartPitchRouteContext = Readonly<{
@@ -7,7 +7,10 @@ type StartPitchRouteContext = Readonly<{
   }>;
 }>;
 
-export async function POST(_request: Request, context: StartPitchRouteContext) {
+export async function POST(
+  request: NextRequest,
+  context: StartPitchRouteContext,
+) {
   const { sessionId } = await context.params;
   const session = await prisma.trainingSession.findUnique({
     where: {
@@ -15,7 +18,7 @@ export async function POST(_request: Request, context: StartPitchRouteContext) {
     },
     select: {
       id: true,
-      pitchStartedAt: true,
+      projectId: true,
     },
   });
 
@@ -23,23 +26,63 @@ export async function POST(_request: Request, context: StartPitchRouteContext) {
     return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
   }
 
-  const pitchStartedAt = session.pitchStartedAt ?? new Date();
-  const updatedSession = await prisma.trainingSession.update({
-    where: {
-      id: sessionId,
-    },
-    data: {
-      status: "PITCHING",
-      pitchStartedAt,
-      pitchEndedAt: null,
-      pitchDurationSec: null,
-    },
-    select: {
-      id: true,
-      status: true,
-      pitchStartedAt: true,
-    },
-  });
+  const body = (await request.json().catch(() => ({}))) as {
+    fileId?: unknown;
+  };
+  const fileId =
+    typeof body.fileId === "string" && body.fileId.trim()
+      ? body.fileId.trim()
+      : null;
+
+  if (fileId) {
+    const file = await prisma.fileAsset.findFirst({
+      where: {
+        id: fileId,
+        projectId: session.projectId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!file) {
+      return NextResponse.json(
+        { error: "文件不存在或不属于当前训练项目。" },
+        { status: 400 },
+      );
+    }
+  }
+
+  const pitchStartedAt = new Date();
+  const [updatedSession] = await prisma.$transaction([
+    prisma.trainingSession.update({
+      where: {
+        id: sessionId,
+      },
+      data: {
+        status: "PITCHING",
+        pitchStartedAt,
+        pitchEndedAt: null,
+        pitchDurationSec: null,
+        currentPageIndex: 1,
+      },
+      select: {
+        id: true,
+        status: true,
+        pitchStartedAt: true,
+        currentPageIndex: true,
+      },
+    }),
+    prisma.slideEvent.create({
+      data: {
+        sessionId,
+        fileId,
+        pageIndex: 1,
+        eventType: "START",
+        elapsedSec: 0,
+      },
+    }),
+  ]);
 
   return NextResponse.json({
     session: updatedSession,

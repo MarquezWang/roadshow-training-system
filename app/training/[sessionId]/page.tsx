@@ -44,6 +44,44 @@ export default async function TrainingSessionPage({
           },
         },
       },
+      recordings: {
+        where: {
+          phase: "PITCH",
+          status: "RECORDED",
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: 1,
+        select: {
+          id: true,
+          phase: true,
+          status: true,
+          fileName: true,
+          mimeType: true,
+          sizeBytes: true,
+          durationSec: true,
+          startedAt: true,
+          endedAt: true,
+          transcript: {
+            select: {
+              id: true,
+              recordingId: true,
+              sessionId: true,
+              status: true,
+              source: true,
+              language: true,
+              text: true,
+              segmentsJson: true,
+              errorMessage: true,
+              startedAt: true,
+              completedAt: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+          },
+        },
+      },
     },
   });
 
@@ -64,6 +102,31 @@ export default async function TrainingSessionPage({
         )
       : 0);
   const initialRemainingSec = Math.max(0, pitchLimitSec - initialElapsedSec);
+  const previewFile =
+    session.project.fileAssets.find(
+      (file) => file.fileType.toLowerCase() === "pdf",
+    ) ?? null;
+  const initialRecording = session.recordings[0]
+    ? {
+        ...session.recordings[0],
+        startedAt: session.recordings[0].startedAt?.toISOString() ?? null,
+        endedAt: session.recordings[0].endedAt?.toISOString() ?? null,
+        playbackUrl: `/training/${session.id}/recordings/${session.recordings[0].id}`,
+        transcript: session.recordings[0].transcript
+          ? {
+              ...session.recordings[0].transcript,
+              startedAt:
+                session.recordings[0].transcript.startedAt?.toISOString() ??
+                null,
+              completedAt:
+                session.recordings[0].transcript.completedAt?.toISOString() ??
+                null,
+              createdAt: session.recordings[0].transcript.createdAt.toISOString(),
+              updatedAt: session.recordings[0].transcript.updatedAt.toISOString(),
+            }
+          : null,
+      }
+    : null;
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
@@ -84,13 +147,17 @@ export default async function TrainingSessionPage({
       <div className="mt-6">
         <TrainingSessionClient
           sessionId={session.id}
+          projectId={session.project.id}
+          projectName={session.project.name}
           initialStatus={session.status}
-          initialPageIndex={session.currentPageIndex}
+          initialPageIndex={Math.max(0, session.currentPageIndex - 1)}
           initialPitchStartedAt={session.pitchStartedAt?.toISOString() ?? null}
           initialElapsedSec={initialElapsedSec}
           initialRemainingSec={initialRemainingSec}
           initialPitchDurationSec={session.pitchDurationSec}
           files={session.project.fileAssets}
+          previewFile={previewFile}
+          initialRecording={initialRecording}
         />
       </div>
     </main>
