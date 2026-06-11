@@ -156,7 +156,6 @@ export function validateTrainingAnalysisResult(
     overallScore,
     summary: readString(analysis.summary, "summary"),
     strengths: readStringArray(analysis.strengths, "strengths", {
-      min: 3,
       max: 5,
     }),
     weaknesses: readStringArray(analysis.weaknesses, "weaknesses", {
