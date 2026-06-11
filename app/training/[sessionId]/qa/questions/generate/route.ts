@@ -105,6 +105,9 @@ async function getLatestTranscript(sessionId: string) {
       text: {
         not: "",
       },
+      recording: {
+        phase: "PITCH",
+      },
     },
     orderBy: {
       updatedAt: "desc",

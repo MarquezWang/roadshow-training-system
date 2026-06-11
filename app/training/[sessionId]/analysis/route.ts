@@ -319,6 +319,9 @@ export async function POST(
             text: {
               not: "",
             },
+            recording: {
+              phase: "PITCH",
+            },
           },
           orderBy: {
             updatedAt: "desc",
