@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { prisma } from "@/lib/prisma";
@@ -254,15 +253,6 @@ export default async function TrainingSessionPage({
         title="路演训练"
         description={`当前项目：${session.project.name}`}
       />
-
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-        <Link
-          href={`/projects/${session.project.id}`}
-          className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-        >
-          返回项目详情
-        </Link>
-      </div>
 
       <div className="mt-6">
         <TrainingSessionClient

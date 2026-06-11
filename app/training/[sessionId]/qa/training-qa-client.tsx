@@ -197,6 +197,7 @@ export function TrainingQaClient({
   const [message, setMessage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
+  const [isGuardResolved, setIsGuardResolved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [qaRecordingStatus, setQaRecordingStatus] =
     useState<QaRecordingStatus>("idle");
@@ -261,6 +262,29 @@ export function TrainingQaClient({
       })();
     },
   });
+
+  useEffect(() => {
+    const isActiveStatus = initialStatus === "QAING" || initialStatus === "QA_READY";
+    if (!isActiveStatus) {
+      queueMicrotask(() => setIsGuardResolved(true));
+      return;
+    }
+    const key = `training:${sessionId}:pending-abort`;
+    const hasPending = sessionStorage.getItem(key);
+    if (hasPending) {
+      sessionStorage.removeItem(key);
+      void (async () => {
+        try {
+          await fetch(`/training/${sessionId}/abort`, { method: "POST" });
+        } finally {
+          router.replace(`/training/${sessionId}/report`);
+        }
+      })();
+      return;
+    }
+    queueMicrotask(() => setIsGuardResolved(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function clearSpeechTimer() {
     if (speechTimeoutRef.current !== null) {
@@ -832,6 +856,7 @@ const beginJudgeQuestion = useCallback(
   useEffect(() => {
     if (
       initialStatus !== "QAING" ||
+      !isGuardResolved ||
       hasResumedQaingRef.current ||
       questions.length === 0
     ) {
@@ -840,7 +865,7 @@ const beginJudgeQuestion = useCallback(
 
     hasResumedQaingRef.current = true;
     beginJudgeQuestion(initialQuestionIndex);
-  }, [beginJudgeQuestion, initialQuestionIndex, initialStatus, questions.length]);
+  }, [beginJudgeQuestion, initialQuestionIndex, initialStatus, isGuardResolved, questions.length]);
 
   useEffect(() => {
     return () => {
@@ -1026,7 +1051,13 @@ const beginJudgeQuestion = useCallback(
       : "回答完毕，进入下一题";
 
   return (
-    <div className="grid h-[calc(100vh-24px)] w-full gap-3 overflow-hidden bg-slate-950 text-white lg:grid-cols-[minmax(0,1fr)_300px]">
+    <>
+      {!isGuardResolved ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <p className="text-xl font-semibold text-white">正在结束训练...</p>
+        </div>
+      ) : null}
+      <div className="grid h-[calc(100vh-24px)] w-full gap-3 overflow-hidden bg-slate-950 text-white lg:grid-cols-[minmax(0,1fr)_300px]">
       <section className="flex min-h-0 flex-col rounded-lg border border-slate-700 bg-slate-900/95 p-3 shadow-2xl">
         <div className="flex flex-col gap-3 border-b border-slate-700 pb-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -1387,5 +1418,6 @@ const beginJudgeQuestion = useCallback(
         </section>
       </aside>
     </div>
+    </>
   );
 }

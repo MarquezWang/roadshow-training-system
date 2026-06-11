@@ -210,7 +210,6 @@ function getCoverageLabel(value: TrainingCoverageItem["covered"]) {
 
 export function TrainingSessionClient({
   sessionId,
-  projectId,
   projectName,
   initialStatus,
   initialPageIndex,
@@ -277,7 +276,12 @@ export function TrainingSessionClient({
   const [isBigScreenMode, setIsBigScreenMode] = useState(
     initialStatus === "PITCHING",
   );
+  const [isGuardResolved, setIsGuardResolved] = useState(false);
+  const [prepCountdown, setPrepCountdown] = useState<number | null>(null);
+  const prepCountdownIntervalRef = useRef<number | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isFullscreenSupported, setIsFullscreenSupported] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isFullscreenActive, setIsFullscreenActive] = useState(false);
   const [fullscreenMessage, setFullscreenMessage] = useState("");
   const trainingShellRef = useRef<HTMLDivElement | null>(null);
@@ -371,7 +375,30 @@ export function TrainingSessionClient({
   });
 
   useEffect(() => {
-    if (!isPitching) {
+    const isActiveStatus = initialStatus === "PITCHING";
+    if (!isActiveStatus) {
+      queueMicrotask(() => setIsGuardResolved(true));
+      return;
+    }
+    const key = `training:${sessionId}:pending-abort`;
+    const hasPending = sessionStorage.getItem(key);
+    if (hasPending) {
+      sessionStorage.removeItem(key);
+      void (async () => {
+        try {
+          await fetch(`/training/${sessionId}/abort`, { method: "POST" });
+        } finally {
+          router.replace(`/training/${sessionId}/report`);
+        }
+      })();
+      return;
+    }
+    queueMicrotask(() => setIsGuardResolved(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!isPitching || !isGuardResolved) {
       return;
     }
 
@@ -389,7 +416,7 @@ export function TrainingSessionClient({
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [isPitching, pitchStartedAt]);
+  }, [isGuardResolved, isPitching, pitchStartedAt]);
 
   useEffect(() => {
     if (!previewFile || !previewUrl) {
@@ -619,6 +646,7 @@ export function TrainingSessionClient({
     }
   }, []);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const exitBigScreen = useCallback(async () => {
     setIsBigScreenMode(false);
     setFullscreenMessage("");
@@ -846,6 +874,7 @@ export function TrainingSessionClient({
     if (
       !autoStartRecordingOnMount ||
       !isPitching ||
+      !isGuardResolved ||
       hasHandledPitchRecordingPreferenceRef.current ||
       initialRecording
     ) {
@@ -901,6 +930,7 @@ export function TrainingSessionClient({
   }, [
     autoStartRecordingOnMount,
     initialRecording,
+    isGuardResolved,
     isPitching,
     sessionId,
     startRecording,
@@ -954,6 +984,11 @@ export function TrainingSessionClient({
       }
 
       stopMediaStream();
+
+      if (prepCountdownIntervalRef.current !== null) {
+        window.clearInterval(prepCountdownIntervalRef.current);
+        prepCountdownIntervalRef.current = null;
+      }
     };
   }, [stopMediaStream]);
 
@@ -1149,6 +1184,44 @@ export function TrainingSessionClient({
 
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [changePage]);
+
+  function beginPrepCountdown() {
+    if (
+      status === "CREATED" &&
+      recordingStatus === "UNDECIDED"
+    ) {
+      setShowRecordingPrepDialog(true);
+      setShowRecordingOptOutConfirm(false);
+      setMessage("请先开启麦克风，或明确选择暂不录音后再开始路演。");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setMessage("");
+    setPrepCountdown(4);
+
+    prepCountdownIntervalRef.current = window.setInterval(() => {
+      setPrepCountdown((prev) => {
+        if (prev === null || prev <= 0) {
+          if (prepCountdownIntervalRef.current !== null) {
+            window.clearInterval(prepCountdownIntervalRef.current);
+            prepCountdownIntervalRef.current = null;
+          }
+          return null;
+        }
+        const next = prev - 1;
+        if (next <= 0) {
+          if (prepCountdownIntervalRef.current !== null) {
+            window.clearInterval(prepCountdownIntervalRef.current);
+            prepCountdownIntervalRef.current = null;
+          }
+          void startPitch();
+          return null;
+        }
+        return next;
+      });
+    }, 1000);
+  }
 
   async function startPitch() {
     if (
@@ -1352,7 +1425,24 @@ export function TrainingSessionClient({
     : "whitespace-pre-wrap text-sm leading-6 text-slate-700";
 
   return (
-    <div ref={trainingShellRef} className={shellClassName}>
+    <>
+      {!isGuardResolved ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <p className="text-xl font-semibold text-white">正在结束训练...</p>
+        </div>
+      ) : null}
+      {isGuardResolved && prepCountdown !== null ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <p className="text-6xl font-bold text-white">
+            {prepCountdown >= 4
+              ? "请准备"
+              : prepCountdown >= 1
+                ? String(prepCountdown)
+                : "开始路演"}
+          </p>
+        </div>
+      ) : null}
+      <div ref={trainingShellRef} className={shellClassName}>
       <section className={mainPanelClassName}>
         <div className={headerClassName}>
           <div>
@@ -1556,8 +1646,8 @@ export function TrainingSessionClient({
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={startPitch}
-              disabled={isPitching || isEnded || isSubmitting}
+              onClick={beginPrepCountdown}
+              disabled={isPitching || isEnded || isSubmitting || prepCountdown !== null}
               className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               开始路演
@@ -1591,41 +1681,6 @@ export function TrainingSessionClient({
             >
               结束路演
             </button>
-            {isPitching && !isBigScreenMode ? (
-              <button
-                type="button"
-                onClick={() => void enterBigScreen()}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-              >
-                进入大屏
-              </button>
-            ) : null}
-            {isBigScreenMode && isFullscreenSupported && !isFullscreenActive ? (
-              <button
-                type="button"
-                onClick={() => void enterBigScreen()}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-800 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-700"
-              >
-                进入全屏
-              </button>
-            ) : null}
-            {isBigScreenMode ? (
-              <button
-                type="button"
-                onClick={() => void exitBigScreen()}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800"
-              >
-                退出大屏
-              </button>
-            ) : null}
-            {isBigScreenMode ? (
-              <a
-                href={`/projects/${projectId}`}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-700 px-4 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
-              >
-                返回项目
-              </a>
-            ) : null}
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -2166,5 +2221,6 @@ export function TrainingSessionClient({
         </div>
       ) : null}
     </div>
+    </>
   );
 }
