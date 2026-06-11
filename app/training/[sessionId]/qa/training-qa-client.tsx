@@ -170,7 +170,6 @@ export function TrainingQaClient({
   initialRemainingSec,
   initialQuestions,
   previewFile,
-  files,
 }: TrainingQaClientProps) {
   const router = useRouter();
   const initialQuestionIndex = findInitialQuestionIndex(initialQuestions);
@@ -190,13 +189,15 @@ export function TrainingQaClient({
           .map((question) => question.id),
       ),
   );
-  const [preAnswerCountdown, setPreAnswerCountdown] = useState(3);
   const [usedAnswerSec, setUsedAnswerSec] = useState(
     Math.max(0, qaLimitSec - Math.min(initialRemainingSec, qaLimitSec)),
   );
   const [message, setMessage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const autoGenerateRef = useRef(false);
   const [isStarting, setIsStarting] = useState(false);
+  const [preAnswerOverlay, setPreAnswerOverlay] = useState<number | null>(null);
   const [isGuardResolved, setIsGuardResolved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [qaRecordingStatus, setQaRecordingStatus] =
@@ -284,6 +285,53 @@ export function TrainingQaClient({
     }
     queueMicrotask(() => setIsGuardResolved(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const header = document.querySelector("header");
+    if (!header) return;
+    const originalDisplay = header.style.display;
+    header.style.display = "none";
+    return () => {
+      header.style.display = originalDisplay;
+    };
+  }, []);
+
+  // 拦截浏览器返回：push 哨兵状态，返回时按中止训练处理
+  useEffect(() => {
+    const sentinelKey = `qa-sentinel-${sessionId}`;
+    let aborted = false;
+
+    const handleAbort = () => {
+      if (aborted || isCompletingNormallyRef.current) return;
+      aborted = true;
+      void (async () => {
+        try {
+          await fetch(`/training/${sessionId}/abort`, { method: "POST" });
+        } finally {
+          router.replace(`/training/${sessionId}/report`);
+        }
+      })();
+    };
+
+    const handlePopState = () => {
+      handleAbort();
+    };
+
+    history.pushState({ [sentinelKey]: true }, "", window.location.href);
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [sessionId, router, isCompletingNormallyRef]);
+
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
   }, []);
 
   function clearSpeechTimer() {
@@ -636,20 +684,28 @@ export function TrainingQaClient({
   const beginPreAnswerCountdown = useCallback(() => {
     clearSpeechTimer();
     clearCountdownTimer();
-    setQaPhase("COUNTDOWN");
-    setPreAnswerCountdown(3);
-
-    let nextValue = 3;
+    setPreAnswerOverlay(4);
 
     countdownIntervalRef.current = window.setInterval(() => {
-      nextValue -= 1;
-
-      if (nextValue <= 0) {
-        void beginAnswering();
-        return;
-      }
-
-      setPreAnswerCountdown(nextValue);
+      setPreAnswerOverlay((prev) => {
+        if (prev === null || prev <= 0) {
+          if (countdownIntervalRef.current !== null) {
+            window.clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+          return null;
+        }
+        const next = prev - 1;
+        if (next <= 0) {
+          if (countdownIntervalRef.current !== null) {
+            window.clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+          void beginAnswering();
+          return null;
+        }
+        return next;
+      });
     }, 1000);
   }, [beginAnswering]);
 
@@ -879,8 +935,9 @@ const beginJudgeQuestion = useCallback(
     };
   }, []);
 
-  async function generateQuestions() {
+  const generateQuestions = useCallback(async () => {
     setIsGenerating(true);
+    setGenerateError(null);
     setMessage("");
 
     try {
@@ -903,11 +960,22 @@ const beginJudgeQuestion = useCallback(
       setCurrentQuestionIndex(0);
       setMessage("答辩问题已生成。开始前不会展示完整题目。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "答辩问题生成失败。");
+      const errorMessage =
+        error instanceof Error ? error.message : "答辩问题生成失败。";
+      setGenerateError(errorMessage);
+      setMessage(errorMessage);
     } finally {
       setIsGenerating(false);
     }
-  }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!isGuardResolved || autoGenerateRef.current || isGenerating) return;
+    if (questions.length > 0) return;
+    autoGenerateRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time initial auto-generation
+    void generateQuestions();
+  }, [isGuardResolved, isGenerating, questions.length, generateQuestions]);
 
   async function startQa() {
     if (questions.length === 0) {
@@ -1057,7 +1125,18 @@ const beginJudgeQuestion = useCallback(
           <p className="text-xl font-semibold text-white">正在结束训练...</p>
         </div>
       ) : null}
-      <div className="grid h-[calc(100vh-24px)] w-full gap-3 overflow-hidden bg-slate-950 text-white lg:grid-cols-[minmax(0,1fr)_300px]">
+      {preAnswerOverlay !== null ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <p className="text-6xl font-bold text-white">
+            {preAnswerOverlay >= 4
+              ? "请准备"
+              : preAnswerOverlay >= 1
+                ? String(preAnswerOverlay)
+                : "请开始回答"}
+          </p>
+        </div>
+      ) : null}
+      <div className="grid h-screen w-full gap-3 overflow-hidden bg-slate-950 text-white lg:grid-cols-[minmax(0,1fr)_300px]">
       <section className="flex min-h-0 flex-col rounded-lg border border-slate-700 bg-slate-900/95 p-3 shadow-2xl">
         <div className="flex flex-col gap-3 border-b border-slate-700 pb-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -1170,14 +1249,42 @@ const beginJudgeQuestion = useCallback(
                 当前没有可预览的 PDF 材料
               </p>
               <p className="mt-3 text-sm text-slate-400">
-                仍可继续答辩，右侧会显示当前纳入 AI 上下文的材料清单。
+                仍可继续答辩。
               </p>
             </div>
           )}
         </div>
 
         <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-slate-300">当前页码：{pageLabel}</p>
+          <div className="flex flex-wrap gap-2">
+            {isGenerating ? (
+              <button
+                type="button"
+                disabled
+                className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              >
+                AI评委思考中...
+              </button>
+            ) : !isQaing && questions.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => void startQa()}
+                disabled={isStarting}
+                className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              >
+                开始答辩
+              </button>
+            ) : isQaing && qaPhase === "ANSWERING" ? (
+              <button
+                type="button"
+                onClick={() => void saveAndContinue()}
+                disabled={isSaving}
+                className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              >
+                {isSaving ? "保存中..." : mainButtonLabel}
+              </button>
+            ) : null}
+          </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -1262,30 +1369,48 @@ const beginJudgeQuestion = useCallback(
                 </ul>
               </div>
 
-              <p className="text-sm leading-6 text-slate-300">
-                已生成问题数量：{questions.length}。开始前不展示完整题目正文。
-              </p>
+              {isGenerating ? (
+                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-6 text-center">
+                  <p className="text-base font-semibold text-white">
+                    AI评委思考中...
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                    正在阅读项目材料、评分标准及可用路演记录
+                  </p>
+                </div>
+              ) : questions.length > 0 ? (
+                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-6 text-center">
+                  <p className="text-base font-semibold text-white">
+                    AI评委已准备好提问
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                    已生成 {questions.length} 道问题。开始前不展示完整题目正文。
+                  </p>
+                </div>
+              ) : generateError ? (
+                <div className="rounded-md border border-red-700 bg-red-950/40 p-6 text-center">
+                  <p className="text-base font-semibold text-red-200">
+                    问题生成失败
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-red-300">
+                    {generateError}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void generateQuestions()}
+                    disabled={isGenerating}
+                    className="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-800 disabled:text-red-300"
+                  >
+                    重新生成问题
+                  </button>
+                </div>
+              ) : null}
 
-              <button
-                type="button"
-                onClick={() => void generateQuestions()}
-                disabled={isGenerating || questions.length > 0}
-                className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-              >
-                {isGenerating
-                  ? "生成中..."
-                  : questions.length > 0
-                    ? "答辩问题已生成"
-                    : "生成答辩问题"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void startQa()}
-                disabled={isStarting || questions.length === 0}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
-              >
-                {isStarting ? "开始中..." : "开始答辩"}
-              </button>
+              {isGenerating ? (
+                <p className="text-center text-sm text-slate-500">
+                  AI评委思考中，请稍候...
+                </p>
+              ) : null}
             </div>
           ) : currentQuestion ? (
             <div className="mt-5 grid gap-4">
@@ -1298,17 +1423,6 @@ const beginJudgeQuestion = useCallback(
                     第 {currentQuestion.orderIndex} 题语音播报中。提问结束后将进入
                     3、2、1，期间不扣答题时间。
                   </p>
-                </div>
-              ) : null}
-
-              {qaPhase === "COUNTDOWN" ? (
-                <div className="grid h-40 place-items-center rounded-md border border-slate-700 bg-white text-slate-950">
-                  <div className="text-center">
-                    <p className="text-sm text-slate-500">准备回答</p>
-                    <p className="mt-2 text-6xl font-semibold">
-                      {preAnswerCountdown}
-                    </p>
-                  </div>
                 </div>
               ) : null}
 
@@ -1367,16 +1481,7 @@ const beginJudgeQuestion = useCallback(
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={() => void saveAndContinue()}
-                disabled={isSaving || qaPhase !== "ANSWERING"}
-                className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-              >
-                {isSaving ? "保存中..." : mainButtonLabel}
-              </button>
-            </div>
-          ) : null}
+            </div>) : null}
 
           {message ? (
             <p className="mt-4 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm leading-6 text-slate-300">
@@ -1389,32 +1494,6 @@ const beginJudgeQuestion = useCallback(
             </p>
           ) : null}
 
-          <div className="mt-5 rounded-md border border-slate-700 bg-slate-950/60 p-4">
-            <h4 className="text-sm font-semibold text-white">
-              纳入 AI 上下文的材料
-            </h4>
-            {files.length > 0 ? (
-              <ul className="mt-3 grid gap-2">
-                {files.map((file) => (
-                  <li
-                    key={file.id}
-                    className="rounded-md border border-slate-700 bg-slate-900 p-3"
-                  >
-                    <p className="break-words text-sm font-medium text-slate-100">
-                      {file.originalName}
-                    </p>
-                    <p className="mt-1 text-xs uppercase text-slate-400">
-                      {file.fileType}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-3 text-sm leading-6 text-slate-300">
-                暂无已解析且纳入 AI 上下文的材料。
-              </p>
-            )}
-          </div>
         </section>
       </aside>
     </div>

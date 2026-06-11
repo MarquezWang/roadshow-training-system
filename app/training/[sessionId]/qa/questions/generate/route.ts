@@ -4,7 +4,7 @@ import {
   buildProjectAIContext,
   ProjectContextNotFoundError,
 } from "@/lib/project-context";
-import { parseAIJson } from "@/lib/json-utils";
+import { parseAIJson, AIJsonParseError } from "@/lib/json-utils";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
@@ -222,16 +222,41 @@ export async function POST(
         : null,
       pitchAnalysis,
     });
-    const aiResult = await callAI({
-      systemPrompt:
-        "你是严格遵守 JSON 输出约束的路演答辩教练。只输出合法 JSON，不输出 Markdown 或额外解释。",
+    const baseSystemPrompt =
+      "你是严格遵守 JSON 输出约束的路演答辩教练。只输出合法 JSON，不输出 Markdown 或额外解释。";
+
+    let aiResult = await callAI({
+      systemPrompt: baseSystemPrompt,
       userPrompt,
       temperature: 0.2,
       maxOutputTokens: 2_000,
     });
-    const generatedQuestions = validateGeneratedTrainingQuestions(
-      parseAIJson(aiResult.text),
-    );
+
+    let generatedQuestions;
+    try {
+      generatedQuestions = validateGeneratedTrainingQuestions(
+        parseAIJson(aiResult.text),
+      );
+    } catch (error) {
+      if (!(error instanceof AIJsonParseError)) {
+        throw error;
+      }
+
+      console.warn("QA 问题生成 JSON 解析失败，重试中...", {
+        error: error.message,
+      });
+
+      aiResult = await callAI({
+        systemPrompt: `${baseSystemPrompt}\n\n重要：确保所有字符串值中的双引号、换行符等特殊字符都已正确转义。输出必须是严格合法的 JSON，不要有任何 JSON 语法错误。`,
+        userPrompt,
+        temperature: 0,
+        maxOutputTokens: 2_000,
+      });
+
+      generatedQuestions = validateGeneratedTrainingQuestions(
+        parseAIJson(aiResult.text),
+      );
+    }
 
     await prisma.trainingQuestion.createMany({
       data: generatedQuestions.map((question) => ({

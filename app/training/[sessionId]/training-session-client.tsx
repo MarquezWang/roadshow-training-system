@@ -8,6 +8,7 @@ import type {
 } from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
+import { getTrainingFlowPath } from "@/lib/training-status";
 
 type TrainingFile = {
   id: string;
@@ -217,7 +218,6 @@ export function TrainingSessionClient({
   initialElapsedSec,
   initialRemainingSec,
   initialPitchDurationSec,
-  files,
   previewFile,
   initialRecording,
   initialAnalysis,
@@ -373,6 +373,68 @@ export function TrainingSessionClient({
       })();
     },
   });
+
+  // BFCache 恢复 / 页面重新可见时校验状态，若已不在 pitch 阶段则跳转
+  useEffect(() => {
+    async function verifyStatus() {
+      try {
+        const res = await fetch(`/training/${sessionId}/status`);
+        if (!res.ok) return;
+        const body = (await res.json()) as { status?: string };
+        if (!body.status || body.status === "PITCHING") return;
+        isCompletingNormallyRef.current = true;
+        router.replace(getTrainingFlowPath(sessionId, body.status));
+      } catch {
+        // 网络错误时不跳转，避免误伤正常训练
+      }
+    }
+
+    const handlePageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) verifyStatus();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") verifyStatus();
+    };
+
+    window.addEventListener("pageshow", handlePageShow);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [sessionId, router, isCompletingNormallyRef]);
+
+  // 拦截浏览器返回：pitch 阶段 push 哨兵，返回时按中止训练处理
+  useEffect(() => {
+    if (!isPitching) return;
+
+    const sentinelKey = `pitch-sentinel-${sessionId}`;
+    let aborted = false;
+
+    const handleAbort = () => {
+      if (aborted || isCompletingNormallyRef.current) return;
+      aborted = true;
+      void (async () => {
+        try {
+          await fetch(`/training/${sessionId}/abort`, { method: "POST" });
+        } finally {
+          router.replace(`/training/${sessionId}/report`);
+        }
+      })();
+    };
+
+    const handlePopState = () => {
+      handleAbort();
+    };
+
+    history.pushState({ [sentinelKey]: true }, "", window.location.href);
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [isPitching, sessionId, router, isCompletingNormallyRef]);
 
   useEffect(() => {
     const isActiveStatus = initialStatus === "PITCHING";
@@ -1185,6 +1247,7 @@ export function TrainingSessionClient({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [changePage]);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for future use
   function beginPrepCountdown() {
     if (
       status === "CREATED" &&
@@ -1349,7 +1412,7 @@ export function TrainingSessionClient({
 
       if (redirectToQaAfterPitchEnd) {
         isCompletingNormallyRef.current = true;
-        router.push(`/training/${sessionId}/qa`);
+        router.replace(`/training/${sessionId}/qa`);
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "结束路演失败。");
@@ -1644,14 +1707,6 @@ export function TrainingSessionClient({
           }
         >
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={beginPrepCountdown}
-              disabled={isPitching || isEnded || isSubmitting || prepCountdown !== null}
-              className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              开始路演
-            </button>
             {status === "CREATED" && recordingStatus === "OPTED_OUT" ? (
               <button
                 type="button"
@@ -2077,54 +2132,6 @@ export function TrainingSessionClient({
         </section>
         ) : null}
 
-        <section className={`${secondaryPanelClassName} min-h-0 overflow-auto`}>
-          <h2 className={secondaryTitleClassName}>
-            纳入 AI 上下文的文件
-          </h2>
-          {files.length > 0 ? (
-            <ul className="mt-4 grid gap-3">
-              {files.map((file) => (
-                <li
-                  key={file.id}
-                  className={
-                    isBigScreenMode
-                      ? "rounded-md border border-slate-700 bg-slate-950/60 p-3"
-                      : "rounded-md border border-slate-200 bg-slate-50 p-3"
-                  }
-                >
-                  <p
-                    className={
-                      isBigScreenMode
-                        ? "break-words text-sm font-medium text-white"
-                        : "break-words text-sm font-medium text-slate-900"
-                    }
-                  >
-                    {file.originalName}
-                  </p>
-                  <p
-                    className={
-                      isBigScreenMode
-                        ? "mt-1 text-xs uppercase text-slate-400"
-                        : "mt-1 text-xs uppercase text-slate-500"
-                    }
-                  >
-                    {file.fileType}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p
-              className={
-                isBigScreenMode
-                  ? "mt-4 rounded-md border border-dashed border-slate-700 p-4 text-sm leading-6 text-slate-300"
-                  : "mt-4 rounded-md border border-dashed border-slate-300 p-4 text-sm leading-6 text-slate-600"
-              }
-            >
-              暂无已解析且纳入 AI 上下文的文件。
-            </p>
-          )}
-        </section>
       </aside>
 
       {showRecordingPrepDialog && status === "CREATED" ? (
