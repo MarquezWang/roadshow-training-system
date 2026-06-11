@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useRouter } from "next/navigation";
 import type {
@@ -359,6 +359,15 @@ export function TrainingSessionClient({
     sessionId,
     enabled: isPitching,
     isCompletingNormallyRef,
+    onPendingAbortDetected: () => {
+      void (async () => {
+        try {
+          await fetch(`/training/${sessionId}/abort`, { method: "POST" });
+        } finally {
+          router.replace(`/training/${sessionId}/report`);
+        }
+      })();
+    },
   });
 
   useEffect(() => {

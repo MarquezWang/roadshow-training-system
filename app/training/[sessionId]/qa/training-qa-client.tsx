@@ -232,6 +232,15 @@ export function TrainingQaClient({
     sessionId,
     enabled: status === "QA_READY" || status === "QAING",
     isCompletingNormallyRef,
+    onPendingAbortDetected: () => {
+      void (async () => {
+        try {
+          await fetch(`/training/${sessionId}/abort`, { method: "POST" });
+        } finally {
+          router.replace(`/training/${sessionId}/report`);
+        }
+      })();
+    },
   });
 
   function clearSpeechTimer() {

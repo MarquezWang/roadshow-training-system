@@ -30,13 +30,34 @@ type TrainingAbortGuardOptions = Readonly<{
   sessionId: string;
   enabled: boolean;
   isCompletingNormallyRef: MutableRefObject<boolean>;
+  onPendingAbortDetected?: () => void;
 }>;
+
+function pendingAbortKey(sessionId: string) {
+  return `training:${sessionId}:pending-abort`;
+}
 
 export function useTrainingAbortGuard({
   sessionId,
   enabled,
   isCompletingNormallyRef,
+  onPendingAbortDetected,
 }: TrainingAbortGuardOptions) {
+  useEffect(() => {
+    if (!enabled || !onPendingAbortDetected) {
+      return;
+    }
+
+    const key = pendingAbortKey(sessionId);
+    const hasPending = sessionStorage.getItem(key);
+
+    if (hasPending) {
+      sessionStorage.removeItem(key);
+      onPendingAbortDetected();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, sessionId]);
+
   useEffect(() => {
     if (!enabled) {
       return;
@@ -67,6 +88,7 @@ export function useTrainingAbortGuard({
         return;
       }
 
+      sessionStorage.setItem(pendingAbortKey(sessionId), "1");
       abortTraining();
     };
 

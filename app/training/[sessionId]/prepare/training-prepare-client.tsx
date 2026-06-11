@@ -43,7 +43,7 @@ export function TrainingPrepareClient({
 
   useTrainingAbortGuard({
     sessionId,
-    enabled: true,
+    enabled: false,
     isCompletingNormallyRef,
   });
 
