@@ -26,6 +26,21 @@ function readString(value: unknown, fieldName: string) {
   return value.trim();
 }
 
+const compoundQuestionKeywords = [
+  "请分别说明",
+  "分别阐述",
+  "分别回答",
+  "请分别阐述",
+  "请分别回答",
+];
+
+function checkCompoundQuestion(text: string) {
+  const hit = compoundQuestionKeywords.find((keyword) => text.includes(keyword));
+  if (hit) {
+    throw new Error(`questionText 可能包含复合提问，检测到: "${hit}"`);
+  }
+}
+
 function readOrderIndex(value: unknown, fieldName: string) {
   const orderIndex = Number(value);
 
@@ -71,15 +86,19 @@ export function validateGeneratedTrainingQuestions(
       );
     }
 
-    return {
-      orderIndex,
-      questionType,
-      questionText: readString(
+    const questionText = readString(
         item.questionText,
         `questions[${index}].questionText`,
-      ),
-      basis: readString(item.basis, `questions[${index}].basis`),
-    };
+      );
+
+      checkCompoundQuestion(questionText);
+
+      return {
+        orderIndex,
+        questionType,
+        questionText,
+        basis: readString(item.basis, `questions[${index}].basis`),
+      };
   });
 
   const sortedOrderIndexes = questions

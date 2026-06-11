@@ -131,18 +131,36 @@ function isEditableOrClickableTarget(target: EventTarget | null) {
 }
 
 function chooseJudgeVoice(voices: SpeechSynthesisVoice[]) {
-  const maleVoiceHints = ["Yunxi", "Kangkang", "Male", "男"];
-  const zhCnVoices = voices.filter((voice) =>
-    `${voice.lang} ${voice.name}`.toLowerCase().includes("zh-cn"),
-  );
-  const maleVoice =
-    voices.find((voice) =>
-      maleVoiceHints.some((hint) =>
-        `${voice.name} ${voice.lang}`.toLowerCase().includes(hint.toLowerCase()),
-      ),
-    ) ?? null;
+  // 按优先级排序的 zh-CN 中文男声候选
+  const maleVoicePriority = [
+    "microsoft xiaoyi online",
+    "microsoft xiaoyi",
+    "xiaoyi",
+    "microsoft yunjian online",
+    "microsoft yunxi online",
+    "microsoft yunyang online",
+    "microsoft kangkang",
+    "yunjian",
+    "yunxi",
+    "yunyang",
+    "kangkang",
+  ];
+  // 筛选中文语音
+  const zhVoices = voices.filter((voice) => {
+    const key = `${voice.lang} ${voice.name}`.toLowerCase();
+    return key.includes("zh-cn") || key.includes("zh") || key.includes("chinese");
+  });
+  // 在中文语音中按优先级匹配男声
+  const maleZhVoice =
+    maleVoicePriority
+      .flatMap((hint) =>
+        zhVoices.filter((voice) =>
+          `${voice.name} ${voice.lang}`.toLowerCase().includes(hint),
+        ),
+      )
+      .find(() => true) ?? null;
 
-  return maleVoice ?? zhCnVoices[0] ?? null;
+  return maleZhVoice ?? zhVoices[0] ?? voices[0] ?? null;
 }
 
 export function TrainingQaClient({
@@ -201,6 +219,7 @@ export function TrainingQaClient({
   const hasAutoEndedRef = useRef(false);
   const hasResumedQaingRef = useRef(false);
   const isCompletingNormallyRef = useRef(false);
+  const hasMoveOnRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -601,7 +620,44 @@ export function TrainingQaClient({
     }, 1000);
   }, [beginAnswering]);
 
-  const beginJudgeQuestion = useCallback(
+  function getVoicesWithTimeout(timeoutMs = 3000): Promise<SpeechSynthesisVoice[]> {
+  const synth = window.speechSynthesis;
+  const voices = synth.getVoices();
+  if (voices.length > 0) {
+    return Promise.resolve(voices);
+  }
+
+  return new Promise<SpeechSynthesisVoice[]>((resolve) => {
+    const timeout = window.setTimeout(() => {
+      window.speechSynthesis.removeEventListener("voiceschanged", handler);
+      resolve(window.speechSynthesis.getVoices());
+    }, timeoutMs);
+
+    function handler() {
+      window.clearTimeout(timeout);
+      resolve(window.speechSynthesis.getVoices());
+    }
+
+    window.speechSynthesis.addEventListener("voiceschanged", handler, {
+      once: true,
+    });
+  });
+}
+
+function buildMoveOn(
+  hasMovedOnRef: { current: boolean },
+  beginPreAnswerCountdown: () => void,
+) {
+  return () => {
+    if (hasMovedOnRef.current) {
+      return;
+    }
+    hasMovedOnRef.current = true;
+    beginPreAnswerCountdown();
+  };
+}
+
+const beginJudgeQuestion = useCallback(
     (questionIndex: number) => {
       const question = questions[questionIndex];
 
@@ -612,6 +668,7 @@ export function TrainingQaClient({
       clearSpeechTimer();
       clearCountdownTimer();
       window.speechSynthesis?.cancel();
+      hasMoveOnRef.current = false;
       setCurrentQuestionIndex(questionIndex);
       setQaPhase("ASKING");
       setMessage("");
@@ -629,35 +686,43 @@ export function TrainingQaClient({
       }
 
       const utterance = new SpeechSynthesisUtterance(question.questionText);
-      const selectedVoice = chooseJudgeVoice(window.speechSynthesis.getVoices());
-      let hasMovedOn = false;
-      const moveOn = () => {
-        if (hasMovedOn) {
-          return;
-        }
+      const moveOn = buildMoveOn(hasMoveOnRef, beginPreAnswerCountdown);
 
-        hasMovedOn = true;
-        beginPreAnswerCountdown();
-      };
-
-      if (selectedVoice) {
-        utterance.voice = selectedVoice;
-      }
-
-      // 本地浏览器语音质量受操作系统 voices 限制；这里只做优先级选择，不接外部 TTS。
       utterance.lang = "zh-CN";
       utterance.rate = 1.15;
       utterance.pitch = 0.92;
       utterance.onend = moveOn;
       utterance.onerror = () => {
-        setMessage("语音提问不可用，请点击“查看问题文字”确认题目。");
+        setMessage("语音提问不可用，请点击\u201c查看问题文字\u201d确认题目。");
         moveOn();
       };
-      speechTimeoutRef.current = window.setTimeout(
-        moveOn,
-        estimateQuestionSpeechMs(question.questionText),
-      );
-      window.speechSynthesis.speak(utterance);
+
+      void (async () => {
+        const voices = await getVoicesWithTimeout(3000);
+        const selectedVoice = chooseJudgeVoice(voices);
+        if (selectedVoice) {
+          utterance.voice = selectedVoice;
+          utterance.lang = selectedVoice.lang;
+        }
+        window.speechSynthesis.speak(utterance);
+      })();
+
+      // setTimeout 仅作为兜底保护，如果语音仍在播放则不前进
+      function scheduleFallback() {
+        speechTimeoutRef.current = window.setTimeout(() => {
+          if (hasMoveOnRef.current) {
+            return;
+          }
+          if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+            // 仍在播放，延后再检查
+            scheduleFallback();
+            return;
+          }
+          moveOn();
+        }, estimateQuestionSpeechMs(question.questionText));
+      }
+
+      scheduleFallback();
     },
     [beginPreAnswerCountdown, questions],
   );
