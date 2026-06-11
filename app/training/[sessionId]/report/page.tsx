@@ -69,6 +69,13 @@ export default async function TrainingReportPage({
           summary: true,
           errorMessage: true,
           updatedAt: true,
+          strengthsJson: true,
+          weaknessesJson: true,
+          suggestionsJson: true,
+          coverageJson: true,
+          timingJson: true,
+          slideSyncJson: true,
+          riskQuestionsJson: true,
         },
       },
       trainingQuestions: {
@@ -137,10 +144,41 @@ export default async function TrainingReportPage({
           : null,
       }
     : null;
+  function parseJsonArray<T>(value: string | null | undefined): T[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
   const analysis = session.analyses[0]
     ? {
-        ...session.analyses[0],
+        id: session.analyses[0].id,
+        status: session.analyses[0].status,
+        overallScore: session.analyses[0].overallScore,
+        summary: session.analyses[0].summary,
+        errorMessage: session.analyses[0].errorMessage,
         updatedAt: session.analyses[0].updatedAt.toISOString(),
+        strengths: parseJsonArray<string>(session.analyses[0].strengthsJson),
+        weaknesses: parseJsonArray<string>(session.analyses[0].weaknessesJson),
+        suggestions: parseJsonArray<string>(session.analyses[0].suggestionsJson),
+        contentCoverage: parseJsonArray<{ item: string; covered: string; evidence: string; suggestion: string }>(session.analyses[0].coverageJson),
+        timing: parseJsonObject(session.analyses[0].timingJson),
+        slideSync: parseJsonObject(session.analyses[0].slideSyncJson),
+        riskQuestions: parseJsonArray<string>(session.analyses[0].riskQuestionsJson),
       }
     : null;
   const qaQuestions = session.trainingQuestions.map((question) => ({

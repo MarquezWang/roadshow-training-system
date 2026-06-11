@@ -35,6 +35,18 @@ type TrainingAnalysis = {
   summary: string;
   errorMessage: string | null;
   updatedAt: string;
+  strengths: string[];
+  weaknesses: string[];
+  suggestions: string[];
+  contentCoverage: Array<{
+    item: string;
+    covered: string;
+    evidence: string;
+    suggestion: string;
+  }>;
+  timing: Record<string, unknown>;
+  slideSync: Record<string, unknown>;
+  riskQuestions: string[];
 };
 
 type TrainingQaQuestion = {
@@ -96,6 +108,12 @@ export function TrainingReportClient({
   );
   const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
   const [analysisMessage, setAnalysisMessage] = useState("");
+
+  const strengths = Array.isArray(analysis?.strengths) ? analysis.strengths : [];
+  const weaknesses = Array.isArray(analysis?.weaknesses) ? analysis.weaknesses : [];
+  const suggestions = Array.isArray(analysis?.suggestions) ? analysis.suggestions : [];
+  const contentCoverage = Array.isArray(analysis?.contentCoverage) ? analysis.contentCoverage : [];
+  const riskQuestions = Array.isArray(analysis?.riskQuestions) ? analysis.riskQuestions : [];
 
   async function saveTranscript() {
     if (isAborted) {
@@ -436,22 +454,123 @@ export function TrainingReportClient({
         ) : null}
 
         {analysis ? (
-          <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4">
-            <p className="text-sm text-slate-500">当前分析状态：{analysis.status}</p>
+          <div className="mt-4 grid gap-4">
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm text-slate-500">当前分析状态：{analysis.status}</p>
+              {analysis.status === "COMPLETED" ? (
+                <>
+                  <p className="mt-2 text-lg font-semibold text-slate-950">
+                    {analysis.overallScore ?? "-"} / 100
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">
+                    {analysis.summary}
+                  </p>
+                </>
+              ) : null}
+              {analysis.status === "FAILED" ? (
+                <p className="mt-2 text-sm leading-6 text-red-700">
+                  {analysis.errorMessage ?? "分析生成失败。"}
+                </p>
+              ) : null}
+            </div>
+
             {analysis.status === "COMPLETED" ? (
               <>
-                <p className="mt-2 text-lg font-semibold text-slate-950">
-                  {analysis.overallScore ?? "-"} / 100
-                </p>
-                <p className="mt-2 text-sm leading-6 text-slate-700">
-                  {analysis.summary}
-                </p>
+                {strengths.length > 0 ? (
+                  <div className="rounded-md border border-green-200 bg-green-50 p-4">
+                    <h4 className="text-sm font-semibold text-green-900">优势</h4>
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-green-800">
+                      {strengths.map((item, index) => (
+                        <li key={index}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {weaknesses.length > 0 ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
+                    <h4 className="text-sm font-semibold text-amber-900">主要问题</h4>
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-amber-800">
+                      {weaknesses.map((item, index) => (
+                        <li key={index}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {suggestions.length > 0 ? (
+                  <div className="rounded-md border border-blue-200 bg-blue-50 p-4">
+                    <h4 className="text-sm font-semibold text-blue-900">改进建议</h4>
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-blue-800">
+                      {suggestions.map((item, index) => (
+                        <li key={index}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {contentCoverage.length > 0 ? (
+                  <div className="rounded-md border border-slate-200 bg-white p-4">
+                    <h4 className="text-sm font-semibold text-slate-950">内容覆盖与证据充分性</h4>
+                    <div className="mt-3 grid gap-3">
+                      {contentCoverage.map((item, index) => {
+                        const coveredLabel =
+                          item.covered === "true"
+                            ? "证据较充分"
+                            : item.covered === "partial"
+                              ? "提到但证据不足"
+                              : "未充分覆盖";
+                        const coveredColor =
+                          item.covered === "true"
+                            ? "text-green-700 bg-green-100"
+                            : item.covered === "partial"
+                              ? "text-amber-700 bg-amber-100"
+                              : "text-red-700 bg-red-100";
+                        return (
+                          <div
+                            key={index}
+                            className="rounded-md border border-slate-200 bg-slate-50 p-3"
+                          >
+                            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                              <span className="text-sm font-medium text-slate-900">
+                                {item.item}
+                              </span>
+                              <span
+                                className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${coveredColor}`}
+                              >
+                                {coveredLabel}
+                              </span>
+                            </div>
+                            {item.evidence ? (
+                              <p className="mt-2 text-xs leading-5 text-slate-500">
+                                证据：{item.evidence}
+                              </p>
+                            ) : null}
+                            {item.suggestion ? (
+                              <p className="mt-1 text-xs leading-5 text-blue-700">
+                                建议：{item.suggestion}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {riskQuestions.length > 0 ? (
+                  <div className="rounded-md border border-purple-200 bg-purple-50 p-4">
+                    <h4 className="text-sm font-semibold text-purple-900">
+                      评委可能追问
+                    </h4>
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-purple-800">
+                      {riskQuestions.map((item, index) => (
+                        <li key={index}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </>
-            ) : null}
-            {analysis.status === "FAILED" ? (
-              <p className="mt-2 text-sm leading-6 text-red-700">
-                {analysis.errorMessage ?? "分析生成失败。"}
-              </p>
             ) : null}
           </div>
         ) : (
