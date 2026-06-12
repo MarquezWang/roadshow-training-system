@@ -6,6 +6,7 @@
 - TrainingSession 基本信息：状态、开始时间、结束时间、路演时长、当前页码。
 - SlideEvent：START、NEXT、PREV、JUMP、END、pageIndex、elapsedSec。
 - TrainingTranscript：本轮路演转写文本。
+- QA 答辩数据（如有）：评委问题、用户回答转写文本、回答用时。
 - Project Context：项目基础信息、纳入 AI 上下文的材料文本、评审规则、评分指标、专家评语、历史问题。
 
 分析任务：
@@ -14,6 +15,7 @@
 3. 根据翻页事件分析基础翻页节奏。
 4. 识别表达优点、问题和下一轮训练建议。
 5. 根据表达缺口生成评委可能追问的问题。
+6. 如提供了 QA 答辩数据，对每道答辩题进行逐题复盘。
 
 必须检查以下内容覆盖项：
 - 项目背景
@@ -79,7 +81,23 @@ JSON 结构必须为：
     "longStayRisk": "",
     "suggestion": ""
   },
-  "riskQuestions": []
+  "riskQuestions": [],
+  "qaReviews": [
+    {
+      "questionId": "",
+      "questionIndex": 0,
+      "dimension": "TECHNICAL",
+      "question": "",
+      "judgeIntent": "",
+      "answerSummary": "",
+      "responseQuality": "GOOD",
+      "responseQualityLabel": "",
+      "missingPoints": [],
+      "evidenceUse": "",
+      "improvementAdvice": "",
+      "betterAnswerOutline": []
+    }
+  ]
 }
 
 字段约束：
@@ -96,6 +114,27 @@ JSON 结构必须为：
 - evidence 应引用转写文本中的简短证据。如果仅空泛结论没有具体证据，写"仅有结论性表达，缺少具体证据"；如转写未表达，写"转写中未充分表达"。
 - suggestion 应指出需要补充哪些证据，如何将空泛表达改为可验证表达。
 - riskQuestions 输出 3 到 5 个问题。追问应优先围绕证据缺口，例如客户验证、收入合同、技术指标、融资真实性、团队履历、落地场景等。
+- qaReviews 如未提供 QA 数据或 QA 尚未进行，输出空数组 []；如提供了 QA 数据，必须为每道答辩题输出一个复盘对象。
+  - questionId：使用 QA 数据中提供的 questionId。
+  - questionIndex：使用 QA 数据中提供的 orderIndex。
+  - dimension：根据问题内容判断技术/市场/风险/财务/团队/其他。
+  - question：评委问题全文。
+  - judgeIntent：评委提问的核心意图，例如"主要考察技术路线是否可验证"。
+  - answerSummary：用户回答摘要，控制在 1 到 2 句。
+  - responseQuality："GOOD"（回答较充分）、"PARTIAL"（部分回应但不完整）、"WEAK"（回避问题或缺少关键依据）。
+  - responseQualityLabel：中文展示，如"回答较充分"/"部分回应"/"回答偏弱"。
+  - missingPoints：回答中缺少的关键点，最多 3 条。必须具体指出缺失了什么事实、数据或逻辑。
+  - evidenceUse：是否使用数据、案例、材料证据支撑。如"未使用数据支撑"、"引用了项目材料中的市场规模数据"、"仅口头描述，无具体证据"。
+  - improvementAdvice：针对本题的具体改进建议。必须提供可执行的建议，不要泛泛鼓励。
+  - betterAnswerOutline：下次可按什么结构回答，每条是简短的要点，最多 3 条。
+
+  QA 复盘重点要求：
+  - 不要只给泛泛建议，必须指出回答中缺失的具体内容。
+  - 必须判断是否正面回答了问题，答非所问时要明确指出。
+  - 必须判断是否有数据或材料支撑。
+  - 必须给出下一次可以怎么回答的结构。
+  - 不要编造项目材料中没有的数据。
+  - 如果转写质量较差，应在相关字段中说明"基于当前转写判断"。
 
 输入变量：
 TrainingSession:
@@ -124,3 +163,6 @@ Expert Comments:
 
 Historical Questions:
 {{historicalQuestions}}
+
+QA Questions and Answers:
+{{qaData}}

@@ -10,7 +10,22 @@ const coverageItems = [
   "融资/合作需求",
 ] as const;
 
-const coveredValues = new Set(["true", "false", "partial"]);
+const coveredValues = new Set(["true", "false", "partial", "INSUFFICIENT"]);
+
+export type QaReview = {
+  questionId: string;
+  questionIndex: number;
+  dimension: "TECHNICAL" | "MARKET" | "RISK" | "FINANCE" | "TEAM" | "OTHER";
+  question: string;
+  judgeIntent: string;
+  answerSummary: string;
+  responseQuality: "GOOD" | "PARTIAL" | "WEAK";
+  responseQualityLabel: string;
+  missingPoints: string[];
+  evidenceUse: string;
+  improvementAdvice: string;
+  betterAnswerOutline: string[];
+};
 
 export type TrainingAnalysisResult = {
   overallScore: number;
@@ -20,7 +35,7 @@ export type TrainingAnalysisResult = {
   suggestions: string[];
   contentCoverage: Array<{
     item: string;
-    covered: "true" | "false" | "partial";
+    covered: "true" | "false" | "partial" | "INSUFFICIENT";
     evidence: string;
     suggestion: string;
   }>;
@@ -42,6 +57,7 @@ export type TrainingAnalysisResult = {
     suggestion?: string;
   };
   riskQuestions: string[];
+  qaReviews?: QaReview[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -68,16 +84,23 @@ function readStringArray(
     throw new Error(`${fieldName} 必须是数组。`);
   }
 
-  const result = value.map((item, index) =>
-    readString(item, `${fieldName}[${index}]`),
-  );
+  const result = value
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim());
 
   if (options.min !== undefined && result.length < options.min) {
-    throw new Error(`${fieldName} 至少需要 ${options.min} 条。`);
+    // 容错：不足最小数量时不抛错，仅返回已有项
+    console.warn(
+      `[validator] ${fieldName} 期望至少 ${options.min} 条，实际 ${result.length} 条，已降级接受。`,
+    );
   }
 
   if (options.max !== undefined && result.length > options.max) {
-    throw new Error(`${fieldName} 最多允许 ${options.max} 条。`);
+    // 截断超出项
+    console.warn(
+      `[validator] ${fieldName} 期望最多 ${options.max} 条，实际 ${result.length} 条，已截断。`,
+    );
+    return result.slice(0, options.max);
   }
 
   return result;
@@ -96,46 +119,171 @@ function validateCoverage(value: unknown) {
     throw new Error("contentCoverage 必须是数组。");
   }
 
-  if (value.length !== coverageItems.length) {
-    throw new Error(`contentCoverage 必须包含 ${coverageItems.length} 项。`);
-  }
+  const DEFAULT_EVIDENCE = "未在当前材料或转写中提取到充分证据。";
+  const DEFAULT_SUGGESTION = "建议补充该部分内容。";
 
-  const result = value.map((item, index) => {
-    const record = readObject(item, `contentCoverage[${index}]`);
-    const coverageItem = readString(record.item, `contentCoverage[${index}].item`);
-    const covered = readString(
-      record.covered,
-      `contentCoverage[${index}].covered`,
-    );
-
-    if (!coveredValues.has(covered)) {
-      throw new Error(
-        `contentCoverage[${index}].covered 只能是 true、false 或 partial。`,
-      );
-    }
-
+  // 解析已有的 coverage 项，容错处理缺失字段
+  const parsedItems = value.map((item, index) => {
+    const record = isRecord(item) ? item : {};
     return {
-      item: coverageItem,
-      covered: covered as "true" | "false" | "partial",
-      evidence: readString(
-        record.evidence,
-        `contentCoverage[${index}].evidence`,
-      ),
-      suggestion: readString(
-        record.suggestion,
-        `contentCoverage[${index}].suggestion`,
-      ),
+      item: safeString(record.item, `coverage-item-${index}`),
+      covered: (() => {
+        const raw = typeof record.covered === "string" ? record.covered.trim() : "";
+        if (coveredValues.has(raw)) return raw as "true" | "false" | "partial";
+        return "false";
+      })(),
+      evidence: safeString(record.evidence, DEFAULT_EVIDENCE),
+      suggestion: safeString(record.suggestion, DEFAULT_SUGGESTION),
     };
   });
 
-  const receivedItems = new Set(result.map((item) => item.item));
-  const missingItems = coverageItems.filter((item) => !receivedItems.has(item));
-
-  if (missingItems.length > 0) {
-    throw new Error(`contentCoverage 缺少覆盖项：${missingItems.join("、")}。`);
+  // 构建已有项的映射（item → 已有数据），优先匹配标准项名称
+  const existingMap = new Map<string, (typeof parsedItems)[number]>();
+  for (const parsed of parsedItems) {
+    // 尝试匹配标准项
+    const matched = coverageItems.find(
+      (std) => std === parsed.item || std.includes(parsed.item) || parsed.item.includes(std),
+    );
+    if (matched && !existingMap.has(matched)) {
+      existingMap.set(matched, parsed);
+    } else if (!existingMap.has(parsed.item)) {
+      existingMap.set(parsed.item, parsed);
+    }
   }
 
+  // 按标准项顺序构建最终结果，缺失项自动补齐
+  const result = coverageItems.map((standardItem) => {
+    const existing = existingMap.get(standardItem);
+    if (existing) {
+      return existing;
+    }
+    return {
+      item: standardItem,
+      covered: "INSUFFICIENT" as const,
+      evidence: DEFAULT_EVIDENCE,
+      suggestion: DEFAULT_SUGGESTION,
+    };
+  });
+
   return result;
+}
+
+function normalizeDimension(raw: string): QaReview["dimension"] {
+  const normalized = raw.trim().toUpperCase();
+  const dimensionMap: Record<string, QaReview["dimension"]> = {
+    TECHNICAL: "TECHNICAL",
+    TECH: "TECHNICAL",
+    技术: "TECHNICAL",
+    技术可行性: "TECHNICAL",
+    MARKET: "MARKET",
+    市场: "MARKET",
+    商业: "MARKET",
+    客户: "MARKET",
+    竞争: "MARKET",
+    RISK: "RISK",
+    风险: "RISK",
+    合规: "RISK",
+    知识产权: "RISK",
+    政策: "RISK",
+    FINANCE: "FINANCE",
+    财务: "FINANCE",
+    融资: "FINANCE",
+    收入: "FINANCE",
+    成本: "FINANCE",
+    TEAM: "TEAM",
+    团队: "TEAM",
+    成员: "TEAM",
+    分工: "TEAM",
+    OTHER: "OTHER",
+  };
+
+  return dimensionMap[normalized] ?? dimensionMap[raw] ?? "OTHER";
+}
+
+function normalizeResponseQuality(raw: string): QaReview["responseQuality"] {
+  const normalized = raw.trim().toUpperCase();
+  if (normalized === "GOOD") return "GOOD";
+  if (normalized === "PARTIAL") return "PARTIAL";
+  return "WEAK";
+}
+
+function safeString(value: unknown, fallback: string): string {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return fallback;
+}
+
+function safeStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  }
+  return [];
+}
+
+function validateQaReviews(value: unknown): QaReview[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  if (value.length === 0) {
+    return [];
+  }
+
+  return value
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((record, index): QaReview => {
+      const rawDimension =
+        typeof record.dimension === "string" ? record.dimension : "OTHER";
+      const rawQuality =
+        typeof record.responseQuality === "string"
+          ? record.responseQuality
+          : "WEAK";
+
+      return {
+        questionId: safeString(
+          record.questionId,
+          `auto-q${index + 1}`,
+        ),
+        questionIndex:
+          typeof record.questionIndex === "number"
+            ? record.questionIndex
+            : index,
+        dimension: normalizeDimension(rawDimension),
+        question: safeString(record.question, `问题 ${index + 1}`),
+        judgeIntent: safeString(
+          record.judgeIntent,
+          "评委意图暂未明确记录。",
+        ),
+        answerSummary: safeString(
+          record.answerSummary,
+          "回答摘要暂时无法提供。",
+        ),
+        responseQuality: normalizeResponseQuality(rawQuality),
+        responseQualityLabel: safeString(
+          record.responseQualityLabel,
+          normalizeResponseQuality(rawQuality) === "GOOD"
+            ? "回答良好"
+            : normalizeResponseQuality(rawQuality) === "PARTIAL"
+              ? "部分回答"
+              : "回答偏弱",
+        ),
+        missingPoints: safeStringArray(record.missingPoints),
+        evidenceUse: safeString(
+          record.evidenceUse,
+          "未能提供有效证据。",
+        ),
+        improvementAdvice: safeString(
+          record.improvementAdvice,
+          "建议围绕问题要点针对性作答。",
+        ),
+        betterAnswerOutline: safeStringArray(
+          record.betterAnswerOutline,
+        ),
+      };
+    });
 }
 
 export function validateTrainingAnalysisResult(
@@ -172,5 +320,6 @@ export function validateTrainingAnalysisResult(
       min: 3,
       max: 5,
     }),
+    qaReviews: validateQaReviews(analysis.qaReviews),
   };
 }

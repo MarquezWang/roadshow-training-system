@@ -84,6 +84,17 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
     redirect(`/training/${session.id}/report`);
   }
 
+  console.log("[qa:page] rendering QA page", {
+    sessionId,
+    status: session.status,
+    questionsCount: session.trainingQuestions.length,
+    questionsSample: session.trainingQuestions.slice(0, 3).map((q) => ({
+      id: q.id,
+      orderIndex: q.orderIndex,
+      questionText: q.questionText.slice(0, 50),
+    })),
+  });
+
   const [serverClock] = await prisma.$queryRaw<Array<{ nowSec: number }>>`
     SELECT CAST(strftime('%s', 'now') AS INTEGER) AS nowSec
   `;

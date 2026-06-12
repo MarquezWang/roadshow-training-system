@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { devLog } from "@/lib/dev-log";
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
   RenderTask,
 } from "pdfjs-dist";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
+import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
+import { PREFERRED_DEVICE_KEY } from "@/lib/use-audio-input";
 
 type TrainingQaQuestion = {
   id: string;
@@ -112,6 +115,19 @@ function getRecordingFileExtension(mimeType: string) {
   return "webm";
 }
 
+function getPreferredAudioConstraints(): MediaStreamConstraints {
+  if (typeof window === "undefined") return { audio: true };
+  try {
+    const deviceId = localStorage.getItem(PREFERRED_DEVICE_KEY);
+    if (deviceId) {
+      return { audio: { deviceId: { exact: deviceId } } };
+    }
+  } catch {
+    // localStorage 不可用
+  }
+  return { audio: true };
+}
+
 function estimateQuestionSpeechMs(text: string) {
   const chineseCharCount = Array.from(text.trim()).length;
 
@@ -131,36 +147,47 @@ function isEditableOrClickableTarget(target: EventTarget | null) {
 }
 
 function chooseJudgeVoice(voices: SpeechSynthesisVoice[]) {
-  // 按优先级排序的 zh-CN 中文男声候选
-  const maleVoicePriority = [
-    "microsoft xiaoyi online",
-    "microsoft xiaoyi",
-    "xiaoyi",
-    "microsoft yunjian online",
-    "microsoft yunxi online",
-    "microsoft yunyang online",
-    "microsoft kangkang",
-    "yunjian",
-    "yunxi",
-    "yunyang",
-    "kangkang",
-  ];
-  // 筛选中文语音
-  const zhVoices = voices.filter((voice) => {
-    const key = `${voice.lang} ${voice.name}`.toLowerCase();
-    return key.includes("zh-cn") || key.includes("zh") || key.includes("chinese");
-  });
-  // 在中文语音中按优先级匹配男声
-  const maleZhVoice =
-    maleVoicePriority
-      .flatMap((hint) =>
-        zhVoices.filter((voice) =>
-          `${voice.name} ${voice.lang}`.toLowerCase().includes(hint),
-        ),
-      )
-      .find(() => true) ?? null;
+  if (voices.length === 0) return null;
 
-  return maleZhVoice ?? zhVoices[0] ?? voices[0] ?? null;
+  // 精确匹配最优先
+  const exactMatch = voices.find(
+    (v) => v.name === "Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)",
+  );
+  if (exactMatch) return exactMatch;
+
+  // 降级 1：zh-CN 中文语音
+  const zhCNVoices = voices.filter((v) => v.lang === "zh-CN");
+  if (zhCNVoices.length > 0) {
+    // 在 zh-CN 中找包含 Xiaoyi 的
+    const xiaoyiZhCN = zhCNVoices.find(
+      (v) => v.name.toLowerCase().includes("xiaoyi"),
+    );
+    if (xiaoyiZhCN) return xiaoyiZhCN;
+
+    // 在 zh-CN 中找包含 Natural 的
+    const naturalZhCN = zhCNVoices.find(
+      (v) => v.name.toLowerCase().includes("natural"),
+    );
+    if (naturalZhCN) return naturalZhCN;
+
+    // 降级：zh-CN 第一个
+    return zhCNVoices[0];
+  }
+
+  // 降级 2：名称中包含 Xiaoyi（不限语言）
+  const xiaoyiAny = voices.find(
+    (v) => v.name.toLowerCase().includes("xiaoyi"),
+  );
+  if (xiaoyiAny) return xiaoyiAny;
+
+  // 降级 3：中文语音（lang 含 zh）
+  const zhVoice = voices.find(
+    (v) => v.lang.includes("zh") || v.lang.includes("chinese"),
+  );
+  if (zhVoice) return zhVoice;
+
+  // 降级 4：浏览器默认
+  return voices[0] ?? null;
 }
 
 export function TrainingQaClient({
@@ -196,6 +223,7 @@ export function TrainingQaClient({
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const autoGenerateRef = useRef(false);
+  const generateTimeoutRef = useRef<number | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [preAnswerOverlay, setPreAnswerOverlay] = useState<number | null>(null);
   const [isGuardResolved, setIsGuardResolved] = useState(false);
@@ -567,7 +595,7 @@ export function TrainingQaClient({
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia(getPreferredAudioConstraints());
       const recorder = new MediaRecorder(stream, { mimeType });
 
       recordingChunksRef.current = [];
@@ -656,6 +684,15 @@ export function TrainingQaClient({
 
       setQaRecordingStatus("saved");
       setQaRecordingMessage("本题录音已保存。");
+
+      // 后台触发转写，不阻塞 UI
+      void fetch(
+        `/training/${sessionId}/recordings/${body.recording.id}/transcribe`,
+        { method: "POST" },
+      ).catch(() => {
+        // 转写失败不影响答题流程
+      });
+
       return body.recording.id;
     } catch (error) {
       setQaRecordingStatus("disabled");
@@ -678,6 +715,8 @@ export function TrainingQaClient({
     answerElapsedBeforePhaseRef.current = currentUsedAnswerSec;
     setUsedAnswerSec(currentUsedAnswerSec);
     setQaPhase("ANSWERING");
+    // 确保评委语音已停止，避免被录进用户回答
+    window.speechSynthesis?.cancel();
     await startQuestionRecording();
   }, [startQuestionRecording, usedAnswerSec]);
 
@@ -792,6 +831,12 @@ const beginJudgeQuestion = useCallback(
         if (selectedVoice) {
           utterance.voice = selectedVoice;
           utterance.lang = selectedVoice.lang;
+          devLog(`[QA TTS] 选中语音：${selectedVoice.name} (${selectedVoice.lang})`);
+          try {
+            localStorage.setItem("qa-preferred-voice", selectedVoice.name);
+          } catch {
+            // localStorage 不可用
+          }
         }
         window.speechSynthesis.speak(utterance);
       })();
@@ -936,6 +981,7 @@ const beginJudgeQuestion = useCallback(
   }, []);
 
   const generateQuestions = useCallback(async () => {
+    devLog("[qa:client] manual retry generate", { sessionId });
     setIsGenerating(true);
     setGenerateError(null);
     setMessage("");
@@ -950,15 +996,40 @@ const beginJudgeQuestion = useCallback(
       const body = (await response.json().catch(() => null)) as {
         questions?: TrainingQaQuestion[];
         error?: string;
+        generating?: boolean;
+        lockAgeMs?: number;
+        message?: string;
       } | null;
 
+      devLog("[qa:client] manual retry POST response", {
+        sessionId,
+        status: response.status,
+        ok: response.ok,
+        questionsCount: body?.questions?.length ?? 0,
+        generating: body?.generating ?? false,
+        error: body?.error ?? null,
+      });
+
       if (!response.ok) {
+        // 409: 正在生成中（有锁），提示用户等待
+        if (response.status === 409 && body?.generating) {
+          setMessage(
+            body?.message ?? "评委问题准备中，请稍候……",
+          );
+          // 保持 isGenerating = true，让轮询 effect 继续等待
+          // 注意：不手动设置 isGenerating = false，让 effect 自然处理
+          return;
+        }
         throw new Error(body?.error ?? "答辩问题生成失败。");
       }
 
       setQuestions(body?.questions ?? []);
       setCurrentQuestionIndex(0);
       setMessage("答辩问题已生成。开始前不会展示完整题目。");
+      if (generateTimeoutRef.current !== null) {
+        window.clearTimeout(generateTimeoutRef.current);
+        generateTimeoutRef.current = null;
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "答辩问题生成失败。";
@@ -969,13 +1040,164 @@ const beginJudgeQuestion = useCallback(
     }
   }, [sessionId]);
 
+  // 自动生成 QA 问题：轮询 GET → POST 一次 → 等待 → 超时
   useEffect(() => {
-    if (!isGuardResolved || autoGenerateRef.current || isGenerating) return;
-    if (questions.length > 0) return;
+    if (!isGuardResolved) return;
+    if (questions.length > 0) {
+      devLog("[qa:client] questions already loaded, skipping auto-generate", {
+        count: questions.length,
+      });
+      return;
+    }
+    if (autoGenerateRef.current) return;
     autoGenerateRef.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time initial auto-generation
-    void generateQuestions();
-  }, [isGuardResolved, isGenerating, questions.length, generateQuestions]);
+
+    devLog("[qa:client] starting auto-generation", {
+      sessionId,
+      initialQuestionsCount: 0,
+    });
+
+    const startTime = Date.now();
+    const MAX_WAIT_MS = 60_000;
+    const POLL_INTERVAL_MS = 3_000;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let postAttempted = false;
+    let aborted = false;
+
+    setIsGenerating(true);
+
+    const stop = (errorMsg?: string) => {
+      aborted = true;
+      if (pollTimer !== null) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      if (errorMsg) {
+        setGenerateError(errorMsg);
+      }
+      setIsGenerating(false);
+    };
+
+    const poll = async () => {
+      if (aborted) return;
+      const elapsed = Date.now() - startTime;
+
+      // 硬超时 60 秒
+      if (elapsed >= MAX_WAIT_MS) {
+        devLog("[qa:client] generation timed out", {
+          sessionId,
+          elapsed: `${Math.round(elapsed / 1000)}s`,
+        });
+        stop("问题生成时间较长，可重试。");
+        return;
+      }
+
+      try {
+        // 步骤 1: GET 检查当前状态
+        const getRes = await fetch(
+          `/training/${sessionId}/qa/questions/generate`,
+        );
+        const getBody = (await getRes.json().catch(() => null)) as {
+          questions?: TrainingQaQuestion[];
+          isGenerating?: boolean;
+          error?: string;
+        } | null;
+
+        devLog("[qa:client] GET response", {
+          sessionId,
+          elapsed: `${Math.round((Date.now() - startTime) / 1000)}s`,
+          questionsCount: getBody?.questions?.length ?? 0,
+          isGenerating: getBody?.isGenerating ?? false,
+          error: getBody?.error ?? null,
+        });
+
+        // 已有问题 → 直接展示
+        if (getBody?.questions?.length) {
+          devLog("[qa:client] questions found, displaying", {
+            count: getBody.questions.length,
+          });
+          setQuestions(getBody.questions);
+          setCurrentQuestionIndex(0);
+          setMessage("答辩问题已生成。开始前不会展示完整题目。");
+          stop();
+          return;
+        }
+
+        // 正在生成 → 继续等待
+        if (getBody?.isGenerating) {
+          // 已达 30 秒提示用户
+          if (elapsed >= 30_000) {
+            setMessage("评委问题生成时间较长，请稍候……");
+          }
+          return;
+        }
+
+        // 步骤 2: 没有 questions 且不在生成中 → 首次尝试 POST
+        if (!postAttempted) {
+          postAttempted = true;
+
+          devLog("[qa:client] POST generating questions", { sessionId });
+          const postRes = await fetch(
+            `/training/${sessionId}/qa/questions/generate`,
+            { method: "POST" },
+          );
+          const postBody = (await postRes.json().catch(() => null)) as {
+            questions?: TrainingQaQuestion[];
+            error?: string;
+            generating?: boolean;
+            lockAgeMs?: number;
+            message?: string;
+          } | null;
+
+          devLog("[qa:client] POST response", {
+            sessionId,
+            status: postRes.status,
+            ok: postRes.ok,
+            questionsCount: postBody?.questions?.length ?? 0,
+            generating: postBody?.generating ?? false,
+            error: postBody?.error ?? null,
+          });
+
+          // POST 成功
+          if (postRes.ok && postBody?.questions?.length) {
+            setQuestions(postBody.questions);
+            setCurrentQuestionIndex(0);
+            setMessage("答辩问题已生成。开始前不会展示完整题目。");
+            stop();
+            return;
+          }
+
+          // POST 409: 正在生成中（锁存在），切换到轮询等待
+          if (postRes.status === 409) {
+            setMessage(
+              postBody?.message ?? "评委问题准备中，请稍候……",
+            );
+            return;
+          }
+
+          // POST 其他错误: 显示错误并停止
+          stop(postBody?.error ?? "问题生成失败，请重试。");
+          return;
+        }
+      } catch {
+        // 网络错误，继续轮询（可能是暂时的）
+        devLog("[qa:client] network error during poll, will retry", {
+          sessionId,
+        });
+      }
+    };
+
+    // 首次立即轮询
+    poll();
+    pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+
+    return () => {
+      aborted = true;
+      if (pollTimer !== null) {
+        clearInterval(pollTimer);
+      }
+    };
+  }, [isGuardResolved, questions.length, sessionId]);
 
   async function startQa() {
     if (questions.length === 0) {
@@ -1263,7 +1485,7 @@ const beginJudgeQuestion = useCallback(
                 disabled
                 className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
               >
-                AI评委思考中...
+                评委问题准备中...
               </button>
             ) : !isQaing && questions.length > 0 ? (
               <button
@@ -1285,7 +1507,8 @@ const beginJudgeQuestion = useCallback(
               </button>
             ) : null}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <MicrophoneStatusBar />
             <button
               type="button"
               onClick={() => changeMaterialPage("PREV")}
@@ -1372,10 +1595,10 @@ const beginJudgeQuestion = useCallback(
               {isGenerating ? (
                 <div className="rounded-md border border-slate-700 bg-slate-950/60 p-6 text-center">
                   <p className="text-base font-semibold text-white">
-                    AI评委思考中...
+                    评委问题准备中，请稍候……
                   </p>
                   <p className="mt-2 text-sm leading-6 text-slate-400">
-                    正在阅读项目材料、评分标准及可用路演记录
+                    正在阅读项目材料与评分标准，生成答辩问题
                   </p>
                 </div>
               ) : questions.length > 0 ? (
@@ -1388,7 +1611,7 @@ const beginJudgeQuestion = useCallback(
                   </p>
                 </div>
               ) : generateError ? (
-                <div className="rounded-md border border-red-700 bg-red-950/40 p-6 text-center">
+                <div className="rounded-md border border-red-700/50 bg-red-950/30 p-6 text-center">
                   <p className="text-base font-semibold text-red-200">
                     问题生成失败
                   </p>
@@ -1399,16 +1622,16 @@ const beginJudgeQuestion = useCallback(
                     type="button"
                     onClick={() => void generateQuestions()}
                     disabled={isGenerating}
-                    className="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-800 disabled:text-red-300"
+                    className="mt-4 inline-flex h-8 items-center justify-center rounded border border-red-700/50 bg-transparent px-3 text-xs font-medium text-red-300 transition-colors hover:bg-red-950/50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    重新生成问题
+                    重试生成问题
                   </button>
                 </div>
               ) : null}
 
               {isGenerating ? (
                 <p className="text-center text-sm text-slate-500">
-                  AI评委思考中，请稍候...
+                  评委问题准备中，请稍候...
                 </p>
               ) : null}
             </div>
