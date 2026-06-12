@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "crypto";
 import { existsSync } from "fs";
-import { readFile, unlink } from "fs/promises";
+import { readFile, unlink, mkdir, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { execFile } from "child_process";
@@ -14,6 +14,11 @@ const XFYUN_RESULT_URL = "https://raasr.xfyun.cn/v2/api/getResult";
 const MAX_POLL_COUNT = 60;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_DURATION_MS = 10 * 60 * 1_000;
+const STATUS4_EMPTY_RETRY_COUNT = 6;
+const STATUS4_EMPTY_RETRY_INTERVAL_MS = 5_000;
+
+const XFYUN_DEBUG_DIR = path.join(process.cwd(), "tmp", "xfyun-debug");
+const KEEP_TEMP_AUDIO = process.env.XFYUN_KEEP_TEMP_AUDIO === "true";
 
 const formatToExt: Record<string, string> = {
   "audio/webm": "webm",
@@ -25,6 +30,13 @@ const formatToExt: Record<string, string> = {
 
 const extNeedsConversion: Record<string, boolean> = {
   webm: true,
+};
+
+type AudioInfo = {
+  durationSeconds: number;
+  codec: string;
+  sampleRate: string;
+  channels: string;
 };
 
 function getXfyunConfig() {
@@ -78,7 +90,62 @@ async function needsConversion(
   return extNeedsConversion[ext] === true;
 }
 
-async function convertToWav(inputPath: string): Promise<string> {
+async function saveDebugJson(
+  debugDir: string,
+  filename: string,
+  rawJson: string,
+): Promise<void> {
+  try {
+    await mkdir(debugDir, { recursive: true });
+    await writeFile(path.join(debugDir, filename), rawJson, "utf-8");
+    console.log(`[xfyun debug] saved: ${filename}`);
+  } catch {
+    console.log(`[xfyun debug] 无法保存调试文件：${filename}`);
+  }
+}
+
+async function probeAudio(filePath: string): Promise<AudioInfo> {
+  const probe = await execFileAsync("ffprobe", [
+    "-v",
+    "quiet",
+    "-print_format",
+    "json",
+    "-show_format",
+    "-show_streams",
+    filePath,
+  ]);
+
+  const info = JSON.parse(probe.stdout) as {
+    format?: { duration?: string };
+    streams?: Array<{
+      codec_type?: string;
+      codec_name?: string;
+      sample_rate?: string;
+      channels?: number;
+    }>;
+  };
+
+  const audioStream = info.streams?.find(
+    (s) => s.codec_type === "audio",
+  );
+
+  const audioInfo: AudioInfo = {
+    durationSeconds: Number(info.format?.duration ?? "0"),
+    codec: audioStream?.codec_name ?? "unknown",
+    sampleRate: audioStream?.sample_rate ?? "unknown",
+    channels: String(audioStream?.channels ?? "unknown"),
+  };
+
+  console.log(
+    `[xfyun probe] duration=${audioInfo.durationSeconds}s codec=${audioInfo.codec} sampleRate=${audioInfo.sampleRate} channels=${audioInfo.channels}`,
+  );
+
+  return audioInfo;
+}
+
+async function convertToWav(
+  inputPath: string,
+): Promise<{ outputPath: string; audioInfo: AudioInfo }> {
   const outputPath = path.join(
     tmpdir(),
     `xfyun-convert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`,
@@ -95,6 +162,8 @@ async function convertToWav(inputPath: string): Promise<string> {
       "16000",
       "-ac",
       "1",
+      "-sample_fmt",
+      "s16",
       outputPath,
     ]);
   } catch (error) {
@@ -117,42 +186,61 @@ async function convertToWav(inputPath: string): Promise<string> {
     throw new Error("音频转码失败：ffmpeg 未生成输出文件。");
   }
 
-  return outputPath;
+  const stat = await readFile(outputPath).then((buf) => buf.length);
+  console.log(
+    `[xfyun convert] outputPath=${outputPath} fileSize=${stat} bytes`,
+  );
+
+  const audioInfo = await probeAudio(outputPath);
+
+  return { outputPath, audioInfo };
 }
 
 async function uploadAudio(
   filePath: string,
   config: ReturnType<typeof getXfyunConfig>,
-): Promise<string> {
+  audioInfo: AudioInfo,
+  debugDir: string,
+): Promise<{ orderId: string; uploadFileName: string; uploadFileSize: number; uploadDurationMs: number; debugDir: string }> {
   const ts = Math.floor(Date.now() / 1000).toString();
   const signa = generateSigna(config.appId, ts, config.secretKey);
   const fileName = path.basename(filePath);
-  const stat = await readFile(filePath).then(
-    (buf) => buf.length,
-    () => {
-      throw new Error(`无法读取音频文件：${filePath}`);
-    },
-  );
+  const fileBuffer = await readFile(filePath);
+  const fileSize = fileBuffer.length;
+  const durationMs = Math.round(audioInfo.durationSeconds * 1000);
 
   const params = new URLSearchParams();
   params.set("appId", config.appId);
   params.set("signa", signa);
   params.set("ts", ts);
-  params.set("fileName", encodeURIComponent(fileName));
-  params.set("fileSize", stat.toString());
-  params.set("duration", "200");
+  params.set("fileName", fileName);
+  params.set("fileSize", fileSize.toString());
+  params.set("duration", durationMs.toString());
   params.set("language", config.language);
+  params.set("audioMode", "fileStream");
+
+  // 标准 wav（16k 16bit 单声道）时传 standardWav=1
+  const isStandardWav =
+    audioInfo.codec === "pcm_s16le" &&
+    audioInfo.sampleRate === "16000" &&
+    (audioInfo.channels === "1" || audioInfo.channels === "unknown");
+
+  if (isStandardWav) {
+    params.set("standardWav", "1");
+  }
 
   const url = `${XFYUN_UPLOAD_URL}?${params.toString()}`;
-  const fileBuffer = await readFile(filePath);
+
+  console.log(
+    `[xfyun upload] uploadFileName=${fileName} uploadFileSize=${fileSize} uploadDurationMs=${durationMs} ffprobeDurationSeconds=${audioInfo.durationSeconds} sampleRate=${audioInfo.sampleRate} channels=${audioInfo.channels} codec=${audioInfo.codec} standardWav=${isStandardWav ? "1" : "not set"} language=${config.language} audioMode=fileStream`,
+  );
 
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/octet-stream",
-      "Content-Length": fileBuffer.length.toString(),
     },
-    body: fileBuffer,
+    body: new Uint8Array(fileBuffer),
   });
 
   const body = (await response.json()) as {
@@ -164,6 +252,10 @@ async function uploadAudio(
     };
   };
 
+  // 保存 debug 文件
+  const uploadResponseJson = JSON.stringify(body, null, 2);
+  await saveDebugJson(debugDir, "upload-response.json", uploadResponseJson);
+
   if (!response.ok || body.code !== "000000") {
     throw new Error(
       `讯飞上传失败：${body.descInfo ?? `HTTP ${response.status}`}`,
@@ -174,73 +266,358 @@ async function uploadAudio(
     throw new Error("讯飞上传失败：未返回订单 ID。");
   }
 
-  return body.content.orderId;
+  return {
+    orderId: body.content.orderId,
+    uploadFileName: fileName,
+    uploadFileSize: fileSize,
+    uploadDurationMs: durationMs,
+    debugDir,
+  };
+}
+
+// ---- getResult 响应结构 ----
+
+type XfyunResultBody = {
+  code: string;
+  descInfo: string;
+  content?: {
+    taskEstimateTime?: number;
+    transResult?: unknown;
+    predictResult?: unknown;
+    orderResult?: unknown;
+    orderInfo?: {
+      orderId: string;
+      failType: number;
+      status: number;
+      originalDuration?: number;
+      realDuration?: number;
+    };
+  };
+};
+
+// ---- getResult 变体定义 ----
+
+type ResultVariant = {
+  name: string;
+  method: "GET" | "POST";
+  resultType: string | null; // null 表示不传 resultType
+};
+
+const RESULT_VARIANTS: ResultVariant[] = [
+  { name: "GET_DEFAULT", method: "GET", resultType: null },
+  { name: "GET_TRANSFER", method: "GET", resultType: "transfer" },
+  { name: "POST_FORM_DEFAULT", method: "POST", resultType: null },
+  {
+    name: "POST_FORM_TRANSFER",
+    method: "POST",
+    resultType: "transfer",
+  },
+];
+
+// ---- getResultOnce ----
+
+async function getResultOnce(
+  orderId: string,
+  variant: ResultVariant,
+  config: ReturnType<typeof getXfyunConfig>,
+  debugDir: string,
+): Promise<{ body: XfyunResultBody; variantName: string }> {
+  const ts = Math.floor(Date.now() / 1000).toString();
+  const signa = generateSigna(config.appId, ts, config.secretKey);
+
+  const params = new URLSearchParams();
+  params.set("appId", config.appId);
+  params.set("signa", signa);
+  params.set("ts", ts);
+  params.set("orderId", orderId);
+  if (variant.resultType) {
+    params.set("resultType", variant.resultType);
+  }
+
+  const url = `${XFYUN_RESULT_URL}?${params.toString()}`;
+  const init: RequestInit = { method: variant.method };
+
+  if (variant.method === "POST") {
+    init.body = new FormData();
+  }
+
+  const response = await fetch(url, init);
+  const rawText = await response.text();
+
+  let body: XfyunResultBody;
+  try {
+    body = JSON.parse(rawText);
+  } catch {
+    throw new Error(
+      `讯飞 getResult 返回非 JSON (${variant.name})。前 500 字符：${rawText.slice(0, 500)}`,
+    );
+  }
+
+  // 保存 debug 文件
+  const debugFilename = `get-result-${variant.name}.json`;
+  await saveDebugJson(debugDir, debugFilename, rawText);
+
+  // 打印脱敏摘要
+  const orderInfo = body.content?.orderInfo;
+  const contentKeys = body.content ? Object.keys(body.content) : [];
+
+  const orderResult = body.content?.orderResult;
+  const orderResultType = typeof orderResult;
+  const orderResultLen =
+    orderResultType === "string"
+      ? (orderResult as string).length
+      : 0;
+
+  const transResultType = typeof body.content?.transResult;
+  const transResultLen =
+    transResultType === "string"
+      ? (body.content!.transResult as string).length
+      : 0;
+
+  const predictResultType = typeof body.content?.predictResult;
+  const predictResultLen =
+    predictResultType === "string"
+      ? (body.content!.predictResult as string).length
+      : 0;
+
+  console.log(
+    `[xfyun getResult] variant=${variant.name} method=${variant.method}` +
+      ` hasResultType=${variant.resultType !== null}` +
+      ` resultType=${variant.resultType ?? "(none)"}` +
+      ` code=${body.code}` +
+      ` descInfo=${body.descInfo}` +
+      ` status=${orderInfo?.status ?? "?"}` +
+      ` failType=${orderInfo?.failType ?? "?"}` +
+      ` originalDuration=${orderInfo?.originalDuration ?? "?"}` +
+      ` realDuration=${orderInfo?.realDuration ?? "?"}` +
+      ` taskEstimateTime=${body.content?.taskEstimateTime ?? "?"}` +
+      ` contentKeys=[${contentKeys.join(",")}]` +
+      ` orderResultType=${orderResultType} orderResultLen=${orderResultLen}` +
+      ` transResultType=${transResultType} transResultLen=${transResultLen}` +
+      ` predictResultType=${predictResultType} predictResultLen=${predictResultLen}`,
+  );
+
+  return { body, variantName: variant.name };
+}
+
+function formatVariantSummary(result: {
+  body: XfyunResultBody;
+  variantName: string;
+}) {
+  const orderInfo = result.body.content?.orderInfo;
+
+  return (
+    `[${result.variantName}]` +
+    ` code=${result.body.code}` +
+    ` descInfo=${result.body.descInfo}` +
+    ` status=${orderInfo?.status ?? "?"}` +
+    ` failType=${orderInfo?.failType ?? "?"}` +
+    ` hasOrderResult=${result.body.content?.orderResult !== undefined && result.body.content?.orderResult !== null && result.body.content?.orderResult !== ""}` +
+    ` realDuration=${orderInfo?.realDuration ?? "?"}`
+  );
+}
+
+// ---- pollResult（含变体回退、status=4 空结果重试） ----
+
+function makeDebugInfo(
+  orderId: string,
+  body: XfyunResultBody,
+  debugDir: string,
+  debugAudioPath: string | null,
+) {
+  const contentKeys = body.content ? Object.keys(body.content) : [];
+  const orderResult = body.content?.orderResult;
+  const orderResultType = typeof orderResult;
+
+  let orderResultValue = "(none)";
+  if (orderResult !== undefined && orderResult !== null) {
+    if (orderResultType === "string") {
+      orderResultValue =
+        (orderResult as string).slice(0, 200) +
+        ((orderResult as string).length > 200 ? "..." : "");
+    } else {
+      orderResultValue = JSON.stringify(orderResult).slice(0, 200);
+    }
+  }
+
+  return {
+    orderId,
+    debugDir,
+    debugAudioPath,
+    contentKeys,
+    orderResultType,
+    orderResultValue,
+    taskEstimateTime: String(body.content?.taskEstimateTime ?? "?"),
+    descInfo: body.descInfo ?? "?",
+  };
 }
 
 async function pollResult(
   orderId: string,
   config: ReturnType<typeof getXfyunConfig>,
+  uploadInfo: {
+    uploadFileName: string;
+    uploadFileSize: number;
+    uploadDurationMs: number;
+    audioInfo: AudioInfo;
+  },
+  debugDir: string,
+  debugAudioPath: string | null,
 ): Promise<string> {
   const startTime = Date.now();
+  let status4EmptyCount = 0;
 
   for (let attempt = 0; attempt < MAX_POLL_COUNT; attempt++) {
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const signa = generateSigna(config.appId, ts, config.secretKey);
+    // 优先使用变体 A：GET / 不传 resultType
+    const primaryResult = await getResultOnce(
+      orderId,
+      RESULT_VARIANTS[0],
+      config,
+      debugDir,
+    );
 
-    const params = new URLSearchParams();
-    params.set("appId", config.appId);
-    params.set("signa", signa);
-    params.set("ts", ts);
-    params.set("orderId", orderId);
+    const primaryBody = primaryResult.body;
 
-    const url = `${XFYUN_RESULT_URL}?${params.toString()}`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
-    });
-
-    const body = (await response.json()) as {
-      code: string;
-      descInfo: string;
-      content?: {
-        orderInfo?: {
-          orderId: string;
-          failType: number;
-          status: number;
-          orderResult?: string;
-        };
-      };
-    };
-
-    if (!response.ok || body.code !== "000000") {
+    if (!primaryBody.code || primaryBody.code !== "000000") {
       throw new Error(
-        `讯飞查询结果失败：${body.descInfo ?? `HTTP ${response.status}`}`,
+        `讯飞查询结果失败：${primaryBody.descInfo ?? `code=${primaryBody.code}`}`,
       );
     }
 
-    const orderInfo = body.content?.orderInfo;
+    const orderInfo = primaryBody.content?.orderInfo;
 
     if (!orderInfo) {
       throw new Error("讯飞查询结果失败：未返回订单信息。");
     }
 
-    // status: 1=uploaded, 2=merged, 3=processing, 4=completed, 5=failed
-    if (orderInfo.status === 4) {
-      return extractTextFromResult(orderInfo.orderResult ?? "");
-    }
-
-    if (orderInfo.status === 5) {
+    // status=-1：失败
+    if (orderInfo.status === -1) {
       throw new Error(
-        `讯飞转写失败：订单 ${orderId} 处理失败 (failType=${orderInfo.failType})。`,
+        `讯飞转写失败：订单 ${orderId} 处理失败 (failType=${orderInfo.failType} descInfo=${primaryBody.descInfo ?? "无详情"})。`,
       );
     }
 
+    // status=0 或 3：继续轮询
+    if (orderInfo.status === 0 || orderInfo.status === 3) {
+      console.log(
+        `[xfyun poll #${attempt + 1}] 订单处理中 (status=${orderInfo.status})，等待 ${POLL_INTERVAL_MS / 1000}s 后重试。`,
+      );
+
+      if (Date.now() - startTime > MAX_POLL_DURATION_MS) {
+        throw new Error(
+          buildUploadError(
+            "讯飞转写超时",
+            uploadInfo,
+            orderInfo,
+            undefined,
+            makeDebugInfo(orderId, primaryBody, debugDir, debugAudioPath),
+          ),
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      continue;
+    }
+
+    // status=4：订单完成，尝试各种变体获取 orderResult
+    if (orderInfo.status === 4) {
+      // 先用变体 A 的结果
+      const aHasResult =
+        primaryBody.content?.orderResult !== undefined &&
+        primaryBody.content?.orderResult !== null &&
+        primaryBody.content?.orderResult !== "";
+
+      if (aHasResult) {
+        return extractTextFromResult(
+          primaryBody.content!.orderResult,
+        );
+      }
+
+      // 变体 A 为空，尝试 B / C / D
+      const variantSummaries = [formatVariantSummary(primaryResult)];
+
+      let foundResult: string | null = null;
+
+      for (let vi = 1; vi < RESULT_VARIANTS.length; vi++) {
+        const fallback = await getResultOnce(
+          orderId,
+          RESULT_VARIANTS[vi],
+          config,
+          debugDir,
+        );
+
+        variantSummaries.push(formatVariantSummary(fallback));
+
+        const fContent = fallback.body.content;
+        const hasResult =
+          fContent?.orderResult !== undefined &&
+          fContent?.orderResult !== null &&
+          fContent?.orderResult !== "";
+
+        if (hasResult) {
+          console.log(
+            `[xfyun fallback] 变体 ${RESULT_VARIANTS[vi].name} 拿到 orderResult，解析中。`,
+          );
+
+          foundResult = extractTextFromResult(fContent!.orderResult);
+          break;
+        }
+      }
+
+      if (foundResult !== null) {
+        return foundResult;
+      }
+
+      // 所有变体都为空，检查是否超过重试次数
+      status4EmptyCount++;
+
+      if (status4EmptyCount > STATUS4_EMPTY_RETRY_COUNT) {
+        throw new Error(
+          buildUploadError(
+            `讯飞订单已完成但所有变体 orderResult 均为空（已重试 ${status4EmptyCount} 次）。`,
+            uploadInfo,
+            orderInfo,
+            variantSummaries,
+            makeDebugInfo(orderId, primaryBody, debugDir, debugAudioPath),
+          ),
+        );
+      }
+
+      console.log(
+        `[xfyun poll #${attempt + 1}] status=4 但 orderResult 为空（第 ${status4EmptyCount} 次），等待 ${STATUS4_EMPTY_RETRY_INTERVAL_MS / 1000}s 后重试。`,
+      );
+
+      if (Date.now() - startTime > MAX_POLL_DURATION_MS) {
+        throw new Error(
+          buildUploadError(
+            "讯飞转写超时（status=4 但 orderResult 始终为空）",
+            uploadInfo,
+            orderInfo,
+            variantSummaries,
+            makeDebugInfo(orderId, primaryBody, debugDir, debugAudioPath),
+          ),
+        );
+      }
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, STATUS4_EMPTY_RETRY_INTERVAL_MS),
+      );
+      continue;
+    }
+
+    console.log(
+      `[xfyun poll #${attempt + 1}] 未知状态 status=${orderInfo.status}，等待 ${POLL_INTERVAL_MS / 1000}s 后重试。`,
+    );
+
     if (Date.now() - startTime > MAX_POLL_DURATION_MS) {
       throw new Error(
-        `讯飞转写超时：订单 ${orderId} 在 ${MAX_POLL_DURATION_MS / 1000} 秒内未返回结果。`,
+        buildUploadError(
+          "讯飞转写超时",
+          uploadInfo,
+          orderInfo,
+          undefined,
+          makeDebugInfo(orderId, primaryBody, debugDir, debugAudioPath),
+        ),
       );
     }
 
@@ -252,30 +629,123 @@ async function pollResult(
   );
 }
 
-function extractTextFromResult(orderResult: string): string {
-  try {
-    const parsed = JSON.parse(orderResult) as {
-      lattice?: Array<{
-        json_1best?: string;
-      }>;
-    };
+function buildUploadError(
+  prefix: string,
+  uploadInfo: {
+    uploadFileName: string;
+    uploadFileSize: number;
+    uploadDurationMs: number;
+    audioInfo: AudioInfo;
+  },
+  orderInfo: {
+    failType: number;
+    status: number;
+    originalDuration?: number;
+    realDuration?: number;
+  },
+  variantSummaries?: string[],
+  debugInfo?: {
+    orderId: string;
+    debugDir: string;
+    debugAudioPath: string | null;
+    contentKeys: string[];
+    orderResultType: string;
+    orderResultValue: string;
+    taskEstimateTime: string;
+    descInfo: string;
+  },
+): string {
+  const parts = [
+    prefix,
+    `uploadFileName=${uploadInfo.uploadFileName}`,
+    `uploadFileSize=${uploadInfo.uploadFileSize}`,
+    `uploadDurationMs=${uploadInfo.uploadDurationMs}`,
+    `ffprobeDurationSeconds=${uploadInfo.audioInfo.durationSeconds}`,
+    `sampleRate=${uploadInfo.audioInfo.sampleRate}`,
+    `channels=${uploadInfo.audioInfo.channels}`,
+    `codec=${uploadInfo.audioInfo.codec}`,
+    `originalDuration=${orderInfo.originalDuration ?? "?"}`,
+    `realDuration=${orderInfo.realDuration ?? "?"}`,
+    `status=${orderInfo.status}`,
+    `failType=${orderInfo.failType}`,
+  ];
 
+  if (debugInfo) {
+    parts.push(
+      `orderId=${debugInfo.orderId}`,
+      `debugDir=${debugInfo.debugDir}`,
+      `debugAudioPath=${debugInfo.debugAudioPath ?? "(none)"}`,
+      `contentKeys=[${debugInfo.contentKeys.join(",")}]`,
+      `orderResultType=${debugInfo.orderResultType}`,
+      `orderResultValue=${debugInfo.orderResultValue}`,
+      `taskEstimateTime=${debugInfo.taskEstimateTime}`,
+      `descInfo=${debugInfo.descInfo}`,
+    );
+  }
+
+  if (variantSummaries && variantSummaries.length > 0) {
+    parts.push(`variantSummaries: ${variantSummaries.join(" | ")}`);
+  }
+
+  return parts.join("。");
+}
+
+function extractTextFromResult(orderResult: unknown): string {
+  if (orderResult === undefined || orderResult === null || orderResult === "") {
+    throw new Error("讯飞订单已完成，但 orderResult 为空。");
+  }
+
+  let resultObj: {
+    lattice?: Array<{
+      json_1best?: unknown;
+    }>;
+    lattice2?: Array<{
+      json_1best?: unknown;
+    }>;
+  };
+
+  try {
+    if (typeof orderResult === "string") {
+      resultObj = JSON.parse(orderResult);
+    } else if (typeof orderResult === "object") {
+      resultObj = orderResult as typeof resultObj;
+    } else {
+      throw new Error("orderResult 不是有效的字符串或对象");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message !== "orderResult 不是有效的字符串或对象") {
+      throw new Error(`解析 orderResult JSON 失败：${error.message}`);
+    }
+
+    throw error;
+  }
+
+  try {
+    // 优先 lattice2，回退到 lattice
+    const lattice = resultObj.lattice2 ?? resultObj.lattice;
     const sentences: string[] = [];
 
-    if (parsed.lattice) {
-      for (const seg of parsed.lattice) {
+    if (lattice) {
+      for (const seg of lattice) {
         if (seg.json_1best) {
-          const best = JSON.parse(seg.json_1best) as {
+          let best: {
             st?: {
               rt?: Array<{
                 ws?: Array<{
                   cw?: Array<{
                     w?: string;
+                    wp?: string;
                   }>;
                 }>;
               }>;
             };
           };
+
+          if (typeof seg.json_1best === "string") {
+            best = JSON.parse(seg.json_1best);
+          } else {
+            best = seg.json_1best as typeof best;
+          }
 
           if (best.st?.rt) {
             for (const rtItem of best.st.rt) {
@@ -283,6 +753,8 @@ function extractTextFromResult(orderResult: string): string {
                 for (const wsItem of rtItem.ws) {
                   if (wsItem.cw) {
                     for (const cwItem of wsItem.cw) {
+                      // 跳过 wp="g" 的分段标记
+                      if (cwItem.wp === "g") continue;
                       if (cwItem.w) {
                         sentences.push(cwItem.w);
                       }
@@ -327,19 +799,81 @@ export async function transcribeWithXfyun(
 
   let audioPath = absolutePath;
   let tempConvertedPath: string | null = null;
+  let debugAudioPath: string | null = null;
 
   try {
+    let audioInfo: AudioInfo;
+
     if (await needsConversion(absolutePath, mimeType)) {
-      tempConvertedPath = await convertToWav(absolutePath);
-      audioPath = tempConvertedPath;
+      const converted = await convertToWav(absolutePath);
+      tempConvertedPath = converted.outputPath;
+      audioPath = converted.outputPath;
+      audioInfo = converted.audioInfo;
+
+      if (KEEP_TEMP_AUDIO) {
+        debugAudioPath = converted.outputPath;
+        console.log(`[xfyun debug] 保留转码 wav: ${debugAudioPath}`);
+      }
+    } else {
+      audioInfo = await probeAudio(absolutePath);
+      if (KEEP_TEMP_AUDIO) {
+        debugAudioPath = absolutePath;
+        console.log(`[xfyun debug] 原始音频路径: ${debugAudioPath}`);
+      }
     }
 
-    const orderId = await uploadAudio(audioPath, config);
-    const text = await pollResult(orderId, config);
+    const uploadResult = await uploadAudio(audioPath, config, audioInfo, XFYUN_DEBUG_DIR);
+
+    const text = await pollResult(
+      uploadResult.orderId,
+      config,
+      {
+        uploadFileName: uploadResult.uploadFileName,
+        uploadFileSize: uploadResult.uploadFileSize,
+        uploadDurationMs: uploadResult.uploadDurationMs,
+        audioInfo,
+      },
+      uploadResult.debugDir,
+      debugAudioPath,
+    );
+
+    // 保存 debug-summary.json（成功路径）
+    const summary = {
+      orderId: uploadResult.orderId,
+      uploadFileName: uploadResult.uploadFileName,
+      uploadFileSize: uploadResult.uploadFileSize,
+      uploadDurationMs: uploadResult.uploadDurationMs,
+      ffprobeDurationSeconds: audioInfo.durationSeconds,
+      sampleRate: audioInfo.sampleRate,
+      channels: audioInfo.channels,
+      codec: audioInfo.codec,
+      debugAudioPath,
+      status: "completed",
+    };
+    await saveDebugJson(
+      XFYUN_DEBUG_DIR,
+      "debug-summary.json",
+      JSON.stringify(summary, null, 2),
+    );
 
     return text;
+  } catch (error) {
+    // 失败路径也保存 debug-summary
+    const summary = {
+      orderId: "unknown",
+      debugAudioPath,
+      status: "failed",
+      error: error instanceof Error ? error.message : "未知错误",
+    };
+    await saveDebugJson(
+      XFYUN_DEBUG_DIR,
+      "debug-summary.json",
+      JSON.stringify(summary, null, 2),
+    ).catch(() => {});
+
+    throw error;
   } finally {
-    if (tempConvertedPath) {
+    if (tempConvertedPath && !KEEP_TEMP_AUDIO) {
       try {
         await unlink(tempConvertedPath);
       } catch {

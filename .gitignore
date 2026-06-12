@@ -48,6 +48,9 @@ next-env.d.ts
 /uploads/**
 !/uploads/.gitkeep
 !/uploads/projects/
+
+# xfyun debug
+tmp/xfyun-debug/
 !/uploads/projects/.gitkeep
 
 # raw knowledge data

@@ -134,6 +134,7 @@ export async function POST(
         recordingId,
       },
       data: {
+        status: "FAILED",
         errorMessage,
       },
       select: {
