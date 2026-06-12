@@ -9,6 +9,7 @@ import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
 import { validateGeneratedTrainingQuestions } from "@/lib/training-qa-validator";
+import { devLog, devWarn, devError } from "@/lib/dev-log";
 
 type GenerateTrainingQuestionsContext = Readonly<{
   params: Promise<{
@@ -201,7 +202,7 @@ export async function GET(
     });
 
     if (!session) {
-      console.log("[qa:generate:GET] session not found", { sessionId });
+      devLog("[qa:generate:GET] session not found", { sessionId });
       return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
     }
 
@@ -210,7 +211,7 @@ export async function GET(
     const lockAgeMs = getLockAgeMs(sessionId);
     const lockStale = isLockStale(sessionId);
 
-    console.log("[qa:generate:GET]", {
+    devLog("[qa:generate:GET]", {
       sessionId,
       questionsCount: existingQuestions.length,
       isGenerating,
@@ -220,7 +221,7 @@ export async function GET(
 
     // 如果锁已过期，清理它
     if (lockStale) {
-      console.log("[qa:generate:GET] cleaning stale lock", {
+      devLog("[qa:generate:GET] cleaning stale lock", {
         sessionId,
         lockAgeMs,
       });
@@ -232,7 +233,7 @@ export async function GET(
       isGenerating: isGenerating && !lockStale,
     });
   } catch (error) {
-    console.error("[qa:generate:GET] error", { sessionId, error });
+    devError("[qa:generate:GET] error", { sessionId, error });
     return NextResponse.json(
       { error: "获取答辩问题失败。" },
       { status: 500 },
@@ -259,12 +260,12 @@ export async function POST(
     });
 
     if (!session) {
-      console.log("[qa:generate:POST] session not found", { sessionId });
+      devLog("[qa:generate:POST] session not found", { sessionId });
       return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
     }
 
     if (!allowedStatuses.has(session.status)) {
-      console.log("[qa:generate:POST] invalid status", {
+      devLog("[qa:generate:POST] invalid status", {
         sessionId,
         status: session.status,
       });
@@ -277,7 +278,7 @@ export async function POST(
     const existingQuestions = await getExistingQuestions(session.id);
 
     if (existingQuestions.length > 0) {
-      console.log("[qa:generate:POST] questions already exist", {
+      devLog("[qa:generate:POST] questions already exist", {
         sessionId,
         count: existingQuestions.length,
       });
@@ -289,7 +290,7 @@ export async function POST(
     const lockExists = generationLocks.has(session.id);
     const lockStale = isLockStale(session.id);
 
-    console.log("[qa:generate:POST] lock check", {
+    devLog("[qa:generate:POST] lock check", {
       sessionId,
       lockExists,
       lockAgeMs,
@@ -299,13 +300,13 @@ export async function POST(
     if (lockExists) {
       if (lockStale) {
         // Stale lock，清理并重新生成
-        console.log("[qa:generate:POST] cleaning stale lock, regenerating", {
+        devLog("[qa:generate:POST] cleaning stale lock, regenerating", {
           sessionId,
           lockAgeMs,
         });
         generationLocks.delete(session.id);
       } else {
-        console.log("[qa:generate:POST] generation in progress, returning 409", {
+        devLog("[qa:generate:POST] generation in progress, returning 409", {
           sessionId,
           lockAgeMs,
         });
@@ -322,7 +323,7 @@ export async function POST(
     }
 
     // 设置生成锁
-    console.log("[qa:generate:POST] starting generation", { sessionId });
+    devLog("[qa:generate:POST] starting generation", { sessionId });
     generationLocks.set(session.id, { startedAt: Date.now() });
 
     try {
@@ -374,7 +375,7 @@ export async function POST(
           throw error;
         }
 
-        console.warn("[qa:generate:POST] JSON parse failed, retrying", {
+        devWarn("[qa:generate:POST] JSON parse failed, retrying", {
           sessionId,
           error: error.message,
         });
@@ -405,7 +406,7 @@ export async function POST(
 
       const savedQuestions = await getExistingQuestions(session.id);
 
-      console.log("[qa:generate:POST] generation succeeded", {
+      devLog("[qa:generate:POST] generation succeeded", {
         sessionId,
         count: savedQuestions.length,
       });
@@ -415,19 +416,19 @@ export async function POST(
       });
     } finally {
       const wasReleased = generationLocks.delete(session.id);
-      console.log("[qa:generate:POST] lock released", {
+      devLog("[qa:generate:POST] lock released", {
         sessionId,
         wasReleased,
       });
     }
   } catch (error) {
     generationLocks.delete(sessionId);
-    console.log("[qa:generate:POST] lock released in outer catch", {
+    devLog("[qa:generate:POST] lock released in outer catch", {
       sessionId,
     });
 
     if (error instanceof ProjectContextNotFoundError) {
-      console.error("[qa:generate:POST] project context not found", {
+      devError("[qa:generate:POST] project context not found", {
         sessionId,
         error: error.message,
       });
@@ -437,7 +438,7 @@ export async function POST(
     const message =
       error instanceof Error ? error.message : "答辩问题生成失败。";
 
-    console.error("[qa:generate:POST] generation failed", {
+    devError("[qa:generate:POST] generation failed", {
       sessionId,
       error: message,
     });

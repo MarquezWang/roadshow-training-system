@@ -18,7 +18,12 @@ const STATUS4_EMPTY_RETRY_COUNT = 6;
 const STATUS4_EMPTY_RETRY_INTERVAL_MS = 5_000;
 
 const XFYUN_DEBUG_DIR = path.join(process.cwd(), "tmp", "xfyun-debug");
+const XFYUN_DEBUG = process.env.XFYUN_DEBUG === "true";
 const KEEP_TEMP_AUDIO = process.env.XFYUN_KEEP_TEMP_AUDIO === "true";
+
+function debugLog(...args: unknown[]) {
+  if (XFYUN_DEBUG) debugLog(...args);
+}
 
 const formatToExt: Record<string, string> = {
   "audio/webm": "webm",
@@ -95,12 +100,13 @@ async function saveDebugJson(
   filename: string,
   rawJson: string,
 ): Promise<void> {
+  if (!XFYUN_DEBUG) return;
   try {
     await mkdir(debugDir, { recursive: true });
     await writeFile(path.join(debugDir, filename), rawJson, "utf-8");
-    console.log(`[xfyun debug] saved: ${filename}`);
+    debugLog(`[xfyun debug] saved: ${filename}`);
   } catch {
-    console.log(`[xfyun debug] 无法保存调试文件：${filename}`);
+    debugLog(`[xfyun debug] 无法保存调试文件：${filename}`);
   }
 }
 
@@ -136,7 +142,7 @@ async function probeAudio(filePath: string): Promise<AudioInfo> {
     channels: String(audioStream?.channels ?? "unknown"),
   };
 
-  console.log(
+  debugLog(
     `[xfyun probe] duration=${audioInfo.durationSeconds}s codec=${audioInfo.codec} sampleRate=${audioInfo.sampleRate} channels=${audioInfo.channels}`,
   );
 
@@ -187,7 +193,7 @@ async function convertToWav(
   }
 
   const stat = await readFile(outputPath).then((buf) => buf.length);
-  console.log(
+  debugLog(
     `[xfyun convert] outputPath=${outputPath} fileSize=${stat} bytes`,
   );
 
@@ -231,7 +237,7 @@ async function uploadAudio(
 
   const url = `${XFYUN_UPLOAD_URL}?${params.toString()}`;
 
-  console.log(
+  debugLog(
     `[xfyun upload] uploadFileName=${fileName} uploadFileSize=${fileSize} uploadDurationMs=${durationMs} ffprobeDurationSeconds=${audioInfo.durationSeconds} sampleRate=${audioInfo.sampleRate} channels=${audioInfo.channels} codec=${audioInfo.codec} standardWav=${isStandardWav ? "1" : "not set"} language=${config.language} audioMode=fileStream`,
   );
 
@@ -380,7 +386,7 @@ async function getResultOnce(
       ? (body.content!.predictResult as string).length
       : 0;
 
-  console.log(
+  debugLog(
     `[xfyun getResult] variant=${variant.name} method=${variant.method}` +
       ` hasResultType=${variant.resultType !== null}` +
       ` resultType=${variant.resultType ?? "(none)"}` +
@@ -499,7 +505,7 @@ async function pollResult(
 
     // status=0 或 3：继续轮询
     if (orderInfo.status === 0 || orderInfo.status === 3) {
-      console.log(
+      debugLog(
         `[xfyun poll #${attempt + 1}] 订单处理中 (status=${orderInfo.status})，等待 ${POLL_INTERVAL_MS / 1000}s 后重试。`,
       );
 
@@ -555,7 +561,7 @@ async function pollResult(
           fContent?.orderResult !== "";
 
         if (hasResult) {
-          console.log(
+          debugLog(
             `[xfyun fallback] 变体 ${RESULT_VARIANTS[vi].name} 拿到 orderResult，解析中。`,
           );
 
@@ -583,7 +589,7 @@ async function pollResult(
         );
       }
 
-      console.log(
+      debugLog(
         `[xfyun poll #${attempt + 1}] status=4 但 orderResult 为空（第 ${status4EmptyCount} 次），等待 ${STATUS4_EMPTY_RETRY_INTERVAL_MS / 1000}s 后重试。`,
       );
 
@@ -605,7 +611,7 @@ async function pollResult(
       continue;
     }
 
-    console.log(
+    debugLog(
       `[xfyun poll #${attempt + 1}] 未知状态 status=${orderInfo.status}，等待 ${POLL_INTERVAL_MS / 1000}s 后重试。`,
     );
 
@@ -812,13 +818,13 @@ export async function transcribeWithXfyun(
 
       if (KEEP_TEMP_AUDIO) {
         debugAudioPath = converted.outputPath;
-        console.log(`[xfyun debug] 保留转码 wav: ${debugAudioPath}`);
+        debugLog(`[xfyun debug] 保留转码 wav: ${debugAudioPath}`);
       }
     } else {
       audioInfo = await probeAudio(absolutePath);
       if (KEEP_TEMP_AUDIO) {
         debugAudioPath = absolutePath;
-        console.log(`[xfyun debug] 原始音频路径: ${debugAudioPath}`);
+        debugLog(`[xfyun debug] 原始音频路径: ${debugAudioPath}`);
       }
     }
 

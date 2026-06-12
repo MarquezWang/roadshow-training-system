@@ -8,6 +8,7 @@ import {
 import { AIJsonParseError, parseAIJson } from "@/lib/json-utils";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
+import { devLog, devError } from "@/lib/dev-log";
 import { prisma } from "@/lib/prisma";
 import {
   validateTrainingAnalysisResult,
@@ -203,7 +204,7 @@ async function parseAnalysisJsonWithRepair(rawText: string) {
       throw error;
     }
 
-    console.error("路演表现分析 JSON 解析失败，开始一次修复重试。", {
+    devError("路演表现分析 JSON 解析失败，开始一次修复重试。", {
       error: error.message,
       originalLength: error.originalLength,
       extractedLength: error.extractedLength,
@@ -447,7 +448,7 @@ export async function POST(
           return NextResponse.json({ analysis: serializeAnalysis(existingAnalysis) });
         }
         // Stale analysis: transcript 在 analysis 生成后完成，需重新生成
-        console.log("[analysis:POST] stale analysis detected, regenerating", {
+        devLog("[analysis:POST] stale analysis detected, regenerating", {
           sessionId,
           staleReason: staleCheck.reason,
           analysisUpdatedAt: existingAnalysis.updatedAt.toISOString(),
@@ -797,7 +798,7 @@ export async function POST(
       return NextResponse.json({ error: error.message }, { status: 404 });
     }
 
-    console.error("路演表现分析生成失败。", { error: message });
+    devError("路演表现分析生成失败。", { error: message });
 
     return NextResponse.json({ error: message }, { status: 500 });
   }
