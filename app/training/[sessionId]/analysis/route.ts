@@ -12,6 +12,7 @@ import { prisma } from "@/lib/prisma";
 import {
   validateTrainingAnalysisResult,
   type TrainingAnalysisResult,
+  type QaReview,
 } from "@/lib/training-analysis-validator";
 
 type TrainingAnalysisRouteContext = Readonly<{
@@ -38,6 +39,11 @@ function parseStoredJson<T>(value: string, fallback: T): T {
 }
 
 function serializeAnalysis(analysis: TrainingAnalysisRecord) {
+  const rawResult = parseStoredJson<Record<string, unknown>>(
+    analysis.rawResultJson,
+    {},
+  );
+
   return {
     id: analysis.id,
     sessionId: analysis.sessionId,
@@ -63,10 +69,10 @@ function serializeAnalysis(analysis: TrainingAnalysisRecord) {
       {},
     ),
     riskQuestions: parseStoredJson<string[]>(analysis.riskQuestionsJson, []),
-    rawResult: parseStoredJson<Record<string, unknown>>(
-      analysis.rawResultJson,
-      {},
-    ),
+    qaReviews: (Array.isArray(rawResult.qaReviews)
+      ? rawResult.qaReviews
+      : []) as QaReview[],
+    rawResult,
     errorMessage: analysis.errorMessage,
     createdAt: analysis.createdAt.toISOString(),
     updatedAt: analysis.updatedAt.toISOString(),
@@ -103,12 +109,14 @@ function buildAnalysisPrompt(
     session: unknown;
     slideEvents: unknown;
     transcript: unknown;
+    qaData: unknown;
   },
 ) {
   return renderPrompt(template, {
     session: input.session,
     slideEvents: input.slideEvents,
     transcript: input.transcript,
+    qaData: input.qaData,
     project: context.project,
     files: context.files.map((file) => ({
       id: file.id,
@@ -170,7 +178,8 @@ function buildRepairPrompt(rawText: string, error: AIJsonParseError) {
       '    "longStayRisk": "",',
       '    "suggestion": ""',
       "  },",
-      '  "riskQuestions": []',
+      '  "riskQuestions": [],',
+      '  "qaReviews": []',
       "}",
       "",
       "需要修复的原始返回：",
@@ -336,6 +345,35 @@ export async function POST(
             updatedAt: true,
           },
         },
+        trainingQuestions: {
+          orderBy: {
+            orderIndex: "asc",
+          },
+          select: {
+            id: true,
+            orderIndex: true,
+            questionText: true,
+            questionType: true,
+            answer: {
+              select: {
+                id: true,
+                durationSec: true,
+                answerText: true,
+                recording: {
+                  select: {
+                    id: true,
+                    transcript: {
+                      select: {
+                        text: true,
+                        status: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -390,6 +428,17 @@ export async function POST(
 
     processingAnalysisId = processingAnalysis.id;
 
+    const qaData = session.trainingQuestions.map((q) => ({
+      questionId: q.id,
+      orderIndex: q.orderIndex,
+      questionType: q.questionType,
+      questionText: q.questionText,
+      answerDurationSec: q.answer?.durationSec ?? null,
+      answerText: q.answer?.answerText ?? null,
+      transcribeText: q.answer?.recording?.transcript?.text ?? null,
+      transcribeStatus: q.answer?.recording?.transcript?.status ?? null,
+    }));
+
     const [contextResult, template] = await Promise.all([
       buildProjectAIContext(session.projectId),
       loadPromptTemplate("pitch-performance-analysis"),
@@ -417,6 +466,7 @@ export async function POST(
         completedAt: transcript.completedAt?.toISOString() ?? null,
         text: transcript.text,
       },
+      qaData,
     });
     const aiResult = await callAI({
       systemPrompt:

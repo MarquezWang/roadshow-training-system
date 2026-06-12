@@ -11,6 +11,30 @@ const coverageItems = [
 ] as const;
 
 const coveredValues = new Set(["true", "false", "partial"]);
+const qaResponseQualityValues = new Set(["GOOD", "PARTIAL", "WEAK"]);
+const qaDimensionValues = new Set([
+  "TECHNICAL",
+  "MARKET",
+  "RISK",
+  "FINANCE",
+  "TEAM",
+  "OTHER",
+]);
+
+export type QaReview = {
+  questionId: string;
+  questionIndex: number;
+  dimension: "TECHNICAL" | "MARKET" | "RISK" | "FINANCE" | "TEAM" | "OTHER";
+  question: string;
+  judgeIntent: string;
+  answerSummary: string;
+  responseQuality: "GOOD" | "PARTIAL" | "WEAK";
+  responseQualityLabel: string;
+  missingPoints: string[];
+  evidenceUse: string;
+  improvementAdvice: string;
+  betterAnswerOutline: string[];
+};
 
 export type TrainingAnalysisResult = {
   overallScore: number;
@@ -42,6 +66,7 @@ export type TrainingAnalysisResult = {
     suggestion?: string;
   };
   riskQuestions: string[];
+  qaReviews?: QaReview[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -138,6 +163,86 @@ function validateCoverage(value: unknown) {
   return result;
 }
 
+function validateQaReviews(value: unknown): QaReview[] | undefined {
+  // qaReviews 是可选字段，不存在时返回 undefined
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error("qaReviews 必须是数组。");
+  }
+
+  if (value.length === 0) {
+    return [];
+  }
+
+  return value.map(
+    (item: unknown, index: number): QaReview => {
+      const record = readObject(item, `qaReviews[${index}]`);
+      const dimension = readString(record.dimension, `qaReviews[${index}].dimension`);
+
+      if (!qaDimensionValues.has(dimension)) {
+        throw new Error(
+          `qaReviews[${index}].dimension 必须是 TECHNICAL、MARKET、RISK、FINANCE、TEAM 或 OTHER。`,
+        );
+      }
+
+      const responseQuality = readString(
+        record.responseQuality,
+        `qaReviews[${index}].responseQuality`,
+      );
+
+      if (!qaResponseQualityValues.has(responseQuality)) {
+        throw new Error(
+          `qaReviews[${index}].responseQuality 必须是 GOOD、PARTIAL 或 WEAK。`,
+        );
+      }
+
+      return {
+        questionId: readString(
+          record.questionId ?? `q${index}`,
+          `qaReviews[${index}].questionId`,
+        ),
+        questionIndex: Number(record.questionIndex ?? index),
+        dimension: dimension as QaReview["dimension"],
+        question: readString(record.question, `qaReviews[${index}].question`),
+        judgeIntent: readString(
+          record.judgeIntent,
+          `qaReviews[${index}].judgeIntent`,
+        ),
+        answerSummary: readString(
+          record.answerSummary,
+          `qaReviews[${index}].answerSummary`,
+        ),
+        responseQuality: responseQuality as QaReview["responseQuality"],
+        responseQualityLabel: readString(
+          record.responseQualityLabel,
+          `qaReviews[${index}].responseQualityLabel`,
+        ),
+        missingPoints: readStringArray(
+          record.missingPoints,
+          `qaReviews[${index}].missingPoints`,
+          { max: 3 },
+        ),
+        evidenceUse: readString(
+          record.evidenceUse,
+          `qaReviews[${index}].evidenceUse`,
+        ),
+        improvementAdvice: readString(
+          record.improvementAdvice,
+          `qaReviews[${index}].improvementAdvice`,
+        ),
+        betterAnswerOutline: readStringArray(
+          record.betterAnswerOutline,
+          `qaReviews[${index}].betterAnswerOutline`,
+          { max: 3 },
+        ),
+      };
+    },
+  );
+}
+
 export function validateTrainingAnalysisResult(
   analysisJson: unknown,
 ): TrainingAnalysisResult {
@@ -172,5 +277,6 @@ export function validateTrainingAnalysisResult(
       min: 3,
       max: 5,
     }),
+    qaReviews: validateQaReviews(analysis.qaReviews),
   };
 }

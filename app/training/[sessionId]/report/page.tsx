@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { PageHeader } from "@/components/page-header";
 import { prisma } from "@/lib/prisma";
 import { TrainingReportClient } from "./training-report-client";
 
@@ -76,6 +75,7 @@ export default async function TrainingReportPage({
           timingJson: true,
           slideSyncJson: true,
           riskQuestionsJson: true,
+          rawResultJson: true,
         },
       },
       trainingQuestions: {
@@ -182,21 +182,26 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
 }
 
   const analysis = session.analyses[0]
-    ? {
-        id: session.analyses[0].id,
-        status: session.analyses[0].status,
-        overallScore: session.analyses[0].overallScore,
-        summary: session.analyses[0].summary,
-        errorMessage: session.analyses[0].errorMessage,
-        updatedAt: session.analyses[0].updatedAt.toISOString(),
-        strengths: parseJsonArray<string>(session.analyses[0].strengthsJson),
-        weaknesses: parseJsonArray<string>(session.analyses[0].weaknessesJson),
-        suggestions: parseJsonArray<string>(session.analyses[0].suggestionsJson),
-        contentCoverage: parseJsonArray<{ item: string; covered: string; evidence: string; suggestion: string }>(session.analyses[0].coverageJson),
-        timing: parseJsonObject(session.analyses[0].timingJson),
-        slideSync: parseJsonObject(session.analyses[0].slideSyncJson),
-        riskQuestions: parseJsonArray<string>(session.analyses[0].riskQuestionsJson),
-      }
+    ? (() => {
+        const rawResult = parseJsonObject(session.analyses[0].rawResultJson);
+
+        return {
+          id: session.analyses[0].id,
+          status: session.analyses[0].status,
+          overallScore: session.analyses[0].overallScore,
+          summary: session.analyses[0].summary,
+          errorMessage: session.analyses[0].errorMessage,
+          updatedAt: session.analyses[0].updatedAt.toISOString(),
+          strengths: parseJsonArray<string>(session.analyses[0].strengthsJson),
+          weaknesses: parseJsonArray<string>(session.analyses[0].weaknessesJson),
+          suggestions: parseJsonArray<string>(session.analyses[0].suggestionsJson),
+          contentCoverage: parseJsonArray<{ item: string; covered: string; evidence: string; suggestion: string }>(session.analyses[0].coverageJson),
+          timing: parseJsonObject(session.analyses[0].timingJson),
+          slideSync: parseJsonObject(session.analyses[0].slideSyncJson),
+          riskQuestions: parseJsonArray<string>(session.analyses[0].riskQuestionsJson),
+          qaReviews: Array.isArray(rawResult.qaReviews) ? rawResult.qaReviews : [],
+        };
+      })()
     : null;
   const qaQuestions = session.trainingQuestions.map((question) => ({
     id: question.id,
@@ -240,22 +245,23 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
   }));
 
   return (
-    <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
-      <PageHeader
-        title="训练报告"
-        description={`当前项目：${session.project.name}`}
-      />
-
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+    <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-4 sm:px-8 lg:px-10">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-900">训练报告</h1>
+          <p className="text-xs text-slate-400">
+            当前项目：{session.project.name}
+          </p>
+        </div>
         <Link
           href={`/projects/${session.project.id}`}
-          className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+          className="inline-flex h-7 items-center rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-700"
         >
           返回项目详情
         </Link>
       </div>
 
-      <div className="mt-6">
+      <div className="mt-4">
         <TrainingReportClient
           sessionId={session.id}
           sessionStatus={session.status}
