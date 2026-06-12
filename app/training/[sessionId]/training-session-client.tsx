@@ -504,6 +504,69 @@ export function TrainingSessionClient({
     return () => window.clearInterval(timer);
   }, [isGuardResolved, isPitching, pitchStartedAt]);
 
+  // pitch 页面挂载兜底：如果 questions 尚未预生成，fire-and-forget 触发一次
+  const qaFallbackTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (!isPitching) return;
+    if (!isGuardResolved) return;
+    if (qaFallbackTriggeredRef.current) return;
+    qaFallbackTriggeredRef.current = true;
+
+    console.log("[pitch:mounted] pre-generate QA fallback started", {
+      sessionId,
+    });
+
+    // 先 GET 检查是否已有 questions
+    fetch(`/training/${sessionId}/qa/questions/generate`)
+      .then(async (getRes) => {
+        const getBody = (await getRes.json().catch(() => null)) as {
+          questions?: Array<unknown>;
+          isGenerating?: boolean;
+        } | null;
+
+        // 已有 questions，无需预生成
+        if (getBody?.questions?.length) {
+          console.log("[pitch:mounted] QA questions already exist", {
+            sessionId,
+            count: getBody.questions.length,
+          });
+          return;
+        }
+
+        // 正在生成中，无需重复触发
+        if (getBody?.isGenerating) {
+          console.log("[pitch:mounted] QA generation already in progress", {
+            sessionId,
+          });
+          return;
+        }
+
+        // 触发 POST 生成
+        return fetch(`/training/${sessionId}/qa/questions/generate`, {
+          method: "POST",
+          keepalive: true,
+        });
+      })
+      .then(async (postRes) => {
+        if (!postRes) return; // 前面的 early return
+        const body = await postRes.json().catch(() => null);
+        console.log("[pitch:mounted] pre-generate QA fallback response", {
+          sessionId,
+          status: postRes.status,
+          ok: postRes.ok,
+          questionsCount: body?.questions?.length ?? 0,
+          generating: body?.generating ?? false,
+          error: body?.error ?? null,
+        });
+      })
+      .catch((err) => {
+        console.warn("[pitch:mounted] pre-generate QA fallback failed", {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }, [isPitching, isGuardResolved, sessionId]);
+
   useEffect(() => {
     if (!previewFile || !previewUrl) {
       return;
@@ -1451,6 +1514,33 @@ export function TrainingSessionClient({
         setRecordingMessage("当前浏览器不支持录音，本次仅记录路演操作。");
       }
 
+      // 后台预生成 QA 答辩问题，不阻塞路演
+      console.log("[startPitch] pre-generate QA started", {
+        sessionId,
+        url: `/training/${sessionId}/qa/questions/generate`,
+        timestamp: Date.now(),
+      });
+      fetch(`/training/${sessionId}/qa/questions/generate`, {
+        method: "POST",
+        keepalive: true,
+      })
+        .then(async (res) => {
+          const body = await res.json().catch(() => null);
+          console.log("[startPitch] pre-generate QA response", {
+            sessionId,
+            status: res.status,
+            ok: res.ok,
+            questionsCount: body?.questions?.length ?? 0,
+            error: body?.error ?? null,
+          });
+        })
+        .catch((err) => {
+          console.warn("[startPitch] pre-generate QA failed", {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "开始路演失败。");
     } finally {
@@ -1504,12 +1594,11 @@ export function TrainingSessionClient({
         const savedRecordingId = await stopRecordingAndUpload();
 
         if (savedRecordingId) {
-          console.log("[endPitch] triggering auto-transcribe", {
-            sessionId,
-            savedRecordingId,
+          // 后台异步转写，不阻塞跳转
+          triggerTranscribe(savedRecordingId).catch((err) => {
+            console.warn("[endPitch] auto-transcribe failed:", err);
           });
-          setRecordingMessage("录音已保存，正在自动转写路演内容…");
-          await triggerTranscribe(savedRecordingId);
+          setRecordingMessage("路演录音已保存，系统正在后台转写。");
         }
       }
 

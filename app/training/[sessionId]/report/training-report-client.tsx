@@ -237,9 +237,21 @@ export function TrainingReportClient({
   const [analysis, setAnalysis] = useState<TrainingAnalysis | null>(
     initialAnalysis,
   );
-  const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
-  const [analysisMessage, setAnalysisMessage] = useState("");
-  // QA 转写状态：key 为 recordingId，value 为 transcript 或 null
+  const [isAnalysisLoading, setIsAnalysisLoading] = useState(
+    initialAnalysis === null || initialAnalysis.status !== "COMPLETED",
+  );
+  const [analysisMessage, setAnalysisMessage] = useState(
+    initialAnalysis === null || initialAnalysis.status !== "COMPLETED"
+      ? "正在整理路演与答辩表现，请稍候……"
+      : "",
+  );
+
+  // 单一 status polling 控制
+  const statusPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isGeneratingAnalysisRef = useRef(false);
+  const statusInFlightRef = useRef(false);
+
+  // QA 转写状态：仅用于 QA Tab 展示，不参与轮询
   const [qaTranscripts, setQaTranscripts] = useState<
     Record<string, TrainingTranscript | null>
   >(
@@ -273,6 +285,115 @@ export function TrainingReportClient({
       el.scrollIntoView({ block: "start" });
     }
   }, [activeTab]);
+
+  // 单一 status polling：定期检查 report/status，驱动整个自动生成流程
+  useEffect(() => {
+    if (isAborted) return;
+
+    const pollStatus = async () => {
+      if (statusInFlightRef.current) return;
+      statusInFlightRef.current = true;
+      try {
+        const res = await fetch(
+          `/training/${sessionId}/report/status`,
+          { cache: "no-store" },
+        );
+        const status = (await res.json().catch(() => null)) as {
+          analysisStatus?: string;
+          analysisError?: string | null;
+          canGenerateAnalysis?: boolean;
+          hasStaleAnalysis?: boolean;
+          qaTranscriptPendingCount?: number;
+          qaTranscriptProcessingCount?: number;
+        } | null;
+
+        if (!status) return;
+
+        // 已完成且非 stale → 停止轮询，获取完整数据
+        if (
+          status.analysisStatus === "COMPLETED" &&
+          !status.hasStaleAnalysis
+        ) {
+          if (statusPollTimerRef.current) {
+            clearInterval(statusPollTimerRef.current);
+            statusPollTimerRef.current = null;
+          }
+          // 获取完整 analysis 数据
+          const analysisRes = await fetch(
+            `/training/${sessionId}/analysis`,
+          );
+          const analysisBody = (await analysisRes.json().catch(() => null)) as {
+            analysis?: TrainingAnalysis | null;
+          } | null;
+          if (analysisBody?.analysis) {
+            setAnalysis(analysisBody.analysis);
+            setIsAnalysisLoading(false);
+            setAnalysisMessage("");
+          }
+          return;
+        }
+
+        // 失败 → 停止轮询
+        if (status.analysisStatus === "FAILED") {
+          if (statusPollTimerRef.current) {
+            clearInterval(statusPollTimerRef.current);
+            statusPollTimerRef.current = null;
+          }
+          setIsAnalysisLoading(false);
+          setAnalysisMessage(status.analysisError ?? "分析生成失败。");
+          return;
+        }
+
+        // 判断是否需要触发生成
+        const needsGeneration =
+          status.analysisStatus === "NONE" ||
+          status.analysisStatus === "FAILED" ||
+          status.hasStaleAnalysis;
+
+        if (
+          (status.canGenerateAnalysis || status.hasStaleAnalysis) &&
+          needsGeneration &&
+          !isGeneratingAnalysisRef.current
+        ) {
+          isGeneratingAnalysisRef.current = true;
+          setAnalysisMessage("正在生成训练报告……");
+          await generateAnalysis();
+          isGeneratingAnalysisRef.current = false;
+        } else if (!status.canGenerateAnalysis && !status.hasStaleAnalysis) {
+          // 还不能生成，显示等待状态
+          const pendingTotal =
+            (status.qaTranscriptPendingCount ?? 0) +
+            (status.qaTranscriptProcessingCount ?? 0);
+          if (pendingTotal > 0) {
+            setAnalysisMessage(
+              `答辩回答转写中（${pendingTotal} 题待完成），等待转写完成后自动生成报告……`,
+            );
+          }
+        }
+      } catch {
+        // 忽略轮询网络错误
+      } finally {
+        statusInFlightRef.current = false;
+      }
+    };
+
+    // 立即轮询一次
+    void pollStatus();
+
+    // 启动定时轮询（4 秒间隔）
+    statusPollTimerRef.current = setInterval(() => {
+      void pollStatus();
+    }, 4000);
+
+    return () => {
+      if (statusPollTimerRef.current) {
+        clearInterval(statusPollTimerRef.current);
+        statusPollTimerRef.current = null;
+      }
+    };
+    // 只依赖 sessionId 和 isAborted，不依赖会变化的状态
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAborted, sessionId]);
 
   const toggleTranscriptExpand = useCallback((key: string) => {
     setExpandedTranscripts((prev) => {
@@ -358,11 +479,12 @@ export function TrainingReportClient({
   async function generateAnalysis() {
     if (isAborted) {
       setAnalysisMessage("本轮训练已中止，不能继续生成路演表现分析。");
+      setIsAnalysisLoading(false);
       return;
     }
 
     setIsAnalysisLoading(true);
-    setAnalysisMessage("");
+    setAnalysisMessage("正在生成训练报告……");
 
     try {
       const response = await fetch(`/training/${sessionId}/analysis`, {
@@ -374,6 +496,16 @@ export function TrainingReportClient({
       } | null;
 
       if (!response.ok) {
+        // 409: 转写还在进行中，不当作致命错误，返回让 polling 继续
+        if (response.status === 409) {
+          const errBody = body as {
+            pendingCount?: number;
+          } | null;
+          setAnalysisMessage(
+            `答辩回答转写中（${errBody?.pendingCount ?? "?"} 题待完成），等待转写完成后自动生成报告……`,
+          );
+          return;
+        }
         throw new Error(body?.error ?? "路演表现分析生成失败。");
       }
 
@@ -382,12 +514,18 @@ export function TrainingReportClient({
       }
 
       setAnalysis(body.analysis);
-      setAnalysisMessage("路演表现分析已生成。");
+      if (body.analysis.status === "COMPLETED") {
+        setAnalysisMessage("");
+        setIsAnalysisLoading(false);
+      } else if (body.analysis.status === "FAILED") {
+        setAnalysisMessage(body.analysis.errorMessage ?? "分析生成失败。");
+        setIsAnalysisLoading(false);
+      }
+      // PROCESSING 状态：保持 analysisLoading 和 analysisMessage，由 polling 接管
     } catch (error) {
       setAnalysisMessage(
         error instanceof Error ? error.message : "路演表现分析生成失败。",
       );
-    } finally {
       setIsAnalysisLoading(false);
     }
   }
@@ -412,7 +550,7 @@ export function TrainingReportClient({
       if (response.ok && body?.transcript) {
         setQaTranscripts((prev) => ({
           ...prev,
-          [recordingId]: body.transcript,
+          [recordingId]: body.transcript!,
         }));
       } else if (!response.ok && body?.error) {
         // 保留 FAILED 状态
@@ -422,12 +560,12 @@ export function TrainingReportClient({
             id: "",
             recordingId,
             sessionId,
-            status: "FAILED",
-            source: "ASR_PROVIDER",
-            language: "zh-CN",
+            status: "FAILED" as const,
+            source: "ASR_PROVIDER" as const,
+            language: "zh-CN" as const,
             text: "",
             segmentsJson: null,
-            errorMessage: body.error,
+            errorMessage: body.error ?? null,
             startedAt: null,
             completedAt: null,
             createdAt: new Date().toISOString(),
@@ -450,24 +588,26 @@ export function TrainingReportClient({
     <div className="grid gap-5">
       {/* === Tab 导航（sticky） === */}
       <nav className="sticky top-0 z-10 -mx-6 border-b border-slate-100 bg-white/95 px-6 backdrop-blur sm:-mx-8 sm:px-8 lg:-mx-10 lg:px-10">
-        {[
-          { key: "overview" as const, label: "总览" },
-          { key: "pitch" as const, label: "路演表现" },
-          { key: "qa" as const, label: "答辩表现" },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setActiveTab(tab.key)}
-            className={`relative -mb-px px-4 py-2.5 text-sm font-medium transition-colors ${
-              activeTab === tab.key
-                ? "border-b-2 border-slate-900 text-slate-900"
-                : "text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {analysis?.status === "COMPLETED"
+          ? [
+              { key: "overview" as const, label: "总览" },
+              { key: "pitch" as const, label: "路演表现" },
+              { key: "qa" as const, label: "答辩表现" },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`relative -mb-px px-4 py-2.5 text-sm font-medium transition-colors ${
+                  activeTab === tab.key
+                    ? "border-b-2 border-slate-900 text-slate-900"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))
+          : null}
       </nav>
 
       {/* === Tab 内容区 === */}
@@ -540,6 +680,37 @@ export function TrainingReportClient({
                 </p>
               </div>
             </section>
+          ) : isAnalysisLoading ? (
+            <section className="rounded-lg border border-slate-100 bg-white p-6">
+              <div className="py-8 text-center">
+                <div className="mb-4 flex items-center justify-center">
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-200 border-t-blue-500" />
+                </div>
+                <p className="text-sm font-medium text-slate-600">报告生成中</p>
+                <p className="mt-1 text-xs text-slate-400">
+                  {analysisMessage || "正在整理路演与答辩表现，请稍候……"}
+                </p>
+              </div>
+            </section>
+          ) : analysis?.status === "FAILED" ? (
+            <section className="rounded-lg border border-slate-100 bg-white p-6">
+              <div className="py-8 text-center">
+                <p className="text-sm font-medium text-red-600">报告生成失败</p>
+                <p className="mt-1 text-xs text-red-400">
+                  {analysis.errorMessage ?? "分析生成失败，请重试。"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void generateAnalysis();
+                  }}
+                  disabled={isAnalysisLoading}
+                  className="mt-4 inline-flex h-8 items-center justify-center rounded border border-red-200 bg-white px-3 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  重试生成报告
+                </button>
+              </div>
+            </section>
           ) : analysis ? (
             <section className="rounded-lg border border-slate-100 bg-white p-6">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -557,18 +728,10 @@ export function TrainingReportClient({
           ) : (
             <section className="rounded-lg border border-slate-100 bg-white p-6">
               <div className="py-8 text-center">
-                <p className="text-sm font-medium text-slate-600">尚未生成分析</p>
+                <p className="text-sm font-medium text-slate-600">报告生成中</p>
                 <p className="mt-1 text-xs text-slate-400">
-                  请先保存路演转写文本，再生成分析报告。
+                  {analysisMessage || "正在准备分析数据，请稍候……"}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void generateAnalysis()}
-                  disabled={isAborted || isAnalysisLoading}
-                  className="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-4 text-xs font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  {isAnalysisLoading ? "分析中..." : "生成报告"}
-                </button>
               </div>
             </section>
           )}
@@ -641,7 +804,7 @@ export function TrainingReportClient({
               </p>
             ) : !analysis ? (
               <p className="mt-4 rounded-md border border-dashed border-slate-200 p-4 text-sm text-slate-500">
-                暂无路演表现分析，请先在总览页点击&ldquo;生成报告&rdquo;。
+                正在等待报告生成，分析完成后将自动展示。
               </p>
             ) : analysis.status === "FAILED" ? (
               <div className="mt-4 rounded-md border border-red-100 bg-red-50/50 p-4">
@@ -1115,6 +1278,7 @@ export function TrainingReportClient({
                             hasText && ts
                               ? ts.text.slice(0, 150)
                               : "";
+                          const fullText = ts?.text ?? "";
 
                           return (
                             <div className="mt-3 space-y-2">
@@ -1147,7 +1311,7 @@ export function TrainingReportClient({
                                   {isExpanded ? (
                                     <>
                                       <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                                        {ts.text}
+                                        {fullText}
                                       </p>
                                       <button
                                         type="button"
@@ -1163,7 +1327,7 @@ export function TrainingReportClient({
                                     <>
                                       <p className="text-sm leading-6 text-slate-600">
                                         {textPreview}
-                                        {ts.text.length > 150 ? "..." : ""}
+                                        {fullText.length > 150 ? "..." : ""}
                                       </p>
                                       <button
                                         type="button"

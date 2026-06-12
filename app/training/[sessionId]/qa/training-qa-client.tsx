@@ -222,6 +222,7 @@ export function TrainingQaClient({
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const autoGenerateRef = useRef(false);
+  const generateTimeoutRef = useRef<number | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [preAnswerOverlay, setPreAnswerOverlay] = useState<number | null>(null);
   const [isGuardResolved, setIsGuardResolved] = useState(false);
@@ -979,6 +980,7 @@ const beginJudgeQuestion = useCallback(
   }, []);
 
   const generateQuestions = useCallback(async () => {
+    console.log("[qa:client] manual retry generate", { sessionId });
     setIsGenerating(true);
     setGenerateError(null);
     setMessage("");
@@ -993,15 +995,40 @@ const beginJudgeQuestion = useCallback(
       const body = (await response.json().catch(() => null)) as {
         questions?: TrainingQaQuestion[];
         error?: string;
+        generating?: boolean;
+        lockAgeMs?: number;
+        message?: string;
       } | null;
 
+      console.log("[qa:client] manual retry POST response", {
+        sessionId,
+        status: response.status,
+        ok: response.ok,
+        questionsCount: body?.questions?.length ?? 0,
+        generating: body?.generating ?? false,
+        error: body?.error ?? null,
+      });
+
       if (!response.ok) {
+        // 409: 正在生成中（有锁），提示用户等待
+        if (response.status === 409 && body?.generating) {
+          setMessage(
+            body?.message ?? "评委问题准备中，请稍候……",
+          );
+          // 保持 isGenerating = true，让轮询 effect 继续等待
+          // 注意：不手动设置 isGenerating = false，让 effect 自然处理
+          return;
+        }
         throw new Error(body?.error ?? "答辩问题生成失败。");
       }
 
       setQuestions(body?.questions ?? []);
       setCurrentQuestionIndex(0);
       setMessage("答辩问题已生成。开始前不会展示完整题目。");
+      if (generateTimeoutRef.current !== null) {
+        window.clearTimeout(generateTimeoutRef.current);
+        generateTimeoutRef.current = null;
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "答辩问题生成失败。";
@@ -1012,13 +1039,164 @@ const beginJudgeQuestion = useCallback(
     }
   }, [sessionId]);
 
+  // 自动生成 QA 问题：轮询 GET → POST 一次 → 等待 → 超时
   useEffect(() => {
-    if (!isGuardResolved || autoGenerateRef.current || isGenerating) return;
-    if (questions.length > 0) return;
+    if (!isGuardResolved) return;
+    if (questions.length > 0) {
+      console.log("[qa:client] questions already loaded, skipping auto-generate", {
+        count: questions.length,
+      });
+      return;
+    }
+    if (autoGenerateRef.current) return;
     autoGenerateRef.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time initial auto-generation
-    void generateQuestions();
-  }, [isGuardResolved, isGenerating, questions.length, generateQuestions]);
+
+    console.log("[qa:client] starting auto-generation", {
+      sessionId,
+      initialQuestionsCount: 0,
+    });
+
+    const startTime = Date.now();
+    const MAX_WAIT_MS = 60_000;
+    const POLL_INTERVAL_MS = 3_000;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let postAttempted = false;
+    let aborted = false;
+
+    setIsGenerating(true);
+
+    const stop = (errorMsg?: string) => {
+      aborted = true;
+      if (pollTimer !== null) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      if (errorMsg) {
+        setGenerateError(errorMsg);
+      }
+      setIsGenerating(false);
+    };
+
+    const poll = async () => {
+      if (aborted) return;
+      const elapsed = Date.now() - startTime;
+
+      // 硬超时 60 秒
+      if (elapsed >= MAX_WAIT_MS) {
+        console.log("[qa:client] generation timed out", {
+          sessionId,
+          elapsed: `${Math.round(elapsed / 1000)}s`,
+        });
+        stop("问题生成时间较长，可重试。");
+        return;
+      }
+
+      try {
+        // 步骤 1: GET 检查当前状态
+        const getRes = await fetch(
+          `/training/${sessionId}/qa/questions/generate`,
+        );
+        const getBody = (await getRes.json().catch(() => null)) as {
+          questions?: TrainingQaQuestion[];
+          isGenerating?: boolean;
+          error?: string;
+        } | null;
+
+        console.log("[qa:client] GET response", {
+          sessionId,
+          elapsed: `${Math.round((Date.now() - startTime) / 1000)}s`,
+          questionsCount: getBody?.questions?.length ?? 0,
+          isGenerating: getBody?.isGenerating ?? false,
+          error: getBody?.error ?? null,
+        });
+
+        // 已有问题 → 直接展示
+        if (getBody?.questions?.length) {
+          console.log("[qa:client] questions found, displaying", {
+            count: getBody.questions.length,
+          });
+          setQuestions(getBody.questions);
+          setCurrentQuestionIndex(0);
+          setMessage("答辩问题已生成。开始前不会展示完整题目。");
+          stop();
+          return;
+        }
+
+        // 正在生成 → 继续等待
+        if (getBody?.isGenerating) {
+          // 已达 30 秒提示用户
+          if (elapsed >= 30_000) {
+            setMessage("评委问题生成时间较长，请稍候……");
+          }
+          return;
+        }
+
+        // 步骤 2: 没有 questions 且不在生成中 → 首次尝试 POST
+        if (!postAttempted) {
+          postAttempted = true;
+
+          console.log("[qa:client] POST generating questions", { sessionId });
+          const postRes = await fetch(
+            `/training/${sessionId}/qa/questions/generate`,
+            { method: "POST" },
+          );
+          const postBody = (await postRes.json().catch(() => null)) as {
+            questions?: TrainingQaQuestion[];
+            error?: string;
+            generating?: boolean;
+            lockAgeMs?: number;
+            message?: string;
+          } | null;
+
+          console.log("[qa:client] POST response", {
+            sessionId,
+            status: postRes.status,
+            ok: postRes.ok,
+            questionsCount: postBody?.questions?.length ?? 0,
+            generating: postBody?.generating ?? false,
+            error: postBody?.error ?? null,
+          });
+
+          // POST 成功
+          if (postRes.ok && postBody?.questions?.length) {
+            setQuestions(postBody.questions);
+            setCurrentQuestionIndex(0);
+            setMessage("答辩问题已生成。开始前不会展示完整题目。");
+            stop();
+            return;
+          }
+
+          // POST 409: 正在生成中（锁存在），切换到轮询等待
+          if (postRes.status === 409) {
+            setMessage(
+              postBody?.message ?? "评委问题准备中，请稍候……",
+            );
+            return;
+          }
+
+          // POST 其他错误: 显示错误并停止
+          stop(postBody?.error ?? "问题生成失败，请重试。");
+          return;
+        }
+      } catch {
+        // 网络错误，继续轮询（可能是暂时的）
+        console.log("[qa:client] network error during poll, will retry", {
+          sessionId,
+        });
+      }
+    };
+
+    // 首次立即轮询
+    poll();
+    pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+
+    return () => {
+      aborted = true;
+      if (pollTimer !== null) {
+        clearInterval(pollTimer);
+      }
+    };
+  }, [isGuardResolved, questions.length, sessionId]);
 
   async function startQa() {
     if (questions.length === 0) {
@@ -1306,7 +1484,7 @@ const beginJudgeQuestion = useCallback(
                 disabled
                 className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
               >
-                AI评委思考中...
+                评委问题准备中...
               </button>
             ) : !isQaing && questions.length > 0 ? (
               <button
@@ -1416,10 +1594,10 @@ const beginJudgeQuestion = useCallback(
               {isGenerating ? (
                 <div className="rounded-md border border-slate-700 bg-slate-950/60 p-6 text-center">
                   <p className="text-base font-semibold text-white">
-                    AI评委思考中...
+                    评委问题准备中，请稍候……
                   </p>
                   <p className="mt-2 text-sm leading-6 text-slate-400">
-                    正在阅读项目材料、评分标准及可用路演记录
+                    正在阅读项目材料与评分标准，生成答辩问题
                   </p>
                 </div>
               ) : questions.length > 0 ? (
@@ -1432,7 +1610,7 @@ const beginJudgeQuestion = useCallback(
                   </p>
                 </div>
               ) : generateError ? (
-                <div className="rounded-md border border-red-700 bg-red-950/40 p-6 text-center">
+                <div className="rounded-md border border-red-700/50 bg-red-950/30 p-6 text-center">
                   <p className="text-base font-semibold text-red-200">
                     问题生成失败
                   </p>
@@ -1443,16 +1621,16 @@ const beginJudgeQuestion = useCallback(
                     type="button"
                     onClick={() => void generateQuestions()}
                     disabled={isGenerating}
-                    className="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-800 disabled:text-red-300"
+                    className="mt-4 inline-flex h-8 items-center justify-center rounded border border-red-700/50 bg-transparent px-3 text-xs font-medium text-red-300 transition-colors hover:bg-red-950/50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    重新生成问题
+                    重试生成问题
                   </button>
                 </div>
               ) : null}
 
               {isGenerating ? (
                 <p className="text-center text-sm text-slate-500">
-                  AI评委思考中，请稍候...
+                  评委问题准备中，请稍候...
                 </p>
               ) : null}
             </div>

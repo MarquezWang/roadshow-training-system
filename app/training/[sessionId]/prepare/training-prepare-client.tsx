@@ -42,6 +42,7 @@ export function TrainingPrepareClient({
   const [isPreparingMicrophone, setIsPreparingMicrophone] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [message, setMessage] = useState("");
+  const qaPreGenTriggeredRef = useRef(false);
 
   useTrainingAbortGuard({
     sessionId,
@@ -140,6 +141,34 @@ export function TrainingPrepareClient({
         } | null;
 
         throw new Error(body?.error ?? "正式开始路演失败。");
+      }
+
+      // 后台预生成 QA 答辩问题，不阻塞路演开始
+      if (!qaPreGenTriggeredRef.current) {
+        qaPreGenTriggeredRef.current = true;
+        console.log("[startPitch:prepare] pre-generate QA started", {
+          sessionId,
+        });
+        fetch(`/training/${sessionId}/qa/questions/generate`, {
+          method: "POST",
+          keepalive: true,
+        })
+          .then(async (res) => {
+            const body = await res.json().catch(() => null);
+            console.log("[startPitch:prepare] pre-generate QA response", {
+              sessionId,
+              status: res.status,
+              ok: res.ok,
+              questionsCount: body?.questions?.length ?? 0,
+              error: body?.error ?? null,
+            });
+          })
+          .catch((err) => {
+            console.warn("[startPitch:prepare] pre-generate QA failed", {
+              sessionId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
       }
 
       isCompletingNormallyRef.current = true;

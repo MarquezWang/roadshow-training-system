@@ -240,22 +240,23 @@ function getFriendlyErrorMessage(error: unknown) {
 async function createOrUpdateProcessingAnalysis(input: {
   sessionId: string;
   projectId: string;
-  transcriptId: string;
+  transcriptId: string | null;
   durationSec: number;
   pageCount: number | null;
   slideEventCount: number;
+  transcriptMissing: boolean;
 }) {
   const latestAnalysis = await findLatestAnalysis(input.sessionId);
   const baseData = {
     projectId: input.projectId,
     transcriptId: input.transcriptId,
-    status: "PROCESSING",
-    analysisType: PITCH_ANALYSIS_TYPE,
+    status: "PROCESSING" as const,
+    analysisType: PITCH_ANALYSIS_TYPE as const,
     durationSec: input.durationSec,
     pageCount: input.pageCount,
     slideEventCount: input.slideEventCount,
     overallScore: null,
-    summary: "",
+    summary: input.transcriptMissing ? "路演自动转写缺失或失败，分析基于项目材料与答辩数据降级生成。" : "",
     strengthsJson: "[]",
     weaknessesJson: "[]",
     suggestionsJson: "[]",
@@ -284,6 +285,38 @@ async function createOrUpdateProcessingAnalysis(input: {
   });
 }
 
+/**
+ * 检查已有 COMPLETED analysis 是否 stale：
+ * 如果任一 Pitch 或 QA transcript 的 completedAt 晚于 analysis.updatedAt，
+ * 说明 analysis 生成时使用了旧的/不完整的 transcript 输入。
+ */
+async function isAnalysisStale(analysis: TrainingAnalysisRecord): Promise<{
+  stale: boolean;
+  reason: string | null;
+}> {
+  const latestCompletedTranscript = await prisma.trainingTranscript.findFirst({
+    where: {
+      sessionId: analysis.sessionId,
+      status: "COMPLETED",
+      completedAt: { not: null },
+    },
+    orderBy: { completedAt: "desc" },
+    select: { id: true, completedAt: true, recording: { select: { phase: true } } },
+  });
+
+  if (
+    latestCompletedTranscript?.completedAt &&
+    latestCompletedTranscript.completedAt.getTime() > analysis.updatedAt.getTime()
+  ) {
+    return {
+      stale: true,
+      reason: `Transcript ${latestCompletedTranscript.id} (phase: ${latestCompletedTranscript.recording?.phase ?? "unknown"}) completed at ${latestCompletedTranscript.completedAt.toISOString()}, after analysis updatedAt ${analysis.updatedAt.toISOString()}`,
+    };
+  }
+
+  return { stale: false, reason: null };
+}
+
 export async function GET(
   _request: NextRequest,
   context: TrainingAnalysisRouteContext,
@@ -291,11 +324,32 @@ export async function GET(
   const { sessionId } = await context.params;
   const analysis = await findLatestAnalysis(sessionId);
 
-  if (!analysis) {
-    return NextResponse.json({ analysis: null });
-  }
+  // 获取 QA transcript 状态计数，供前端轮询使用
+  const qaTranscripts = await prisma.trainingTranscript.findMany({
+    where: {
+      sessionId,
+      recording: { phase: "QA" },
+    },
+    select: {
+      id: true,
+      status: true,
+      completedAt: true,
+      updatedAt: true,
+    },
+  });
 
-  return NextResponse.json({ analysis: serializeAnalysis(analysis) });
+  const qaTranscriptStatus = {
+    total: qaTranscripts.length,
+    pendingCount: qaTranscripts.filter((t) => t.status === "PENDING" || t.status === "PROCESSING").length,
+    completedCount: qaTranscripts.filter((t) => t.status === "COMPLETED").length,
+    failedCount: qaTranscripts.filter((t) => t.status === "FAILED").length,
+    canGenerate: qaTranscripts.length > 0 && qaTranscripts.every((t) => t.status === "COMPLETED" || t.status === "FAILED"),
+  };
+
+  return NextResponse.json({
+    analysis: analysis ? serializeAnalysis(analysis) : null,
+    qaTranscriptStatus,
+  });
 }
 
 export async function POST(
@@ -381,6 +435,27 @@ export async function POST(
       return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
     }
 
+    // 防止重复生成：检查是否已有处理中或已完成的 analysis
+    const existingAnalysis = await findLatestAnalysis(sessionId);
+    if (existingAnalysis) {
+      if (existingAnalysis.status === "PROCESSING") {
+        return NextResponse.json({ analysis: serializeAnalysis(existingAnalysis) });
+      }
+      if (existingAnalysis.status === "COMPLETED") {
+        const staleCheck = await isAnalysisStale(existingAnalysis);
+        if (!staleCheck.stale) {
+          return NextResponse.json({ analysis: serializeAnalysis(existingAnalysis) });
+        }
+        // Stale analysis: transcript 在 analysis 生成后完成，需重新生成
+        console.log("[analysis:POST] stale analysis detected, regenerating", {
+          sessionId,
+          staleReason: staleCheck.reason,
+          analysisUpdatedAt: existingAnalysis.updatedAt.toISOString(),
+        });
+        // 继续执行，不 return
+      }
+    }
+
     if (
       !["PITCH_ENDED", "QA_READY", "QA_ENDED", "REPORT_READY", "FINISHED"].includes(
         session.status,
@@ -393,13 +468,72 @@ export async function POST(
       );
     }
 
-    const transcript = session.transcripts[0];
+    const transcript = session.transcripts[0] ?? null;
+    const transcriptMissing = !transcript?.text.trim();
 
-    if (!transcript?.text.trim()) {
-      return NextResponse.json(
-        { error: "未找到路演转写文本。请确保 PITCH 阶段录音已自动转写完成，或手动保存转写文本后再分析。" },
-        { status: 400 },
-      );
+    // 如果有转写正在进行中，返回等待状态让客户端轮询
+    if (transcriptMissing) {
+      const processingTranscript = await prisma.trainingTranscript.findFirst({
+        where: {
+          sessionId,
+          status: "PROCESSING",
+          recording: {
+            phase: "PITCH",
+          },
+        },
+        select: {
+          status: true,
+        },
+      });
+      if (processingTranscript) {
+        return NextResponse.json(
+          { error: "路演转写正在进行中，请稍后再试。", transcriptProcessing: true },
+          { status: 409 },
+        );
+      }
+    }
+
+    // 检查 QA 转写状态：有 PENDING/PROCESSING 的 QA 转录时，返回等待状态
+    // 等待计时从 qaEndedAt 开始，或从最后一条 QA 录音的结束时间开始
+    const qaTranscriptWaitMs = 90_000;
+    const qaEndedTime = session.qaEndedAt?.getTime();
+    // 如果 qaEndedAt 不存在（例如 QA 未结束），使用最后一条 QA 录音的时间
+    const latestQaAnswerTime = session.trainingQuestions
+      .filter((q) => q.answer?.endedAt)
+      .map((q) => q.answer!.endedAt!.getTime())
+      .sort((a, b) => b - a)[0];
+    const qaBaselineTime = qaEndedTime ?? latestQaAnswerTime;
+
+    // 只有在有明确基线时间且已等待超过 90 秒，才允许降级生成
+    const canDegrade = qaBaselineTime
+      ? Date.now() - qaBaselineTime > qaTranscriptWaitMs
+      : false;
+
+    if (!canDegrade) {
+      const pendingQaTranscripts = await prisma.trainingTranscript.findMany({
+        where: {
+          sessionId,
+          status: { in: ["PENDING", "PROCESSING"] },
+          recording: {
+            phase: "QA",
+          },
+        },
+        select: {
+          id: true,
+          status: true,
+        },
+      });
+
+      if (pendingQaTranscripts.length > 0) {
+        return NextResponse.json(
+          {
+            error: "答辩回答转写尚未完成，请稍后重试。",
+            qaTranscriptsProcessing: true,
+            pendingCount: pendingQaTranscripts.length,
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const durationSec =
@@ -420,24 +554,39 @@ export async function POST(
     const processingAnalysis = await createOrUpdateProcessingAnalysis({
       sessionId: session.id,
       projectId: session.projectId,
-      transcriptId: transcript.id,
+      transcriptId: transcript?.id ?? null,
       durationSec,
       pageCount,
       slideEventCount: session.slideEvents.length,
+      transcriptMissing,
     });
 
     processingAnalysisId = processingAnalysis.id;
 
-    const qaData = session.trainingQuestions.map((q) => ({
-      questionId: q.id,
-      orderIndex: q.orderIndex,
-      questionType: q.questionType,
-      questionText: q.questionText,
-      answerDurationSec: q.answer?.durationSec ?? null,
-      answerText: q.answer?.answerText ?? null,
-      transcribeText: q.answer?.recording?.transcript?.text ?? null,
-      transcribeStatus: q.answer?.recording?.transcript?.status ?? null,
-    }));
+    const qaData = session.trainingQuestions.map((q) => {
+      const transcribeStatus = q.answer?.recording?.transcript?.status ?? null;
+      const transcribeText = q.answer?.recording?.transcript?.text ?? null;
+      const isPendingOrProcessing =
+        transcribeStatus === "PENDING" || transcribeStatus === "PROCESSING";
+      return {
+        questionId: q.id,
+        orderIndex: q.orderIndex,
+        questionType: q.questionType,
+        questionText: q.questionText,
+        answerDurationSec: q.answer?.durationSec ?? null,
+        answerText: q.answer?.answerText ?? null,
+        transcribeText,
+        transcribeStatus,
+        transcribeFailed: transcribeStatus === "FAILED",
+        transcribePending: isPendingOrProcessing,
+        transcribeNote:
+          transcribeStatus === "FAILED"
+            ? "该题转写失败，分析依据可能不足，请基于答题时长和项目材料进行有限分析。"
+            : isPendingOrProcessing
+              ? "该题转写超时未完成，分析依据不足，请基于项目材料和答题时长进行有限分析。"
+              : null,
+      };
+    });
 
     const [contextResult, template] = await Promise.all([
       buildProjectAIContext(session.projectId),
@@ -459,13 +608,23 @@ export async function POST(
         elapsedSec: event.elapsedSec,
         createdAt: event.createdAt.toISOString(),
       })),
-      transcript: {
-        id: transcript.id,
-        source: transcript.source,
-        language: transcript.language,
-        completedAt: transcript.completedAt?.toISOString() ?? null,
-        text: transcript.text,
-      },
+      transcript: transcript
+        ? {
+            id: transcript.id,
+            source: transcript.source,
+            language: transcript.language,
+            completedAt: transcript.completedAt?.toISOString() ?? null,
+            text: transcript.text,
+          }
+        : {
+            id: null,
+            source: "NONE",
+            language: "zh-CN",
+            completedAt: null,
+            text: transcriptMissing
+              ? "【路演转写缺失】路演录音转写失败或超时，分析将基于项目材料、答辩数据及录音元信息降级进行。"
+              : "",
+          },
       qaData,
     });
     const aiResult = await callAI({
@@ -476,6 +635,124 @@ export async function POST(
       maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
     });
     const analysisJson = await parseAnalysisJsonWithRepair(aiResult.text);
+
+    // 空回答/无效回答容错：确保每个 QA 问题都有合理的 qaReview
+    const noAnswerQuestionIds = new Set(
+      qaData
+        .filter((q) => {
+          if (q.answerDurationSec === null) return true;
+          if (q.answerDurationSec < 2) return true;
+          if (q.transcribeStatus === "FAILED") return true;
+          if (
+            q.transcribeStatus === "COMPLETED" &&
+            !q.transcribeText?.trim()
+          )
+            return true;
+          return false;
+        })
+        .map((q) => q.questionId),
+    );
+
+    // PENDING/PROCESSING 转写：不是"未作答"，是"转写未完成"
+    const pendingTranscribeQuestionIds = new Set(
+      qaData
+        .filter((q) => q.transcribePending)
+        .map((q) => q.questionId),
+    );
+
+    const existingQaReviews: QaReview[] = analysisJson.qaReviews ?? [];
+    const reviewedQuestionIds = new Set(
+      existingQaReviews.map((r) => r.questionId),
+    );
+
+    const missingReviews: QaReview[] = qaData
+      .filter((q) => !reviewedQuestionIds.has(q.questionId))
+      .map((q) => {
+        const isNoAnswer = noAnswerQuestionIds.has(q.questionId);
+        const isPending = pendingTranscribeQuestionIds.has(q.questionId);
+        return {
+          questionId: q.questionId,
+          questionIndex: q.orderIndex,
+          dimension: "OTHER" as const,
+          question: q.questionText,
+          judgeIntent: "评委意图暂未明确记录。",
+          answerSummary: isPending
+            ? "转写尚未完成，分析依据不足。"
+            : isNoAnswer
+              ? "未检测到有效回答，或当前转写文本不足以判断回答内容。"
+              : "回答摘要暂时无法提供。",
+          responseQuality: "WEAK" as const,
+          responseQualityLabel: isPending
+            ? "转写超时，分析依据不足"
+            : "回答缺失或偏弱",
+          missingPoints: isNoAnswer
+            ? ["未正面回应评委问题", "未提供数据、案例或材料依据"]
+            : [],
+          evidenceUse: "未能提供有效证据。",
+          improvementAdvice:
+            "建议围绕评委问题正面作答，并补充关键数据、案例或验证依据。",
+          betterAnswerOutline: [
+            `针对"${q.questionText}"，建议先明确回答核心问题`,
+            "结合项目材料补充关键数据或案例",
+            "总结回答要点，呼应评委关注点",
+          ],
+        };
+      });
+
+    // 对已有但回答无效的 qaReview，确保其 quality 为 WEAK
+    const normalizedQaReviews: QaReview[] = existingQaReviews.map((review) => {
+      if (noAnswerQuestionIds.has(review.questionId)) {
+        return {
+          ...review,
+          responseQuality: "WEAK" as const,
+          responseQualityLabel: "回答缺失或偏弱",
+          answerSummary:
+            review.answerSummary ||
+            "未检测到有效回答，或当前转写文本不足以判断回答内容。",
+          evidenceUse: review.evidenceUse || "未能提供有效证据。",
+          missingPoints: review.missingPoints?.length
+            ? review.missingPoints
+            : ["未正面回应评委问题", "未提供数据、案例或材料依据"],
+          improvementAdvice:
+            review.improvementAdvice ||
+            "建议围绕评委问题正面作答，并补充关键数据、案例或验证依据。",
+          betterAnswerOutline: review.betterAnswerOutline?.length
+            ? review.betterAnswerOutline
+            : [
+                `针对"${review.question}"，建议先明确回答核心问题`,
+                "结合项目材料补充关键数据或案例",
+                "总结回答要点，呼应评委关注点",
+              ],
+        };
+      }
+      if (pendingTranscribeQuestionIds.has(review.questionId)) {
+        return {
+          ...review,
+          responseQuality: "WEAK" as const,
+          responseQualityLabel: "转写超时，分析依据不足",
+          answerSummary:
+            review.answerSummary || "转写尚未完成，分析依据不足。",
+          evidenceUse: review.evidenceUse || "未能提供有效证据。",
+          missingPoints: review.missingPoints?.length
+            ? review.missingPoints
+            : ["转写未完成，无法评估回答内容"],
+          improvementAdvice:
+            review.improvementAdvice ||
+            "转写完成后可重新生成分析以获得更准确的评估。",
+          betterAnswerOutline: review.betterAnswerOutline?.length
+            ? review.betterAnswerOutline
+            : [
+                `针对"${review.question}"，建议先明确回答核心问题`,
+                "结合项目材料补充关键数据或案例",
+                "总结回答要点，呼应评委关注点",
+              ],
+        };
+      }
+      return review;
+    });
+
+    analysisJson.qaReviews = [...normalizedQaReviews, ...missingReviews];
+
     const completedAnalysis = await prisma.trainingAnalysis.update({
       where: {
         id: processingAnalysis.id,
