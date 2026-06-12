@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { devLog } from "@/lib/dev-log";
 import type {
   PDFDocumentLoadingTask,
   PDFDocumentProxy,
@@ -830,7 +831,7 @@ const beginJudgeQuestion = useCallback(
         if (selectedVoice) {
           utterance.voice = selectedVoice;
           utterance.lang = selectedVoice.lang;
-          console.log(`[QA TTS] 选中语音：${selectedVoice.name} (${selectedVoice.lang})`);
+          devLog(`[QA TTS] 选中语音：${selectedVoice.name} (${selectedVoice.lang})`);
           try {
             localStorage.setItem("qa-preferred-voice", selectedVoice.name);
           } catch {
@@ -980,7 +981,7 @@ const beginJudgeQuestion = useCallback(
   }, []);
 
   const generateQuestions = useCallback(async () => {
-    console.log("[qa:client] manual retry generate", { sessionId });
+    devLog("[qa:client] manual retry generate", { sessionId });
     setIsGenerating(true);
     setGenerateError(null);
     setMessage("");
@@ -1000,7 +1001,7 @@ const beginJudgeQuestion = useCallback(
         message?: string;
       } | null;
 
-      console.log("[qa:client] manual retry POST response", {
+      devLog("[qa:client] manual retry POST response", {
         sessionId,
         status: response.status,
         ok: response.ok,
@@ -1043,7 +1044,7 @@ const beginJudgeQuestion = useCallback(
   useEffect(() => {
     if (!isGuardResolved) return;
     if (questions.length > 0) {
-      console.log("[qa:client] questions already loaded, skipping auto-generate", {
+      devLog("[qa:client] questions already loaded, skipping auto-generate", {
         count: questions.length,
       });
       return;
@@ -1051,7 +1052,7 @@ const beginJudgeQuestion = useCallback(
     if (autoGenerateRef.current) return;
     autoGenerateRef.current = true;
 
-    console.log("[qa:client] starting auto-generation", {
+    devLog("[qa:client] starting auto-generation", {
       sessionId,
       initialQuestionsCount: 0,
     });
@@ -1083,7 +1084,7 @@ const beginJudgeQuestion = useCallback(
 
       // 硬超时 60 秒
       if (elapsed >= MAX_WAIT_MS) {
-        console.log("[qa:client] generation timed out", {
+        devLog("[qa:client] generation timed out", {
           sessionId,
           elapsed: `${Math.round(elapsed / 1000)}s`,
         });
@@ -1102,7 +1103,7 @@ const beginJudgeQuestion = useCallback(
           error?: string;
         } | null;
 
-        console.log("[qa:client] GET response", {
+        devLog("[qa:client] GET response", {
           sessionId,
           elapsed: `${Math.round((Date.now() - startTime) / 1000)}s`,
           questionsCount: getBody?.questions?.length ?? 0,
@@ -1112,7 +1113,7 @@ const beginJudgeQuestion = useCallback(
 
         // 已有问题 → 直接展示
         if (getBody?.questions?.length) {
-          console.log("[qa:client] questions found, displaying", {
+          devLog("[qa:client] questions found, displaying", {
             count: getBody.questions.length,
           });
           setQuestions(getBody.questions);
@@ -1135,7 +1136,7 @@ const beginJudgeQuestion = useCallback(
         if (!postAttempted) {
           postAttempted = true;
 
-          console.log("[qa:client] POST generating questions", { sessionId });
+          devLog("[qa:client] POST generating questions", { sessionId });
           const postRes = await fetch(
             `/training/${sessionId}/qa/questions/generate`,
             { method: "POST" },
@@ -1148,7 +1149,7 @@ const beginJudgeQuestion = useCallback(
             message?: string;
           } | null;
 
-          console.log("[qa:client] POST response", {
+          devLog("[qa:client] POST response", {
             sessionId,
             status: postRes.status,
             ok: postRes.ok,
@@ -1180,7 +1181,7 @@ const beginJudgeQuestion = useCallback(
         }
       } catch {
         // 网络错误，继续轮询（可能是暂时的）
-        console.log("[qa:client] network error during poll, will retry", {
+        devLog("[qa:client] network error during poll, will retry", {
           sessionId,
         });
       }

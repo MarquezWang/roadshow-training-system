@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { devLog, devWarn } from "@/lib/dev-log";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 import { MicrophoneTestPanel } from "@/components/microphone-test-panel";
 
@@ -146,7 +147,7 @@ export function TrainingPrepareClient({
       // 后台预生成 QA 答辩问题，不阻塞路演开始
       if (!qaPreGenTriggeredRef.current) {
         qaPreGenTriggeredRef.current = true;
-        console.log("[startPitch:prepare] pre-generate QA started", {
+        devLog("[startPitch:prepare] pre-generate QA started", {
           sessionId,
         });
         fetch(`/training/${sessionId}/qa/questions/generate`, {
@@ -155,7 +156,7 @@ export function TrainingPrepareClient({
         })
           .then(async (res) => {
             const body = await res.json().catch(() => null);
-            console.log("[startPitch:prepare] pre-generate QA response", {
+            devLog("[startPitch:prepare] pre-generate QA response", {
               sessionId,
               status: res.status,
               ok: res.ok,
@@ -164,7 +165,7 @@ export function TrainingPrepareClient({
             });
           })
           .catch((err) => {
-            console.warn("[startPitch:prepare] pre-generate QA failed", {
+            devWarn("[startPitch:prepare] pre-generate QA failed", {
               sessionId,
               error: err instanceof Error ? err.message : String(err),
             });

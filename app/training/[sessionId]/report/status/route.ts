@@ -59,45 +59,65 @@ export async function GET(
     },
   });
 
-  // 获取 QA transcript 状态计数
-  const qaTranscripts = await prisma.trainingTranscript.findMany({
+  // 获取 QA 回答及转写状态（通过 TrainingAnswer 关联 question → recording → transcript）
+  const qaAnswers = await prisma.trainingAnswer.findMany({
     where: {
       sessionId,
-      recording: { phase: "QA" },
     },
     select: {
       id: true,
-      status: true,
-      completedAt: true,
-      updatedAt: true,
-    },
-  });
-
-  // 获取 QA questions 总数（有 recording 的才需要转写）
-  const qaQuestionsWithRecording = await prisma.trainingQuestion.count({
-    where: {
-      sessionId,
-      answer: {
-        recordingId: { not: null },
+      questionId: true,
+      recordingId: true,
+      question: {
+        select: {
+          id: true,
+        },
+      },
+      recording: {
+        select: {
+          id: true,
+          transcript: {
+            select: {
+              id: true,
+              status: true,
+              completedAt: true,
+              updatedAt: true,
+            },
+          },
+        },
       },
     },
   });
 
-  const qaPendingCount = qaTranscripts.filter(
-    (t) => t.status === "PENDING",
-  ).length;
-  const qaProcessingCount = qaTranscripts.filter(
-    (t) => t.status === "PROCESSING",
-  ).length;
-  const qaCompletedCount = qaTranscripts.filter(
-    (t) => t.status === "COMPLETED",
-  ).length;
-  const qaFailedCount = qaTranscripts.filter(
-    (t) => t.status === "FAILED",
-  ).length;
-  const qaMissingCount = qaQuestionsWithRecording - qaTranscripts.length;
+  // 生成 qaTranscriptItems：每道题一条轻量状态
+  const qaTranscriptItems = qaAnswers.map((a) => {
+    const ts = a.recording?.transcript;
+    return {
+      questionId: a.question.id,
+      recordingId: a.recordingId,
+      transcriptStatus: ts?.status ?? (a.recordingId ? "PENDING" : "MISSING"),
+      updatedAt: ts?.updatedAt?.toISOString() ?? null,
+      completedAt: ts?.completedAt?.toISOString() ?? null,
+    };
+  });
 
-  const qaTotalCount = qaQuestionsWithRecording;
+  // 状态计数
+  const qaPendingCount = qaTranscriptItems.filter(
+    (t) => t.transcriptStatus === "PENDING",
+  ).length;
+  const qaProcessingCount = qaTranscriptItems.filter(
+    (t) => t.transcriptStatus === "PROCESSING",
+  ).length;
+  const qaCompletedCount = qaTranscriptItems.filter(
+    (t) => t.transcriptStatus === "COMPLETED",
+  ).length;
+  const qaFailedCount = qaTranscriptItems.filter(
+    (t) => t.transcriptStatus === "FAILED",
+  ).length;
+  const qaMissingCount = qaTranscriptItems.filter(
+    (t) => t.transcriptStatus === "MISSING",
+  ).length;
+  const qaTotalCount = qaTranscriptItems.length;
 
   // 所有 QA transcript 都已完成或失败
   const allQaCompleteOrFailed =
@@ -126,9 +146,9 @@ export async function GET(
       ...(pitchTranscript?.completedAt
         ? [pitchTranscript.completedAt.getTime()]
         : []),
-      ...qaTranscripts
+      ...qaTranscriptItems
         .filter((t) => t.completedAt)
-        .map((t) => t.completedAt!.getTime()),
+        .map((t) => new Date(t.completedAt!).getTime()),
     ];
 
     if (allTranscriptTimes.length > 0) {
@@ -152,5 +172,6 @@ export async function GET(
     qaTotalCount,
     canGenerateAnalysis,
     hasStaleAnalysis,
+    qaTranscriptItems,
   });
 }

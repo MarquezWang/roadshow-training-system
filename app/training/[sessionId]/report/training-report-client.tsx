@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type TrainingTranscript = {
   id: string;
@@ -132,7 +133,7 @@ function RadarChart({ overallScore }: { readonly overallScore: number | null }) 
     <div className="rounded-lg border border-slate-100 bg-white p-6">
       <h3 className="text-sm font-semibold text-slate-800">能力维度雷达图</h3>
       <p className="mt-1 text-xs text-slate-400">
-        维度图基于当前分析结果生成，后续将结合逐页与逐题数据完善。
+        维度图基于当前报告数据生成，后续将结合逐页与逐题数据完善。
       </p>
       <div className="relative mx-auto mt-4 flex items-center justify-center" style={{ minHeight: 300, width: "100%", maxWidth: 420 }}>
         <svg
@@ -218,6 +219,7 @@ export function TrainingReportClient({
   recording,
   initialAnalysis,
 }: TrainingReportClientProps) {
+  const router = useRouter();
   const isAborted = sessionStatus === "ABORTED";
   const isQaCompleted =
     sessionStatus === "QA_ENDED" ||
@@ -250,6 +252,8 @@ export function TrainingReportClient({
   const statusPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isGeneratingAnalysisRef = useRef(false);
   const statusInFlightRef = useRef(false);
+  // 追踪已 refresh 过的已完成 transcript recordingId，避免刷新循环
+  const completedTranscriptsRef = useRef<Set<string>>(new Set());
 
   // QA 转写状态：仅用于 QA Tab 展示，不参与轮询
   const [qaTranscripts, setQaTranscripts] = useState<
@@ -265,6 +269,26 @@ export function TrainingReportClient({
   const [qaTranscribingSet, setQaTranscribingSet] = useState<Set<string>>(
     new Set(),
   );
+  // 当 qaQuestions 刷新后（router.refresh），同步 qaTranscripts 状态
+  useEffect(() => {
+    const next = Object.fromEntries(
+      qaQuestions
+        .filter((q) => q.answer?.recording?.transcript)
+        .map((q) => [q.answer!.recording!.id, q.answer!.recording!.transcript!]),
+    );
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- router.refresh() 后同步 props 到派生状态的必要操作
+    setQaTranscripts((prev) => {
+      // 只在有变化时更新，避免不必要的重渲染
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      if (prevKeys.length !== nextKeys.length) return next;
+      for (const key of nextKeys) {
+        if (prev[key]?.status !== next[key]?.status) return next;
+        if (prev[key]?.text !== next[key]?.text) return next;
+      }
+      return prev;
+    });
+  }, [qaQuestions]);
   // 长文本展开/收起
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(
     new Set(),
@@ -305,31 +329,65 @@ export function TrainingReportClient({
           hasStaleAnalysis?: boolean;
           qaTranscriptPendingCount?: number;
           qaTranscriptProcessingCount?: number;
+          qaTranscriptItems?: Array<{
+            recordingId: string;
+            questionId: string | null;
+            transcriptStatus: string;
+            completedAt: string | null;
+          }>;
         } | null;
 
         if (!status) return;
 
-        // 已完成且非 stale → 停止轮询，获取完整数据
+        // 已完成且非 stale：检查是否还有 transcript 未完成
         if (
           status.analysisStatus === "COMPLETED" &&
           !status.hasStaleAnalysis
         ) {
-          if (statusPollTimerRef.current) {
-            clearInterval(statusPollTimerRef.current);
-            statusPollTimerRef.current = null;
-          }
-          // 获取完整 analysis 数据
-          const analysisRes = await fetch(
-            `/training/${sessionId}/analysis`,
+          const pendingCount =
+            (status.qaTranscriptPendingCount ?? 0) +
+            (status.qaTranscriptProcessingCount ?? 0);
+
+          // 检查是否有新完成的 transcript（之前未 refresh 过的）
+          const items = status.qaTranscriptItems ?? [];
+          const newlyCompleted = items.filter(
+            (item) =>
+              item.transcriptStatus === "COMPLETED" &&
+              !completedTranscriptsRef.current.has(item.recordingId),
           );
-          const analysisBody = (await analysisRes.json().catch(() => null)) as {
-            analysis?: TrainingAnalysis | null;
-          } | null;
-          if (analysisBody?.analysis) {
-            setAnalysis(analysisBody.analysis);
-            setIsAnalysisLoading(false);
-            setAnalysisMessage("");
+
+          if (newlyCompleted.length > 0) {
+            // 标记已 refresh，避免循环
+            newlyCompleted.forEach((item) =>
+              completedTranscriptsRef.current.add(item.recordingId),
+            );
+            router.refresh();
+            // 不停止轮询，继续等待其余 transcript
+            if (pendingCount > 0) return;
           }
+
+          // 所有 transcript 已完成或失败 → 停止轮询
+          if (pendingCount === 0) {
+            if (statusPollTimerRef.current) {
+              clearInterval(statusPollTimerRef.current);
+              statusPollTimerRef.current = null;
+            }
+            // 获取完整 analysis 数据
+            const analysisRes = await fetch(
+              `/training/${sessionId}/analysis`,
+            );
+            const analysisBody = (await analysisRes.json().catch(() => null)) as {
+              analysis?: TrainingAnalysis | null;
+            } | null;
+            if (analysisBody?.analysis) {
+              setAnalysis(analysisBody.analysis);
+              setIsAnalysisLoading(false);
+              setAnalysisMessage("");
+            }
+            return;
+          }
+
+          // 还有 transcript 未完成，继续轮询
           return;
         }
 
@@ -340,7 +398,7 @@ export function TrainingReportClient({
             statusPollTimerRef.current = null;
           }
           setIsAnalysisLoading(false);
-          setAnalysisMessage(status.analysisError ?? "分析生成失败。");
+          setAnalysisMessage(status.analysisError ?? "报告生成失败。");
           return;
         }
 
@@ -356,7 +414,11 @@ export function TrainingReportClient({
           !isGeneratingAnalysisRef.current
         ) {
           isGeneratingAnalysisRef.current = true;
-          setAnalysisMessage("正在生成训练报告……");
+          setAnalysisMessage(
+            status.hasStaleAnalysis
+              ? "报告正在根据最新转写内容更新……"
+              : "正在生成训练报告……",
+          );
           await generateAnalysis();
           isGeneratingAnalysisRef.current = false;
         } else if (!status.canGenerateAnalysis && !status.hasStaleAnalysis) {
@@ -478,7 +540,7 @@ export function TrainingReportClient({
 
   async function generateAnalysis() {
     if (isAborted) {
-      setAnalysisMessage("本轮训练已中止，不能继续生成路演表现分析。");
+      setAnalysisMessage("本轮训练已中止，不能继续生成训练报告。");
       setIsAnalysisLoading(false);
       return;
     }
@@ -506,11 +568,11 @@ export function TrainingReportClient({
           );
           return;
         }
-        throw new Error(body?.error ?? "路演表现分析生成失败。");
+        throw new Error(body?.error ?? "报告生成失败，请稍后重试。");
       }
 
       if (!body?.analysis) {
-        throw new Error("路演表现分析接口未返回结果。");
+        throw new Error("报告生成失败，请稍后重试。");
       }
 
       setAnalysis(body.analysis);
@@ -518,13 +580,13 @@ export function TrainingReportClient({
         setAnalysisMessage("");
         setIsAnalysisLoading(false);
       } else if (body.analysis.status === "FAILED") {
-        setAnalysisMessage(body.analysis.errorMessage ?? "分析生成失败。");
+        setAnalysisMessage(body.analysis.errorMessage ?? "报告生成失败。");
         setIsAnalysisLoading(false);
       }
       // PROCESSING 状态：保持 analysisLoading 和 analysisMessage，由 polling 接管
     } catch (error) {
       setAnalysisMessage(
-        error instanceof Error ? error.message : "路演表现分析生成失败。",
+        error instanceof Error ? error.message : "报告生成失败，请稍后重试。",
       );
       setIsAnalysisLoading(false);
     }
@@ -626,7 +688,7 @@ export function TrainingReportClient({
                       训练状态
                     </p>
                     <p className="mt-1 text-sm font-semibold text-slate-800">
-                      分析已完成
+                      报告已生成
                     </p>
                   </div>
                   <div className="flex items-baseline gap-1">
@@ -690,6 +752,9 @@ export function TrainingReportClient({
                 <p className="mt-1 text-xs text-slate-400">
                   {analysisMessage || "正在整理路演与答辩表现，请稍候……"}
                 </p>
+                <p className="mt-3 text-xs text-slate-300">
+                  通常需要几十秒，页面会自动更新。
+                </p>
               </div>
             </section>
           ) : analysis?.status === "FAILED" ? (
@@ -697,8 +762,18 @@ export function TrainingReportClient({
               <div className="py-8 text-center">
                 <p className="text-sm font-medium text-red-600">报告生成失败</p>
                 <p className="mt-1 text-xs text-red-400">
-                  {analysis.errorMessage ?? "分析生成失败，请重试。"}
+                  报告生成失败，请稍后重试。
                 </p>
+                {analysis.errorMessage ? (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-xs text-red-300">
+                      查看详情
+                    </summary>
+                    <p className="mt-1 text-xs text-red-300/80">
+                      {analysis.errorMessage}
+                    </p>
+                  </details>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -718,7 +793,7 @@ export function TrainingReportClient({
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
                     训练状态
                   </p>
-                  <p className="mt-1 text-sm font-semibold text-slate-800">分析中</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-800">报告生成中</p>
                 </div>
               </div>
               {analysisMessage ? (
@@ -730,7 +805,7 @@ export function TrainingReportClient({
               <div className="py-8 text-center">
                 <p className="text-sm font-medium text-slate-600">报告生成中</p>
                 <p className="mt-1 text-xs text-slate-400">
-                  {analysisMessage || "正在准备分析数据，请稍候……"}
+                  {analysisMessage || "正在准备报告数据，请稍候……"}
                 </p>
               </div>
             </section>
@@ -791,27 +866,37 @@ export function TrainingReportClient({
               路演表现分析
             </h2>
             <p className="mt-1 text-xs text-slate-400">
-              基于路演转写文本的 AI 分析结果。
+              基于路演转写文本的 AI 评估结果。
             </p>
 
             {isAborted ? (
               <p className="mt-4 rounded-md border border-slate-100 bg-slate-50/50 p-3 text-sm text-slate-600">
-                本轮训练已中止，路演表现分析不再继续生成。
+                本轮训练已中止，报告不再继续生成。
               </p>
             ) : !transcript?.text.trim() ? (
               <p className="mt-4 rounded-md border border-slate-100 bg-slate-50/50 p-3 text-sm text-slate-600">
-                请先保存路演转写文本，再生成路演表现分析。
+                请先保存路演转写文本，再生成训练报告。
               </p>
             ) : !analysis ? (
               <p className="mt-4 rounded-md border border-dashed border-slate-200 p-4 text-sm text-slate-500">
-                正在等待报告生成，分析完成后将自动展示。
+                正在等待报告生成，完成后将自动展示。
               </p>
             ) : analysis.status === "FAILED" ? (
               <div className="mt-4 rounded-md border border-red-100 bg-red-50/50 p-4">
-                <p className="text-sm font-medium text-red-700">分析失败</p>
+                <p className="text-sm font-medium text-red-700">报告生成失败</p>
                 <p className="mt-1 text-sm text-red-600/80">
-                  {analysis.errorMessage ?? "分析生成失败。"}
+                  报告生成失败，请稍后重试。
                 </p>
+                {analysis.errorMessage ? (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-xs text-red-400">
+                      查看详情
+                    </summary>
+                    <p className="mt-1 text-xs text-red-400/80">
+                      {analysis.errorMessage}
+                    </p>
+                  </details>
+                ) : null}
               </div>
             ) : (
               <div className="mt-4 grid gap-4">
@@ -970,7 +1055,7 @@ export function TrainingReportClient({
                 路演录音与转写
               </h3>
               <p className="mt-1 text-xs text-slate-400">
-                原始录音回放与转写文本，可作为分析依据。
+                原始录音回放与转写文本。
               </p>
 
               <div className="mt-4 grid gap-4">

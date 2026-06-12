@@ -7,6 +7,7 @@ import type {
   RenderTask,
 } from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { devLog, devWarn } from "@/lib/dev-log";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 import { getTrainingFlowPath } from "@/lib/training-status";
 import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
@@ -512,7 +513,7 @@ export function TrainingSessionClient({
     if (qaFallbackTriggeredRef.current) return;
     qaFallbackTriggeredRef.current = true;
 
-    console.log("[pitch:mounted] pre-generate QA fallback started", {
+    devLog("[pitch:mounted] pre-generate QA fallback started", {
       sessionId,
     });
 
@@ -526,7 +527,7 @@ export function TrainingSessionClient({
 
         // 已有 questions，无需预生成
         if (getBody?.questions?.length) {
-          console.log("[pitch:mounted] QA questions already exist", {
+          devLog("[pitch:mounted] QA questions already exist", {
             sessionId,
             count: getBody.questions.length,
           });
@@ -535,7 +536,7 @@ export function TrainingSessionClient({
 
         // 正在生成中，无需重复触发
         if (getBody?.isGenerating) {
-          console.log("[pitch:mounted] QA generation already in progress", {
+          devLog("[pitch:mounted] QA generation already in progress", {
             sessionId,
           });
           return;
@@ -550,7 +551,7 @@ export function TrainingSessionClient({
       .then(async (postRes) => {
         if (!postRes) return; // 前面的 early return
         const body = await postRes.json().catch(() => null);
-        console.log("[pitch:mounted] pre-generate QA fallback response", {
+        devLog("[pitch:mounted] pre-generate QA fallback response", {
           sessionId,
           status: postRes.status,
           ok: postRes.ok,
@@ -560,7 +561,7 @@ export function TrainingSessionClient({
         });
       })
       .catch((err) => {
-        console.warn("[pitch:mounted] pre-generate QA fallback failed", {
+        devWarn("[pitch:mounted] pre-generate QA fallback failed", {
           sessionId,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -1214,7 +1215,7 @@ export function TrainingSessionClient({
       }
 
       const transcribeUrl = `/training/${sessionId}/recordings/${rid}/transcribe`;
-      console.log("[triggerTranscribe]", {
+      devLog("[triggerTranscribe]", {
         sessionId,
         savedRecordingId: targetRecordingId,
         recordingId,
@@ -1228,7 +1229,7 @@ export function TrainingSessionClient({
       try {
         const response = await fetch(transcribeUrl, { method: "POST" });
 
-        console.log("[triggerTranscribe] response", {
+        devLog("[triggerTranscribe] response", {
           status: response.status,
           statusText: response.statusText,
           ok: response.ok,
@@ -1515,7 +1516,7 @@ export function TrainingSessionClient({
       }
 
       // 后台预生成 QA 答辩问题，不阻塞路演
-      console.log("[startPitch] pre-generate QA started", {
+      devLog("[startPitch] pre-generate QA started", {
         sessionId,
         url: `/training/${sessionId}/qa/questions/generate`,
         timestamp: Date.now(),
@@ -1526,7 +1527,7 @@ export function TrainingSessionClient({
       })
         .then(async (res) => {
           const body = await res.json().catch(() => null);
-          console.log("[startPitch] pre-generate QA response", {
+          devLog("[startPitch] pre-generate QA response", {
             sessionId,
             status: res.status,
             ok: res.ok,
@@ -1535,7 +1536,7 @@ export function TrainingSessionClient({
           });
         })
         .catch((err) => {
-          console.warn("[startPitch] pre-generate QA failed", {
+          devWarn("[startPitch] pre-generate QA failed", {
             sessionId,
             error: err instanceof Error ? err.message : String(err),
           });
@@ -1596,7 +1597,7 @@ export function TrainingSessionClient({
         if (savedRecordingId) {
           // 后台异步转写，不阻塞跳转
           triggerTranscribe(savedRecordingId).catch((err) => {
-            console.warn("[endPitch] auto-transcribe failed:", err);
+            devWarn("[endPitch] auto-transcribe failed:", err);
           });
           setRecordingMessage("路演录音已保存，系统正在后台转写。");
         }
