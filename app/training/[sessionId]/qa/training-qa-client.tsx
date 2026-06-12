@@ -146,36 +146,47 @@ function isEditableOrClickableTarget(target: EventTarget | null) {
 }
 
 function chooseJudgeVoice(voices: SpeechSynthesisVoice[]) {
-  // 按优先级排序的 zh-CN 中文男声候选
-  const maleVoicePriority = [
-    "microsoft xiaoyi online",
-    "microsoft xiaoyi",
-    "xiaoyi",
-    "microsoft yunjian online",
-    "microsoft yunxi online",
-    "microsoft yunyang online",
-    "microsoft kangkang",
-    "yunjian",
-    "yunxi",
-    "yunyang",
-    "kangkang",
-  ];
-  // 筛选中文语音
-  const zhVoices = voices.filter((voice) => {
-    const key = `${voice.lang} ${voice.name}`.toLowerCase();
-    return key.includes("zh-cn") || key.includes("zh") || key.includes("chinese");
-  });
-  // 在中文语音中按优先级匹配男声
-  const maleZhVoice =
-    maleVoicePriority
-      .flatMap((hint) =>
-        zhVoices.filter((voice) =>
-          `${voice.name} ${voice.lang}`.toLowerCase().includes(hint),
-        ),
-      )
-      .find(() => true) ?? null;
+  if (voices.length === 0) return null;
 
-  return maleZhVoice ?? zhVoices[0] ?? voices[0] ?? null;
+  // 精确匹配最优先
+  const exactMatch = voices.find(
+    (v) => v.name === "Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)",
+  );
+  if (exactMatch) return exactMatch;
+
+  // 降级 1：zh-CN 中文语音
+  const zhCNVoices = voices.filter((v) => v.lang === "zh-CN");
+  if (zhCNVoices.length > 0) {
+    // 在 zh-CN 中找包含 Xiaoyi 的
+    const xiaoyiZhCN = zhCNVoices.find(
+      (v) => v.name.toLowerCase().includes("xiaoyi"),
+    );
+    if (xiaoyiZhCN) return xiaoyiZhCN;
+
+    // 在 zh-CN 中找包含 Natural 的
+    const naturalZhCN = zhCNVoices.find(
+      (v) => v.name.toLowerCase().includes("natural"),
+    );
+    if (naturalZhCN) return naturalZhCN;
+
+    // 降级：zh-CN 第一个
+    return zhCNVoices[0];
+  }
+
+  // 降级 2：名称中包含 Xiaoyi（不限语言）
+  const xiaoyiAny = voices.find(
+    (v) => v.name.toLowerCase().includes("xiaoyi"),
+  );
+  if (xiaoyiAny) return xiaoyiAny;
+
+  // 降级 3：中文语音（lang 含 zh）
+  const zhVoice = voices.find(
+    (v) => v.lang.includes("zh") || v.lang.includes("chinese"),
+  );
+  if (zhVoice) return zhVoice;
+
+  // 降级 4：浏览器默认
+  return voices[0] ?? null;
 }
 
 export function TrainingQaClient({
@@ -671,6 +682,15 @@ export function TrainingQaClient({
 
       setQaRecordingStatus("saved");
       setQaRecordingMessage("本题录音已保存。");
+
+      // 后台触发转写，不阻塞 UI
+      void fetch(
+        `/training/${sessionId}/recordings/${body.recording.id}/transcribe`,
+        { method: "POST" },
+      ).catch(() => {
+        // 转写失败不影响答题流程
+      });
+
       return body.recording.id;
     } catch (error) {
       setQaRecordingStatus("disabled");
@@ -693,6 +713,8 @@ export function TrainingQaClient({
     answerElapsedBeforePhaseRef.current = currentUsedAnswerSec;
     setUsedAnswerSec(currentUsedAnswerSec);
     setQaPhase("ANSWERING");
+    // 确保评委语音已停止，避免被录进用户回答
+    window.speechSynthesis?.cancel();
     await startQuestionRecording();
   }, [startQuestionRecording, usedAnswerSec]);
 
@@ -807,6 +829,12 @@ const beginJudgeQuestion = useCallback(
         if (selectedVoice) {
           utterance.voice = selectedVoice;
           utterance.lang = selectedVoice.lang;
+          console.log(`[QA TTS] 选中语音：${selectedVoice.name} (${selectedVoice.lang})`);
+          try {
+            localStorage.setItem("qa-preferred-voice", selectedVoice.name);
+          } catch {
+            // localStorage 不可用
+          }
         }
         window.speechSynthesis.speak(utterance);
       })();

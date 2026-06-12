@@ -98,6 +98,23 @@ export default async function TrainingReportPage({
                   mimeType: true,
                   sizeBytes: true,
                   durationSec: true,
+                  transcript: {
+                    select: {
+                      id: true,
+                      recordingId: true,
+                      sessionId: true,
+                      status: true,
+                      source: true,
+                      language: true,
+                      text: true,
+                      segmentsJson: true,
+                      errorMessage: true,
+                      startedAt: true,
+                      completedAt: true,
+                      createdAt: true,
+                      updatedAt: true,
+                    },
+                  },
                 },
               },
             },
@@ -203,7 +220,19 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
                 mimeType: question.answer.recording.mimeType,
                 sizeBytes: question.answer.recording.sizeBytes,
                 durationSec: question.answer.recording.durationSec,
-                transcript: null,
+                transcript: question.answer.recording.transcript
+                  ? {
+                      ...question.answer.recording.transcript,
+                      startedAt:
+                        question.answer.recording.transcript.startedAt?.toISOString() ??
+                        null,
+                      completedAt:
+                        question.answer.recording.transcript.completedAt?.toISOString() ??
+                        null,
+                      createdAt: question.answer.recording.transcript.createdAt.toISOString(),
+                      updatedAt: question.answer.recording.transcript.updatedAt.toISOString(),
+                    }
+                  : null,
               }
             : null,
         }

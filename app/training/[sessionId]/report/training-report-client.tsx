@@ -108,6 +108,20 @@ export function TrainingReportClient({
   );
   const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
   const [analysisMessage, setAnalysisMessage] = useState("");
+  // QA 转写状态：key 为 recordingId，value 为 transcript 或 null
+  const [qaTranscripts, setQaTranscripts] = useState<
+    Record<string, TrainingTranscript | null>
+  >(
+    () =>
+      Object.fromEntries(
+        qaQuestions
+          .filter((q) => q.answer?.recording?.transcript)
+          .map((q) => [q.answer!.recording!.id, q.answer!.recording!.transcript!]),
+      ),
+  );
+  const [qaTranscribingSet, setQaTranscribingSet] = useState<Set<string>>(
+    new Set(),
+  );
 
   const strengths = Array.isArray(analysis?.strengths) ? analysis.strengths : [];
   const weaknesses = Array.isArray(analysis?.weaknesses) ? analysis.weaknesses : [];
@@ -214,6 +228,60 @@ export function TrainingReportClient({
     }
   }
 
+  async function retryQaTranscribe(recordingId: string) {
+    setQaTranscribingSet((prev) => {
+      const next = new Set(prev);
+      next.add(recordingId);
+      return next;
+    });
+
+    try {
+      const response = await fetch(
+        `/training/${sessionId}/recordings/${recordingId}/transcribe`,
+        { method: "POST" },
+      );
+      const body = (await response.json().catch(() => null)) as {
+        transcript?: TrainingTranscript;
+        error?: string;
+      } | null;
+
+      if (response.ok && body?.transcript) {
+        setQaTranscripts((prev) => ({
+          ...prev,
+          [recordingId]: body.transcript,
+        }));
+      } else if (!response.ok && body?.error) {
+        // 保留 FAILED 状态
+        setQaTranscripts((prev) => ({
+          ...prev,
+          [recordingId]: {
+            id: "",
+            recordingId,
+            sessionId,
+            status: "FAILED",
+            source: "ASR_PROVIDER",
+            language: "zh-CN",
+            text: "",
+            segmentsJson: null,
+            errorMessage: body.error,
+            startedAt: null,
+            completedAt: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        }));
+      }
+    } catch {
+      // 网络错误，不更新状态
+    } finally {
+      setQaTranscribingSet((prev) => {
+        const next = new Set(prev);
+        next.delete(recordingId);
+        return next;
+      });
+    }
+  }
+
   return (
     <div className="grid gap-5">
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -315,6 +383,72 @@ export function TrainingReportClient({
                     本题未保存录音。
                   </p>
                 )}
+
+                {/* QA 回答转写 */}
+                {question.answer?.recording ? (
+                  (() => {
+                    const rId = question.answer.recording.id;
+                    const ts = qaTranscripts[rId];
+                    const isTranscribing = qaTranscribingSet.has(rId);
+                    const status = ts?.status ?? "PENDING";
+                    const statusLabel =
+                      status === "COMPLETED"
+                        ? "已完成"
+                        : status === "FAILED"
+                          ? "失败"
+                          : status === "PROCESSING"
+                            ? "转写中"
+                            : isTranscribing
+                              ? "转写中"
+                              : "等待中";
+                    const statusColor =
+                      status === "COMPLETED"
+                        ? "text-green-600"
+                        : status === "FAILED"
+                          ? "text-red-600"
+                          : "text-amber-600";
+
+                    return (
+                      <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-slate-500">
+                            回答转写
+                            <span className={`ml-2 ${statusColor}`}>
+                              ({statusLabel})
+                            </span>
+                          </p>
+                          {(status === "FAILED" || (!ts && !isTranscribing)) && !isAborted ? (
+                            <button
+                              type="button"
+                              onClick={() => void retryQaTranscribe(rId)}
+                              disabled={isTranscribing}
+                              className="inline-flex h-7 items-center justify-center rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                            >
+                              {isTranscribing ? "转写中..." : "重试转写"}
+                            </button>
+                          ) : null}
+                        </div>
+                        {status === "COMPLETED" && ts?.text ? (
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                            {ts.text}
+                          </p>
+                        ) : status === "FAILED" && ts?.errorMessage ? (
+                          <p className="mt-2 text-xs text-red-600">
+                            {ts.errorMessage}
+                          </p>
+                        ) : isTranscribing || status === "PROCESSING" ? (
+                          <p className="mt-2 text-sm text-slate-500">
+                            转写进行中，请稍后刷新...
+                          </p>
+                        ) : (
+                          <p className="mt-2 text-sm text-slate-400">
+                            等待转写完成...
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()
+                ) : null}
               </article>
             ))}
           </div>

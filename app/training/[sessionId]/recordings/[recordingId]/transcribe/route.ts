@@ -43,9 +43,9 @@ export async function POST(
     return NextResponse.json({ error: "录音不存在。" }, { status: 404 });
   }
 
-  if (recording.phase !== "PITCH") {
+  if (recording.phase !== "PITCH" && recording.phase !== "QA") {
     return NextResponse.json(
-      { error: "仅支持转写 PITCH 阶段录音。" },
+      { error: "仅支持转写 PITCH 或 QA 阶段录音。" },
       { status: 400 },
     );
   }
