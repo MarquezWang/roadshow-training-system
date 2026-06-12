@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
+import { MicrophoneTestPanel } from "@/components/microphone-test-panel";
 
 type PrepareFile = {
   id: string;
@@ -37,6 +38,7 @@ export function TrainingPrepareClient({
     useState<RecordingPreference>(null);
   const [microphoneMessage, setMicrophoneMessage] = useState("");
   const [showSkipConfirm, setShowSkipConfirm] = useState(false);
+  const [showMicrophoneTest, setShowMicrophoneTest] = useState(false);
   const [isPreparingMicrophone, setIsPreparingMicrophone] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [message, setMessage] = useState("");
@@ -63,7 +65,23 @@ export function TrainingPrepareClient({
     }
   }
 
-  async function prepareMicrophone() {
+  async function handleMicrophoneReady() {
+    try {
+      await markReady("record");
+      setRecordingPreference("record");
+      setShowSkipConfirm(false);
+      setMicrophoneMessage("麦克风已就绪，本轮将录音。");
+    } catch (error) {
+      setRecordingPreference(null);
+      setMicrophoneMessage(
+        error instanceof Error
+          ? `麦克风准备失败：${error.message}`
+          : "麦克风准备失败。",
+      );
+    }
+  }
+
+  function openMicrophoneTest() {
     setIsPreparingMicrophone(true);
     setMessage("");
     setMicrophoneMessage("");
@@ -79,32 +97,8 @@ export function TrainingPrepareClient({
       return;
     }
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const hasLiveAudioTrack = stream
-        .getAudioTracks()
-        .some((track) => track.readyState === "live");
-
-      stream.getTracks().forEach((track) => track.stop());
-
-      if (!hasLiveAudioTrack) {
-        throw new Error("未检测到可用的麦克风音轨。");
-      }
-
-      await markReady("record");
-      setRecordingPreference("record");
-      setShowSkipConfirm(false);
-      setMicrophoneMessage("麦克风已就绪，本轮将录音。");
-    } catch (error) {
-      setRecordingPreference(null);
-      setMicrophoneMessage(
-        error instanceof Error
-          ? `麦克风准备失败：${error.message}`
-          : "麦克风准备失败。",
-      );
-    } finally {
-      setIsPreparingMicrophone(false);
-    }
+    setShowMicrophoneTest(true);
+    setIsPreparingMicrophone(false);
   }
 
   async function confirmSkipRecording() {
@@ -208,23 +202,36 @@ export function TrainingPrepareClient({
         </p>
 
         <div className="mt-4 grid gap-3">
-          <button
-            type="button"
-            onClick={() => void prepareMicrophone()}
-            disabled={isPreparingMicrophone || isStarting}
-            className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-          >
-            {isPreparingMicrophone ? "麦克风测试中..." : "开启麦克风并准备训练"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowSkipConfirm(true)}
-            disabled={isStarting}
-            className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-          >
-            暂不录音，继续训练
-          </button>
+          {!showMicrophoneTest && recordingPreference !== "record" ? (
+            <button
+              type="button"
+              onClick={() => openMicrophoneTest()}
+              disabled={isPreparingMicrophone || isStarting}
+              className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isPreparingMicrophone ? "麦克风测试中..." : "开启麦克风并准备训练"}
+            </button>
+          ) : null}
+          {!showMicrophoneTest && recordingPreference !== "record" ? (
+            <button
+              type="button"
+              onClick={() => setShowSkipConfirm(true)}
+              disabled={isStarting}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              暂不录音，继续训练
+            </button>
+          ) : null}
         </div>
+
+        {showMicrophoneTest && recordingPreference !== "record" ? (
+          <div className="mt-4">
+            <MicrophoneTestPanel
+              isPreparing={isPreparingMicrophone}
+              onReady={() => void handleMicrophoneReady()}
+            />
+          </div>
+        ) : null}
 
         {showSkipConfirm ? (
           <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3">

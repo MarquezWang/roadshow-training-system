@@ -9,6 +9,8 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 import { getTrainingFlowPath } from "@/lib/training-status";
+import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
+import { PREFERRED_DEVICE_KEY } from "@/lib/use-audio-input";
 
 type TrainingFile = {
   id: string;
@@ -185,6 +187,19 @@ function getRecordingFileExtension(mimeType: string) {
   }
 
   return "webm";
+}
+
+function getPreferredAudioConstraints(): MediaStreamConstraints {
+  if (typeof window === "undefined") return { audio: true };
+  try {
+    const deviceId = localStorage.getItem(PREFERRED_DEVICE_KEY);
+    if (deviceId) {
+      return { audio: { deviceId: { exact: deviceId } } };
+    }
+  } catch {
+    // localStorage 不可用
+  }
+  return { audio: true };
 }
 
 function stringifyAnalysisValue(value: unknown) {
@@ -751,7 +766,7 @@ export function TrainingSessionClient({
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia(getPreferredAudioConstraints());
 
       stopMediaStream();
       mediaStreamRef.current = stream;
@@ -970,7 +985,7 @@ export function TrainingSessionClient({
       }
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia(getPreferredAudioConstraints());
 
         stopMediaStream();
         mediaStreamRef.current = stream;
@@ -1738,7 +1753,8 @@ export function TrainingSessionClient({
             </button>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <MicrophoneStatusBar />
             <button
               type="button"
               onClick={() => void changePage("PREV")}

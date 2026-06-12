@@ -8,6 +8,8 @@ import type {
   RenderTask,
 } from "pdfjs-dist";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
+import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
+import { PREFERRED_DEVICE_KEY } from "@/lib/use-audio-input";
 
 type TrainingQaQuestion = {
   id: string;
@@ -110,6 +112,19 @@ function getRecordingFileExtension(mimeType: string) {
   }
 
   return "webm";
+}
+
+function getPreferredAudioConstraints(): MediaStreamConstraints {
+  if (typeof window === "undefined") return { audio: true };
+  try {
+    const deviceId = localStorage.getItem(PREFERRED_DEVICE_KEY);
+    if (deviceId) {
+      return { audio: { deviceId: { exact: deviceId } } };
+    }
+  } catch {
+    // localStorage 不可用
+  }
+  return { audio: true };
 }
 
 function estimateQuestionSpeechMs(text: string) {
@@ -567,7 +582,7 @@ export function TrainingQaClient({
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia(getPreferredAudioConstraints());
       const recorder = new MediaRecorder(stream, { mimeType });
 
       recordingChunksRef.current = [];
@@ -1285,7 +1300,8 @@ const beginJudgeQuestion = useCallback(
               </button>
             ) : null}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <MicrophoneStatusBar />
             <button
               type="button"
               onClick={() => changeMaterialPage("PREV")}
