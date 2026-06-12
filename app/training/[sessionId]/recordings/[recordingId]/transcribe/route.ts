@@ -94,7 +94,7 @@ export async function POST(
   });
 
   try {
-    const text = await transcribeAudio(absolutePath);
+    const text = await transcribeAudio(absolutePath, recording.mimeType);
     const completedAt = new Date();
 
     const updated = await prisma.trainingTranscript.update({

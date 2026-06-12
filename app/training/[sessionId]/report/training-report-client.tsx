@@ -338,7 +338,14 @@ export function TrainingReportClient({
             <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <h4 className="text-sm font-semibold text-slate-950">
-                  手动转写文本
+                  路演转写文本
+                  {transcript ? (
+                    <span className="ml-2 text-xs font-normal text-slate-400">
+                      {transcript.source === "ASR_PROVIDER"
+                        ? "（自动转写）"
+                        : "（手动输入）"}
+                    </span>
+                  ) : null}
                 </h4>
                 {transcript && !isTranscriptEditing && !isAborted ? (
                   <button
@@ -362,7 +369,7 @@ export function TrainingReportClient({
                     onChange={(event) => setTranscriptDraft(event.target.value)}
                     rows={8}
                     className="w-full resize-y rounded-md border border-slate-300 bg-white p-3 text-sm leading-6 text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-slate-500"
-                    placeholder="粘贴或编辑人工整理后的路演转写文本"
+                    placeholder="粘贴或编辑路演转写文本"
                   />
                   <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                     {transcript ? (
@@ -443,7 +450,7 @@ export function TrainingReportClient({
           </p>
         ) : !transcript?.text.trim() ? (
           <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">
-            请先保存转写文本，再生成路演表现分析。
+            请先保存路演转写文本，再生成路演表现分析。若已录音，请确认自动转写是否完成。
           </p>
         ) : null}
 

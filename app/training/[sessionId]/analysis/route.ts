@@ -359,7 +359,7 @@ export async function POST(
 
     if (!transcript?.text.trim()) {
       return NextResponse.json(
-        { error: "请先保存转写文本后再分析。" },
+        { error: "未找到路演转写文本。请确保 PITCH 阶段录音已自动转写完成，或手动保存转写文本后再分析。" },
         { status: 400 },
       );
     }

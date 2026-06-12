@@ -276,6 +276,15 @@ export function TrainingSessionClient({
   );
   const [isTranscriptSaving, setIsTranscriptSaving] = useState(false);
   const [transcriptMessage, setTranscriptMessage] = useState("");
+  const [transcribeStatus, setTranscribeStatus] = useState<
+    "idle" | "transcribing" | "completed" | "failed"
+  >(
+    initialRecording?.transcript?.status === "COMPLETED" &&
+    initialRecording.transcript.text
+      ? "completed"
+      : "idle",
+  );
+  const [transcribeErrorMessage, setTranscribeErrorMessage] = useState("");
   const [analysis, setAnalysis] = useState<TrainingAnalysis | null>(
     initialAnalysis,
   );
@@ -863,6 +872,7 @@ export function TrainingSessionClient({
         setTranscriptDraft("");
         setIsTranscriptEditing(true);
         setTranscriptMessage("");
+        return body.recording.id;
       } catch (error) {
         setRecordingStatus("FAILED");
         setRecordingMessage(
@@ -1022,7 +1032,7 @@ export function TrainingSessionClient({
       return;
     }
 
-    await new Promise<void>((resolve) => {
+    return new Promise<string | undefined>((resolve) => {
       recorder.onstop = () => {
         const endedAt = new Date();
         const blob = new Blob(recordingChunksRef.current, {
@@ -1031,14 +1041,19 @@ export function TrainingSessionClient({
 
         mediaRecorderRef.current = null;
         stopMediaStream();
-        void uploadRecording(blob, recordingStartedAtRef.current, endedAt).finally(
-          () => {
+        void uploadRecording(blob, recordingStartedAtRef.current, endedAt)
+          .then((savedRecordingId) => {
             recordingChunksRef.current = [];
             recordingStartedAtRef.current = null;
             recordingMimeTypeRef.current = "";
-            resolve();
-          },
-        );
+            resolve(savedRecordingId);
+          })
+          .catch(() => {
+            recordingChunksRef.current = [];
+            recordingStartedAtRef.current = null;
+            recordingMimeTypeRef.current = "";
+            resolve(undefined);
+          });
       };
 
       try {
@@ -1049,7 +1064,7 @@ export function TrainingSessionClient({
         stopMediaStream();
         setRecordingStatus("FAILED");
         setRecordingMessage("停止录音失败，未保存音频。");
-        resolve();
+        resolve(undefined);
       }
     });
   }, [stopMediaStream, uploadRecording]);
@@ -1126,6 +1141,74 @@ export function TrainingSessionClient({
     }
   }, [recordingId, sessionId, transcriptDraft]);
 
+  const triggerTranscribe = useCallback(
+    async (targetRecordingId?: string) => {
+      const rid = targetRecordingId ?? recordingId;
+
+      if (!rid) {
+        setTranscribeErrorMessage("没有录音 ID，无法触发转写。");
+        return;
+      }
+
+      const transcribeUrl = `/training/${sessionId}/recordings/${rid}/transcribe`;
+      console.log("[triggerTranscribe]", {
+        sessionId,
+        savedRecordingId: targetRecordingId,
+        recordingId,
+        rid,
+        transcribeUrl,
+      });
+
+      setTranscribeStatus("transcribing");
+      setTranscribeErrorMessage("");
+
+      try {
+        const response = await fetch(transcribeUrl, { method: "POST" });
+
+        console.log("[triggerTranscribe] response", {
+          status: response.status,
+          statusText: response.statusText,
+          ok: response.ok,
+          url: response.url,
+        });
+
+        const body = (await response.json().catch(() => null)) as {
+          transcript?: TrainingTranscript;
+          error?: string;
+        } | null;
+
+        if (!response.ok) {
+          throw new Error(body?.error ?? `自动转写请求失败 (HTTP ${response.status})。`);
+        }
+
+        const transcript = body?.transcript;
+
+        if (
+          transcript &&
+          transcript.status === "COMPLETED" &&
+          transcript.text
+        ) {
+          setTranscript(transcript);
+          setTranscriptDraft(transcript.text);
+          setIsTranscriptEditing(false);
+          setTranscribeStatus("completed");
+          setTranscriptMessage("自动转写已完成。");
+        } else {
+          setTranscribeStatus("failed");
+          setTranscribeErrorMessage(
+            transcript?.errorMessage ?? "自动转写未返回有效文本。",
+          );
+        }
+      } catch (error) {
+        setTranscribeStatus("failed");
+        setTranscribeErrorMessage(
+          error instanceof Error ? error.message : "自动转写失败。",
+        );
+      }
+    },
+    [recordingId, sessionId],
+  );
+
   const generateAnalysis = useCallback(async () => {
     if (!isEnded) {
       setAnalysisMessage("请先结束路演后再分析。");
@@ -1133,7 +1216,15 @@ export function TrainingSessionClient({
     }
 
     if (!transcript?.text.trim()) {
-      setAnalysisMessage("请先保存转写文本后再分析。");
+      if (transcribeStatus === "transcribing") {
+        setAnalysisMessage("自动转写仍在进行中，请等待转写完成后再生成分析。");
+      } else if (transcribeStatus === "failed") {
+        setAnalysisMessage(
+          "自动转写未完成，无法生成分析。请先重试转写或手动输入转写文本。",
+        );
+      } else {
+        setAnalysisMessage("请先保存转写文本后再分析。");
+      }
       return;
     }
 
@@ -1166,7 +1257,7 @@ export function TrainingSessionClient({
     } finally {
       setIsAnalysisLoading(false);
     }
-  }, [isEnded, sessionId, transcript]);
+  }, [isEnded, sessionId, transcript, transcribeStatus]);
 
   const recordSlideEvent = useCallback(
     async (eventType: "NEXT" | "PREV" | "JUMP", nextPageIndex: number) => {
@@ -1410,7 +1501,16 @@ export function TrainingSessionClient({
       );
 
       if (shouldUploadRecording) {
-        await stopRecordingAndUpload();
+        const savedRecordingId = await stopRecordingAndUpload();
+
+        if (savedRecordingId) {
+          console.log("[endPitch] triggering auto-transcribe", {
+            sessionId,
+            savedRecordingId,
+          });
+          setRecordingMessage("录音已保存，正在自动转写路演内容…");
+          await triggerTranscribe(savedRecordingId);
+        }
       }
 
       if (!shouldUploadRecording) {
@@ -1443,6 +1543,7 @@ export function TrainingSessionClient({
     sessionId,
     stopMediaStream,
     stopRecordingAndUpload,
+    triggerTranscribe,
   ]);
 
   useEffect(() => {
@@ -1833,6 +1934,86 @@ export function TrainingSessionClient({
             >
               <track kind="captions" />
             </audio>
+          ) : null}
+          {transcribeStatus !== "idle" ? (
+            <div className={transcriptBoxClassName}>
+              <div className="flex items-center justify-between">
+                <h3
+                  className={
+                    isBigScreenMode
+                      ? "text-sm font-semibold text-white"
+                      : "text-sm font-semibold text-slate-950"
+                  }
+                >
+                  自动转写
+                </h3>
+                {transcribeStatus === "transcribing" ? (
+                  <span
+                    className={
+                      isBigScreenMode
+                        ? "text-xs text-blue-300"
+                        : "text-xs text-blue-600"
+                    }
+                  >
+                    转写中…
+                  </span>
+                ) : transcribeStatus === "completed" ? (
+                  <span
+                    className={
+                      isBigScreenMode
+                        ? "text-xs text-green-300"
+                        : "text-xs text-green-600"
+                    }
+                  >
+                    转写完成
+                  </span>
+                ) : (
+                  <span
+                    className={
+                      isBigScreenMode
+                        ? "text-xs text-red-300"
+                        : "text-xs text-red-600"
+                    }
+                  >
+                    转写失败
+                  </span>
+                )}
+              </div>
+              {transcribeStatus === "transcribing" ? (
+                <p
+                  className={
+                    isBigScreenMode
+                      ? "mt-2 text-xs leading-5 text-slate-300"
+                      : "mt-2 text-xs leading-5 text-slate-600"
+                  }
+                >
+                  正在自动转写路演语音内容，请稍候…
+                </p>
+              ) : transcribeStatus === "failed" ? (
+                <div className="mt-2">
+                  <p
+                    className={
+                      isBigScreenMode
+                        ? "text-xs leading-5 text-red-300"
+                        : "text-xs leading-5 text-red-600"
+                    }
+                  >
+                    {transcribeErrorMessage || "自动转写失败，可重试。"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void triggerTranscribe()}
+                    className={
+                      isBigScreenMode
+                        ? "mt-2 rounded-md border border-blue-500 bg-blue-500/20 px-3 py-1 text-xs text-blue-300 hover:bg-blue-500/30"
+                        : "mt-2 rounded-md border border-blue-300 bg-blue-50 px-3 py-1 text-xs text-blue-700 hover:bg-blue-100"
+                    }
+                  >
+                    重试转写
+                  </button>
+                </div>
+              ) : null}
+            </div>
           ) : null}
           {canShowTranscriptEditor ? (
             <div className={transcriptBoxClassName}>
