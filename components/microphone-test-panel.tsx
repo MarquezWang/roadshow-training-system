@@ -47,6 +47,7 @@ export function MicrophoneTestPanel({
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [gain, setGain] = useState(loadPreferredGain);
   const [sidetoneEnabled, setSidetoneEnabled] = useState(false);
+  const [isSwitchingDevice, setIsSwitchingDevice] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
 
   const { volume, status: monitorStatus } = useMicrophoneMonitor({
@@ -132,20 +133,24 @@ export function MicrophoneTestPanel({
   const handleDeviceChange = useCallback(
     (deviceId: string) => {
       setSelectedDeviceId(deviceId);
-      stopTestStream();
-      setTestStatus("requesting");
+      setIsSwitchingDevice(true);
+      setErrorMessage("");
       void (async () => {
         try {
           const stream = await getStream();
           if (stream) {
+            stopTestStream();
             streamRef.current = stream;
             setTestStream(stream);
-            // 切换设备后，sidetone 保持原状态，新 stream 会在 useMicrophoneMonitor 中重新连接
           } else {
             setTestStatus("error");
+            setErrorMessage("切换设备失败，请重新选择。");
           }
         } catch {
           setTestStatus("error");
+          setErrorMessage("切换设备时发生错误，请重试。");
+        } finally {
+          setIsSwitchingDevice(false);
         }
       })();
     },
@@ -163,7 +168,7 @@ export function MicrophoneTestPanel({
     onReady();
   }, [onReady, gain, stopTestStream]);
 
-  const isTesting = testStream !== null;
+  const isTesting = testStream !== null || isSwitchingDevice;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -179,11 +184,17 @@ export function MicrophoneTestPanel({
         <div className="mt-3 space-y-3">
           {/* 状态标签 */}
           <div className="flex items-center gap-2">
-            <span
-              className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ${statusColorMap[testStatus]}`}
-            >
-              {statusLabelMap[testStatus]}
-            </span>
+            {isSwitchingDevice ? (
+              <span className="inline-flex h-6 items-center rounded-full bg-blue-100 px-2.5 text-xs font-medium text-blue-700">
+                正在切换输入设备...
+              </span>
+            ) : (
+              <span
+                className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium ${statusColorMap[testStatus]}`}
+              >
+                {statusLabelMap[testStatus]}
+              </span>
+            )}
             {errorMessage ? (
               <span className="text-xs text-red-600">{errorMessage}</span>
             ) : null}
