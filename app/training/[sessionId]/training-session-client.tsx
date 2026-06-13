@@ -1239,10 +1239,22 @@ export function TrainingSessionClient({
         const body = (await response.json().catch(() => null)) as {
           transcript?: TrainingTranscript;
           error?: string;
+          ok?: boolean;
+          message?: string;
         } | null;
 
         if (!response.ok) {
           throw new Error(body?.error ?? `自动转写请求失败 (HTTP ${response.status})。`);
+        }
+
+        // 业务失败：HTTP 200 但 body.ok === false
+        if (body?.ok === false && body.transcript) {
+          setTranscript(body.transcript);
+          setTranscribeStatus("failed");
+          setTranscribeErrorMessage(
+            body.message ?? body.transcript.errorMessage ?? "自动转写未返回有效文本。",
+          );
+          return;
         }
 
         const transcript = body?.transcript;

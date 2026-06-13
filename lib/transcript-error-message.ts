@@ -1,6 +1,7 @@
 /**
  * 将转写原始错误信息转换为用户友好文案。
  * 不修改数据库中的原始 errorMessage，仅在展示层转换。
+ * 兼容新旧两种格式：旧格式含 failType=N 技术信息，新格式已是用户友好文案。
  */
 
 const failTypeMap: Record<string, string> = {
@@ -17,16 +18,49 @@ const fallbackMessage =
 /** 可重试的 failType：上传失败、转码失败、识别失败等网络/服务侧问题 */
 const retryableFailTypes = new Set(["1", "2", "3", "99"]);
 
+/** 用户友好文案中可重试的关键词 */
+const retryablePatterns = [
+  "音频上传失败",
+  "音频转码失败",
+  "音频识别失败",
+];
+
+/** 用户友好文案中不可重试的关键词 */
+const nonRetryablePatterns = [
+  "未检测到有效语音内容",
+  "音频时长校验失败",
+  "转写结果为空",
+];
+
+/**
+ * 判断 errorMessage 是否包含技术信息（旧格式）。
+ * 旧格式含有 "failType="、"订单"、"讯飞" 等关键词。
+ */
+function isRawErrorMessage(message: string): boolean {
+  return (
+    message.includes("failType=") ||
+    message.includes("订单") ||
+    message.includes("讯飞")
+  );
+}
+
 export function formatTranscriptErrorMessage(
   errorMessage?: string | null,
 ): string {
   if (!errorMessage) return fallbackMessage;
 
+  // 旧格式：尝试匹配 failType=N
   const match = errorMessage.match(/failType=(\d+)/);
   if (match && failTypeMap[match[1]]) {
     return failTypeMap[match[1]];
   }
 
+  // 已是用户友好文案（新格式），直接返回
+  if (!isRawErrorMessage(errorMessage)) {
+    return errorMessage;
+  }
+
+  // 旧格式但无法匹配 failType → 兜底
   return fallbackMessage;
 }
 
@@ -42,9 +76,15 @@ export function canRetryTranscript(
 ): boolean {
   if (!errorMessage) return false;
 
-  // 文案中明确表示无有效语音内容 → 不可重试
-  if (errorMessage.includes("未检测到有效语音内容")) return false;
+  // 新格式：匹配用户友好文案中的关键词
+  for (const pattern of nonRetryablePatterns) {
+    if (errorMessage.includes(pattern)) return false;
+  }
+  for (const pattern of retryablePatterns) {
+    if (errorMessage.includes(pattern)) return true;
+  }
 
+  // 旧格式：匹配 failType=N
   const match = errorMessage.match(/failType=(\d+)/);
   if (match && retryableFailTypes.has(match[1])) {
     return true;

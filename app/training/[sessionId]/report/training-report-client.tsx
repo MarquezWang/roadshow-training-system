@@ -253,8 +253,10 @@ export function TrainingReportClient({
   const statusPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isGeneratingAnalysisRef = useRef(false);
   const statusInFlightRef = useRef(false);
-  // 追踪已 refresh 过的已完成 transcript recordingId，避免刷新循环
-  const completedTranscriptsRef = useRef<Set<string>>(new Set());
+  // 追踪已 refresh 过的已稳定 transcript recordingId（COMPLETED 或 FAILED），避免刷新循环
+  const settledTranscriptsRef = useRef<Set<string>>(new Set());
+  // 中止报告 transcript 状态轮询
+  const abortPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // QA 转写状态：仅用于 QA Tab 展示，不参与轮询
   const [qaTranscripts, setQaTranscripts] = useState<
@@ -349,18 +351,19 @@ export function TrainingReportClient({
             (status.qaTranscriptPendingCount ?? 0) +
             (status.qaTranscriptProcessingCount ?? 0);
 
-          // 检查是否有新完成的 transcript（之前未 refresh 过的）
+          // 检查是否有新完成或新失败的 transcript（之前未 refresh 过的）
           const items = status.qaTranscriptItems ?? [];
-          const newlyCompleted = items.filter(
+          const newlySettled = items.filter(
             (item) =>
-              item.transcriptStatus === "COMPLETED" &&
-              !completedTranscriptsRef.current.has(item.recordingId),
+              (item.transcriptStatus === "COMPLETED" ||
+                item.transcriptStatus === "FAILED") &&
+              !settledTranscriptsRef.current.has(item.recordingId),
           );
 
-          if (newlyCompleted.length > 0) {
+          if (newlySettled.length > 0) {
             // 标记已 refresh，避免循环
-            newlyCompleted.forEach((item) =>
-              completedTranscriptsRef.current.add(item.recordingId),
+            newlySettled.forEach((item) =>
+              settledTranscriptsRef.current.add(item.recordingId),
             );
             router.refresh();
             // 不停止轮询，继续等待其余 transcript
@@ -455,6 +458,65 @@ export function TrainingReportClient({
       }
     };
     // 只依赖 sessionId 和 isAborted，不依赖会变化的状态
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAborted, sessionId]);
+
+  // 中止报告：轻量轮询 transcript 状态，直到全部稳定
+  useEffect(() => {
+    if (!isAborted) return;
+
+    const pollAbortTranscripts = async () => {
+      try {
+        const res = await fetch(
+          `/training/${sessionId}/report/status`,
+          { cache: "no-store" },
+        );
+        const status = (await res.json().catch(() => null)) as {
+          pitchTranscriptStatus?: string;
+          qaTranscriptItems?: Array<{
+            recordingId: string;
+            transcriptStatus: string;
+          }>;
+        } | null;
+
+        if (!status) return;
+
+        const pitchUnstable =
+          status.pitchTranscriptStatus === "PENDING" ||
+          status.pitchTranscriptStatus === "PROCESSING";
+        const items = status.qaTranscriptItems ?? [];
+        const hasUnstableQa = items.some(
+          (item) =>
+            item.transcriptStatus === "PENDING" ||
+            item.transcriptStatus === "PROCESSING",
+        );
+
+        if (pitchUnstable || hasUnstableQa) {
+          router.refresh();
+          return;
+        }
+
+        // 全部稳定，停止轮询
+        if (abortPollTimerRef.current) {
+          clearInterval(abortPollTimerRef.current);
+          abortPollTimerRef.current = null;
+        }
+      } catch {
+        // 忽略轮询网络错误
+      }
+    };
+
+    void pollAbortTranscripts();
+    abortPollTimerRef.current = setInterval(() => {
+      void pollAbortTranscripts();
+    }, 4000);
+
+    return () => {
+      if (abortPollTimerRef.current) {
+        clearInterval(abortPollTimerRef.current);
+        abortPollTimerRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAborted, sessionId]);
 
@@ -616,15 +678,18 @@ export function TrainingReportClient({
       const body = (await response.json().catch(() => null)) as {
         transcript?: TrainingTranscript;
         error?: string;
+        ok?: boolean;
+        message?: string;
       } | null;
 
       if (response.ok && body?.transcript) {
+        // 成功或业务失败：都有 transcript 对象
         setQaTranscripts((prev) => ({
           ...prev,
           [recordingId]: body.transcript!,
         }));
       } else if (!response.ok && body?.error) {
-        // 保留 FAILED 状态
+        // 系统错误 500：构造 FAILED 状态
         setQaTranscripts((prev) => ({
           ...prev,
           [recordingId]: {

@@ -5,6 +5,8 @@ import { tmpdir } from "os";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { TranscribeBusinessError } from "@/lib/transcribe-error";
+import { formatTranscriptErrorMessage } from "@/lib/transcript-error-message";
 
 const execFileAsync = promisify(execFile);
 
@@ -498,9 +500,10 @@ async function pollResult(
 
     // status=-1：失败
     if (orderInfo.status === -1) {
-      throw new Error(
-        `讯飞转写失败：订单 ${orderId} 处理失败 (failType=${orderInfo.failType} descInfo=${primaryBody.descInfo ?? "无详情"})。`,
-      );
+      const failType = orderInfo.failType;
+      const rawMsg = `讯飞转写失败：订单 ${orderId} 处理失败 (failType=${failType} descInfo=${primaryBody.descInfo ?? "无详情"})。`;
+      const userMsg = formatTranscriptErrorMessage(rawMsg);
+      throw new TranscribeBusinessError(userMsg, rawMsg);
     }
 
     // status=0 或 3：继续轮询
@@ -777,12 +780,15 @@ function extractTextFromResult(orderResult: unknown): string {
     const text = sentences.join("");
 
     if (!text.trim()) {
-      throw new Error("转写结果为空。");
+      throw new TranscribeBusinessError(
+        "转写结果为空，可能是静音、声音过小或录音时间过短。",
+        "转写结果为空。",
+      );
     }
 
     return text;
   } catch (error) {
-    if (error instanceof Error && error.message === "转写结果为空。") {
+    if (error instanceof TranscribeBusinessError || (error instanceof Error && error.message === "转写结果为空。")) {
       throw error;
     }
 
