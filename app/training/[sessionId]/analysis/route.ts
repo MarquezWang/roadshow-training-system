@@ -414,6 +414,7 @@ export async function POST(
                 id: true,
                 durationSec: true,
                 answerText: true,
+                endedAt: true,
                 recording: {
                   select: {
                     id: true,
@@ -564,7 +565,11 @@ export async function POST(
 
     processingAnalysisId = processingAnalysis.id;
 
-    const qaData = session.trainingQuestions.map((q) => {
+    const enteredQuestions = session.trainingQuestions.filter(
+      (q) => q.answer !== null,
+    );
+
+    const qaData = enteredQuestions.map((q) => {
       const transcribeStatus = q.answer?.recording?.transcript?.status ?? null;
       const transcribeText = q.answer?.recording?.transcript?.text ?? null;
       const isPendingOrProcessing =

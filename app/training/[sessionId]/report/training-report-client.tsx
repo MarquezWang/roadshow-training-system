@@ -1187,6 +1187,19 @@ export function TrainingReportClient({
 
       {/* === 答辩表现 Tab === */}
       {activeTab === "qa" && (
+        (() => {
+          // 只展示用户实际进入过的题目（有 TrainingAnswer 才算进入过）
+          const enteredQuestions = qaQuestions.filter(
+            (q) => q.answer !== null,
+          );
+          const skippedCount = qaQuestions.length - enteredQuestions.length;
+          // QA 复盘也仅过滤已进入的题目
+          const enteredQuestionIds = new Set(enteredQuestions.map((q) => q.id));
+          const enteredQaReviews = (analysis?.qaReviews ?? []).filter(
+            (r) => enteredQuestionIds.has(r.questionId),
+          );
+
+          return (
         <div className="grid gap-6">
           <section className="rounded-lg border border-slate-100 bg-white p-6">
             <h2 className="text-sm font-semibold text-slate-800">
@@ -1195,6 +1208,16 @@ export function TrainingReportClient({
             <p className="mt-1 text-xs text-slate-400">
               评委提问与用户回答逐题复盘。
             </p>
+
+            {skippedCount > 0 ? (
+              <p className="mt-3 rounded-md border border-amber-100 bg-amber-50/70 px-3 py-2 text-xs text-amber-800">
+                本次答辩实际进行 {enteredQuestions.length} 题
+                {skippedCount > 0
+                  ? `，${skippedCount} 道预生成问题因时间用尽未进入`
+                  : ""}
+                。
+              </p>
+            ) : null}
 
             {isAborted ? (
               <p className="mt-4 rounded-md border border-slate-100 bg-slate-50/50 p-3 text-sm text-slate-600">
@@ -1216,9 +1239,9 @@ export function TrainingReportClient({
               </p>
             ) : null}
 
-            {qaQuestions.length > 0 ? (
+            {enteredQuestions.length > 0 ? (
               <div className="mt-4 grid gap-5">
-                {qaQuestions.map((question) => {
+                {enteredQuestions.map((question) => {
                   const qType = question.questionType ?? "QUESTION";
                   const typeLabel =
                     qType === "TECH"
@@ -1247,7 +1270,7 @@ export function TrainingReportClient({
                               : "主要考察答辩应变能力";
 
                   // 查找本题对应的 qaReview
-                  const qaReview = analysis?.qaReviews?.find(
+                  const qaReview = enteredQaReviews.find(
                     (r) => r.questionId === question.id,
                   );
 
@@ -1585,7 +1608,8 @@ export function TrainingReportClient({
             )}
           </section>
         </div>
-      )}
+          );
+        })())}
     </div>
     </div>
   );
