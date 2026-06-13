@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { formatTranscriptErrorMessage, canRetryTranscript } from "@/lib/transcript-error-message";
 
 type TrainingTranscript = {
   id: string;
@@ -593,6 +594,14 @@ export function TrainingReportClient({
   }
 
   async function retryQaTranscribe(recordingId: string) {
+    // 检查当前失败类型是否允许重试
+    const currentTs = qaTranscripts[recordingId];
+    if (currentTs?.status === "FAILED" && !canRetryTranscript(currentTs.errorMessage)) {
+      return;
+    }
+    // 防止重复提交
+    if (qaTranscribingSet.has(recordingId)) return;
+
     setQaTranscribingSet((prev) => {
       const next = new Set(prev);
       next.add(recordingId);
@@ -830,7 +839,7 @@ export function TrainingReportClient({
                           </div>
                           {recording.transcript.errorMessage ? (
                             <p className="mt-1 text-xs text-red-400">
-                              {recording.transcript.errorMessage}
+                              {formatTranscriptErrorMessage(recording.transcript.errorMessage)}
                             </p>
                           ) : null}
                         </div>
@@ -984,20 +993,35 @@ export function TrainingReportClient({
                                       {question.answer.recording.transcript
                                                   .errorMessage ? (
                                                 <p className="mt-1 text-xs text-red-400">
-                                                  {question.answer.recording.transcript.errorMessage}
+                                                  {formatTranscriptErrorMessage(question.answer.recording.transcript.errorMessage)}
                                                 </p>
                                               ) : null}
-                                              <button
-                                                type="button"
-                                                onClick={() => {
-                                                  void retryQaTranscribe(
-                                                    question.answer!.recording!.id,
-                                                  );
-                                                }}
-                                                className="mt-2 inline-flex h-7 items-center rounded border border-red-200 bg-white px-2.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50"
-                                              >
-                                                重试转写
-                                              </button>
+                                              {canRetryTranscript(
+                                                question.answer.recording.transcript.errorMessage,
+                                              ) ? (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    void retryQaTranscribe(
+                                                      question.answer!.recording!.id,
+                                                    );
+                                                  }}
+                                                  disabled={qaTranscribingSet.has(
+                                                    question.answer.recording.id,
+                                                  )}
+                                                  className="mt-2 inline-flex h-7 items-center rounded border border-red-200 bg-white px-2.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                                                >
+                                                  {qaTranscribingSet.has(
+                                                    question.answer.recording.id,
+                                                  )
+                                                    ? "转写中..."
+                                                    : "重试转写"}
+                                                </button>
+                                              ) : (
+                                                <p className="mt-1 text-xs text-slate-400">
+                                                  当前失败类型不建议重试
+                                                </p>
+                                              )}
                                     </div>
                                   ) : (
                                     <div className="mt-1">
@@ -1815,21 +1839,27 @@ export function TrainingReportClient({
                                     查看错误详情
                                   </summary>
                                   <p className="mt-1 text-xs text-red-400">
-                                    {ts?.errorMessage ?? "未知错误"}
+                                    {formatTranscriptErrorMessage(ts?.errorMessage ?? null)}
                                   </p>
                                   {!isAborted ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        void retryQaTranscribe(rId)
-                                      }
-                                      disabled={isTranscribing}
-                                      className="mt-2 inline-flex h-7 items-center justify-center rounded border border-red-200 bg-white px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400"
-                                    >
-                                      {isTranscribing
-                                        ? "转写中..."
-                                        : "重试转写"}
-                                    </button>
+                                    canRetryTranscript(ts?.errorMessage ?? null) ? (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void retryQaTranscribe(rId)
+                                        }
+                                        disabled={isTranscribing}
+                                        className="mt-2 inline-flex h-7 items-center justify-center rounded border border-red-200 bg-white px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                                      >
+                                        {isTranscribing
+                                          ? "转写中..."
+                                          : "重试转写"}
+                                      </button>
+                                    ) : (
+                                      <p className="mt-1 text-xs text-slate-400">
+                                        当前失败类型不建议重试
+                                      </p>
+                                    )
                                   ) : null}
                                 </details>
                               ) : null}
