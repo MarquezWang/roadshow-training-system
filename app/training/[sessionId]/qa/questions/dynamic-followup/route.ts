@@ -476,7 +476,7 @@ export async function POST(
           });
           const contentResult = await callAI({
             systemPrompt:
-              "你是一名专业路演答辩评委，只输出一个问题或 NO_DYNAMIC_FOLLOWUP。",
+              "你是一名专业路演答辩评委，只输出一个问题。",
             userPrompt: contentPrompt,
             temperature: 0.3,
             maxOutputTokens: 500,

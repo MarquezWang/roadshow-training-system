@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { devLog } from "@/lib/dev-log";
 import { TrainingQaClient } from "./training-qa-client";
 
 type TrainingQaPageProps = Readonly<{
@@ -84,7 +85,7 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
     redirect(`/training/${session.id}/report`);
   }
 
-  console.log("[qa:page] rendering QA page", {
+  devLog("[qa:page] rendering QA page", {
     sessionId,
     status: session.status,
     questionsCount: session.trainingQuestions.length,
