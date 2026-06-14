@@ -140,6 +140,9 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
         }))}
         previewFile={previewFile}
         files={session.project.fileAssets}
+        dynamicFollowupExperiment={
+          process.env.DYNAMIC_FOLLOWUP_EXPERIMENT === "true"
+        }
       />
     </main>
   );

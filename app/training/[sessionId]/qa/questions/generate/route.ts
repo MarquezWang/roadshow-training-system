@@ -334,6 +334,7 @@ export async function POST(
           getLatestTranscript(session.id),
           getLatestPitchAnalysis(session.id),
         ]);
+
       const userPrompt = renderPrompt(template, {
         project: aiContext.project,
         files: aiContext.files.map((file) => ({
@@ -399,7 +400,7 @@ export async function POST(
           orderIndex: question.orderIndex,
           questionText: question.questionText,
           questionType: question.questionType,
-          source: "AI",
+          source: question.source ?? "AI",
           basis: question.basis,
         })),
       });
