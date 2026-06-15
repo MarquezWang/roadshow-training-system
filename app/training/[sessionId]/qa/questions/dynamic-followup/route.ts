@@ -48,6 +48,12 @@ interface DebugInfo {
   contentFallbackNormalizedOutput?: string | null;
   contentFallbackValidationReason?: string | null;
   contentFallbackUsed?: boolean;
+  contentFallbackRetryAttempted?: boolean;
+  contentFallbackRetryRawAiOutput?: string | null;
+  contentFallbackRetryNormalizedOutput?: string | null;
+  contentFallbackRetryValidationReason?: string | null;
+  contentFallbackRetryUsed?: boolean;
+  contentFallbackError?: string | null;
   targetQuestionText?: string | null;
   otherQuestionsCount?: number;
   otherQuestionsPreview?: string[];
@@ -305,20 +311,123 @@ export async function POST(
     const MIN_QUESTION_LENGTH = 10;
     const MAX_QUESTION_LENGTH = 200;
 
+    function validateQuestionText(
+      text: string,
+    ): string | null {
+      if (!text) return "output_empty";
+      if (text.length < MIN_QUESTION_LENGTH) return "output_too_short";
+      if (text.length > MAX_QUESTION_LENGTH) return "output_too_long";
+      if (!text.includes("?") && !text.includes("？")) return "output_not_question";
+      return null;
+    }
+
+    function isMismatchStyleQuestion(text: string) {
+      return (
+        text.includes("材料里写") ||
+        text.includes("提交的是") ||
+        text.includes("刚才主要讲") ||
+        text.includes("主要讲到了") ||
+        text.includes("跨度") ||
+        text.includes("偏离了提交项目") ||
+        text.includes("本轮路演内容") ||
+        text.includes("现场讲述和项目材料")
+      );
+    }
+
+    function countQuestionMarks(text: string) {
+      return (text.match(/[?？]/g) ?? []).length;
+    }
+
+    function hasContextLeak(text: string) {
+      const upperText = text.toUpperCase();
+      const contextLeakMarkers = [
+        "Project:",
+        "已有问题",
+        "-- 1 of",
+        "输出要求",
+        "Pitch 转写",
+      ];
+
+      return (
+        upperText.includes("TRAINING SYSTEM") ||
+        contextLeakMarkers.some((marker) => text.includes(marker))
+      );
+    }
+
+    function normalizeQuestionForOverlap(text: string) {
+      return text
+        .trim()
+        .replace(/\s+/g, "")
+        .replace(/[?？。,.，、：:；;"“”'‘’]/g, "");
+    }
+
+    function duplicatesRegularQuestion(
+      text: string,
+      regularQuestions: typeof otherQuestions,
+    ) {
+      const normalizedText = normalizeQuestionForOverlap(text);
+
+      if (!normalizedText) {
+        return false;
+      }
+
+      return regularQuestions.some((question) => {
+        const normalizedQuestion = normalizeQuestionForOverlap(
+          question.questionText,
+        );
+
+        if (!normalizedQuestion) {
+          return false;
+        }
+
+        const prefix = normalizedQuestion.slice(0, 20);
+
+        return (
+          normalizedText.includes(normalizedQuestion) ||
+          normalizedQuestion.includes(normalizedText) ||
+          (prefix.length >= 12 && normalizedText.includes(prefix))
+        );
+      });
+    }
+
+    function validateMainFollowupText(text: string) {
+      if (isMismatchStyleQuestion(text)) return "main_output_mismatch_style";
+      if (text.length > 180) return "main_output_too_long";
+      if (hasContextLeak(text)) return "main_output_context_leak";
+      if (countQuestionMarks(text) > 1) return "main_output_multiple_questions";
+      if (duplicatesRegularQuestion(text, otherQuestions)) {
+        return "main_output_duplicate_regular_question";
+      }
+
+      return validateQuestionText(text);
+    }
+
     const rawAiOutput = followupResult.text;
     const followupText = rawAiOutput.trim();
+    const mainValidationReason =
+      followupText === "NO_DYNAMIC_FOLLOWUP"
+        ? "ai_returned_no_dynamic_followup"
+        : validateMainFollowupText(followupText);
 
-    // AI 明确表示无法生成合格追问
-    if (followupText === "NO_DYNAMIC_FOLLOWUP") {
-      devLog(
-        "[dynamic-followup:POST] AI returned NO_DYNAMIC_FOLLOWUP",
-        { sessionId },
-      );
+    // AI 明确表示无法生成合格追问，或 main 输出不适合直接入库
+    if (mainValidationReason) {
+      if (followupText === "NO_DYNAMIC_FOLLOWUP") {
+        devLog(
+          "[dynamic-followup:POST] AI returned NO_DYNAMIC_FOLLOWUP",
+          { sessionId },
+        );
+      } else {
+        devWarn("[dynamic-followup:POST] main output rejected", {
+          sessionId,
+          reason: mainValidationReason,
+          text: followupText.slice(0, 100),
+        });
+      }
       debugInfo.pitchTextLength = transcriptText.length;
       debugInfo.pitchTextPreview = transcriptText.slice(0, 200);
       debugInfo.rawAiOutput = rawAiOutput;
       debugInfo.normalizedAiOutput = followupText;
-      debugInfo.validationReason = "ai_returned_no_dynamic_followup";
+      debugInfo.validationReason = mainValidationReason;
       debugInfo.targetQuestionId = targetQuestion.id;
 
       // 兜底：有项目上下文时，尝试 mismatch fallback
@@ -495,67 +604,156 @@ export async function POST(
               "[dynamic-followup:POST] content fallback also returned NO_DYNAMIC_FOLLOWUP",
               { sessionId },
             );
-          } else if (
-            !contentText ||
-            contentText.length < MIN_QUESTION_LENGTH ||
-            contentText.length > MAX_QUESTION_LENGTH ||
-            (!contentText.includes("?") && !contentText.includes("？"))
-          ) {
-            let cfReason = "content_output_not_question";
-            if (!contentText) cfReason = "content_output_empty";
-            else if (contentText.length < MIN_QUESTION_LENGTH)
-              cfReason = "content_output_too_short";
-            else if (contentText.length > MAX_QUESTION_LENGTH)
-              cfReason = "content_output_too_long";
-            debugInfo.contentFallbackValidationReason = cfReason;
-            debugInfo.contentFallbackUsed = false;
-            devWarn(
-              "[dynamic-followup:POST] content fallback returned invalid question",
-              {
-                sessionId,
-                textLength: contentText.length,
-                text: contentText.slice(0, 100),
-              },
-            );
           } else {
-            debugInfo.contentFallbackValidationReason = null;
-            debugInfo.contentFallbackUsed = true;
-            await prisma.trainingQuestion.update({
-              where: { id: targetQuestion.id },
-              data: {
-                questionText: contentText,
-                source: "DYNAMIC_FOLLOWUP",
-              },
-            });
-            devLog(
-              "[dynamic-followup:POST] content fallback replaced question",
-              {
-                sessionId,
-                replacedQuestionId: targetQuestion.id,
-                orderIndex: targetQuestion.orderIndex,
-                textLength: contentText.length,
-              },
-            );
-            debugInfo.usedStage = "content";
-            return NextResponse.json(
-              buildSuccessResponse({
-                replacedQuestionId: targetQuestion.id,
-                orderIndex: targetQuestion.orderIndex,
-                questionText: contentText,
-                source: "DYNAMIC_FOLLOWUP",
-              }),
-            );
+            const validationReason = validateQuestionText(contentText);
+            if (validationReason) {
+              debugInfo.contentFallbackValidationReason = validationReason;
+              debugInfo.contentFallbackUsed = false;
+              devWarn(
+                "[dynamic-followup:POST] content fallback returned invalid question",
+                {
+                  sessionId,
+                  textLength: contentText.length,
+                  text: contentText.slice(0, 100),
+                },
+              );
+            } else {
+              debugInfo.contentFallbackValidationReason = null;
+              debugInfo.contentFallbackUsed = true;
+              await prisma.trainingQuestion.update({
+                where: { id: targetQuestion.id },
+                data: {
+                  questionText: contentText,
+                  source: "DYNAMIC_FOLLOWUP",
+                },
+              });
+              devLog(
+                "[dynamic-followup:POST] content fallback replaced question",
+                {
+                  sessionId,
+                  replacedQuestionId: targetQuestion.id,
+                  orderIndex: targetQuestion.orderIndex,
+                  textLength: contentText.length,
+                },
+              );
+              debugInfo.usedStage = "content";
+              return NextResponse.json(
+                buildSuccessResponse({
+                  replacedQuestionId: targetQuestion.id,
+                  orderIndex: targetQuestion.orderIndex,
+                  questionText: contentText,
+                  source: "DYNAMIC_FOLLOWUP",
+                }),
+              );
+            }
           }
         } catch (contentError) {
-          debugInfo.contentFallbackValidationReason = "content_fallback_error";
-          debugInfo.contentFallbackUsed = false;
+          debugInfo.contentFallbackError = String(contentError);
           devWarn(
-            "[dynamic-followup:POST] content fallback error",
+            "[dynamic-followup:POST] content fallback error, attempting retry",
             {
               sessionId,
               error: String(contentError),
             },
           );
+
+          // retry: 使用更短、更聚焦的 prompt
+          debugInfo.contentFallbackRetryAttempted = true;
+          try {
+            const retryContentPrompt = `请基于以下路演转写内容，生成 1 个评委追问。
+要求：
+
+1. 只输出问题文本；
+2. 不输出解释；
+3. 不输出 JSON；
+4. 不要输出 NO_DYNAMIC_FOLLOWUP；
+5. 问题不超过 100 字；
+6. 优先追问“讲到了但没有讲透”的点，例如验证方式、数据指标、落地计划、用户反馈、商业模式。
+
+项目标题：
+${projectName ?? ""}
+
+路演转写：
+${transcriptText.slice(0, 1200)}
+
+已有问题，避免完全重复：
+${otherQuestionsText.slice(0, 800)}`;
+
+            const retryResult = await callAI({
+              systemPrompt: "你是一名专业路演答辩评委，只输出一个问题。",
+              userPrompt: retryContentPrompt,
+              temperature: 0.1,
+              maxOutputTokens: 300,
+            });
+
+            const retryRaw = retryResult.text;
+            const retryText = retryRaw.trim();
+            debugInfo.contentFallbackRetryRawAiOutput = retryRaw;
+            debugInfo.contentFallbackRetryNormalizedOutput = retryText;
+
+            if (retryText === "NO_DYNAMIC_FOLLOWUP") {
+              debugInfo.contentFallbackRetryValidationReason =
+                "retry_returned_no_dynamic_followup";
+              debugInfo.contentFallbackRetryUsed = false;
+              debugInfo.contentFallbackValidationReason =
+                "content_fallback_error";
+              debugInfo.contentFallbackUsed = false;
+            } else {
+              const retryValidationReason = validateQuestionText(retryText);
+              if (retryValidationReason) {
+                debugInfo.contentFallbackRetryValidationReason =
+                  retryValidationReason;
+                debugInfo.contentFallbackRetryUsed = false;
+                debugInfo.contentFallbackValidationReason =
+                  "content_fallback_error";
+                debugInfo.contentFallbackUsed = false;
+              } else {
+                debugInfo.contentFallbackRetryValidationReason = null;
+                debugInfo.contentFallbackRetryUsed = true;
+                debugInfo.contentFallbackValidationReason = null;
+                debugInfo.contentFallbackUsed = true;
+                await prisma.trainingQuestion.update({
+                  where: { id: targetQuestion.id },
+                  data: {
+                    questionText: retryText,
+                    source: "DYNAMIC_FOLLOWUP",
+                  },
+                });
+                devLog(
+                  "[dynamic-followup:POST] content fallback retry replaced question",
+                  {
+                    sessionId,
+                    replacedQuestionId: targetQuestion.id,
+                    orderIndex: targetQuestion.orderIndex,
+                    textLength: retryText.length,
+                  },
+                );
+                debugInfo.usedStage = "content";
+                return NextResponse.json(
+                  buildSuccessResponse({
+                    replacedQuestionId: targetQuestion.id,
+                    orderIndex: targetQuestion.orderIndex,
+                    questionText: retryText,
+                    source: "DYNAMIC_FOLLOWUP",
+                  }),
+                );
+              }
+            }
+          } catch (retryError) {
+            debugInfo.contentFallbackRetryValidationReason =
+              "retry_error";
+            debugInfo.contentFallbackRetryUsed = false;
+            debugInfo.contentFallbackValidationReason =
+              "content_fallback_error";
+            debugInfo.contentFallbackUsed = false;
+            devWarn(
+              "[dynamic-followup:POST] content fallback retry also failed",
+              {
+                sessionId,
+                error: String(retryError),
+              },
+            );
+          }
         }
       }
 

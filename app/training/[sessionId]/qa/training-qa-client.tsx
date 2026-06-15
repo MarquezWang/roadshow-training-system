@@ -67,6 +67,8 @@ const recordingMimeTypeCandidates = [
   "audio/mpeg",
   "audio/wav",
 ];
+const dynamicFollowupRetryDelayMs = 2_000;
+const dynamicFollowupMaxRetries = 5;
 
 function formatDuration(totalSec: number) {
   const normalizedSec = Math.max(0, totalSec);
@@ -144,6 +146,28 @@ function isEditableOrClickableTarget(target: EventTarget | null) {
     target.closest(
       'input, textarea, select, button, a, [contenteditable="true"], [role="button"]',
     ),
+  );
+}
+
+function canAttemptDynamicFollowupPhase(phase: QaPhase) {
+  return phase === "PREPARING" || phase === "READY";
+}
+
+function isTranscriptNotReadyReason(reason: string | undefined) {
+  if (!reason) {
+    return false;
+  }
+
+  const normalizedReason = reason.trim().toLowerCase();
+
+  return (
+    normalizedReason === "pitch_transcript_not_ready" ||
+    normalizedReason === "transcript_not_ready" ||
+    normalizedReason === "no_pitch_transcript" ||
+    (normalizedReason.includes("transcript") &&
+      (normalizedReason.includes("not_ready") ||
+        normalizedReason.includes("not ready") ||
+        normalizedReason.includes("missing")))
   );
 }
 
@@ -256,6 +280,12 @@ export function TrainingQaClient({
   const hasResumedQaingRef = useRef(false);
   const isCompletingNormallyRef = useRef(false);
   const hasMoveOnRef = useRef(false);
+  const qaPhaseRef = useRef<QaPhase>(qaPhase);
+  const dynamicFollowupRetryCountRef = useRef(0);
+  const dynamicFollowupInFlightRef = useRef(false);
+  const dynamicFollowupCompletedRef = useRef(false);
+  const dynamicFollowupRetryTimerRef = useRef<number | null>(null);
+  const [dynamicFollowupRetryTick, setDynamicFollowupRetryTick] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -365,6 +395,197 @@ export function TrainingQaClient({
       }
     };
   }, [qaPhase, initialStatus]);
+
+  const clearDynamicFollowupRetryTimer = useCallback(() => {
+    if (dynamicFollowupRetryTimerRef.current !== null) {
+      window.clearTimeout(dynamicFollowupRetryTimerRef.current);
+      dynamicFollowupRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleDynamicFollowupRetry = useCallback(
+    (reason: string) => {
+      if (!canAttemptDynamicFollowupPhase(qaPhaseRef.current)) {
+        return;
+      }
+
+      if (dynamicFollowupRetryCountRef.current >= dynamicFollowupMaxRetries) {
+        dynamicFollowupCompletedRef.current = true;
+        clearDynamicFollowupRetryTimer();
+        devLog("[dynamic-followup:client] retry limit reached", {
+          sessionId,
+          reason,
+          retryCount: dynamicFollowupRetryCountRef.current,
+        });
+        return;
+      }
+
+      clearDynamicFollowupRetryTimer();
+      dynamicFollowupRetryCountRef.current += 1;
+      const nextRetryCount = dynamicFollowupRetryCountRef.current;
+
+      devLog("[dynamic-followup:client] retry scheduled", {
+        sessionId,
+        reason,
+        retryCount: nextRetryCount,
+        delayMs: dynamicFollowupRetryDelayMs,
+      });
+
+      dynamicFollowupRetryTimerRef.current = window.setTimeout(() => {
+        dynamicFollowupRetryTimerRef.current = null;
+        setDynamicFollowupRetryTick((currentTick) => currentTick + 1);
+      }, dynamicFollowupRetryDelayMs);
+    },
+    [clearDynamicFollowupRetryTimer, sessionId],
+  );
+
+  useEffect(() => {
+    return () => clearDynamicFollowupRetryTimer();
+  }, [clearDynamicFollowupRetryTimer]);
+
+  useEffect(() => {
+    qaPhaseRef.current = qaPhase;
+
+    if (!canAttemptDynamicFollowupPhase(qaPhase)) {
+      clearDynamicFollowupRetryTimer();
+    }
+  }, [clearDynamicFollowupRetryTimer, qaPhase]);
+
+  // Dynamic followup: retry while pitch transcript is not ready.
+  useEffect(() => {
+    if (!canAttemptDynamicFollowupPhase(qaPhase)) {
+      clearDynamicFollowupRetryTimer();
+      return;
+    }
+
+    if (
+      !dynamicFollowupExperiment ||
+      !isGuardResolved ||
+      questions.length === 0 ||
+      dynamicFollowupCompletedRef.current ||
+      dynamicFollowupInFlightRef.current ||
+      dynamicFollowupRetryTimerRef.current !== null ||
+      dynamicFollowupRetryCountRef.current > dynamicFollowupMaxRetries
+    ) {
+      return;
+    }
+
+    const protectedQuestionIds = questions
+      .filter(
+        (question) =>
+          question.answer?.revealedQuestionText ||
+          question.answer?.startedAt ||
+          question.answer?.endedAt,
+      )
+      .map((question) => question.id);
+
+    devLog("[dynamic-followup:client] request started", {
+      sessionId,
+      questionsCount: questions.length,
+      protectedCount: protectedQuestionIds.length,
+      retryCount: dynamicFollowupRetryCountRef.current,
+    });
+
+    dynamicFollowupInFlightRef.current = true;
+
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/training/${sessionId}/qa/questions/dynamic-followup`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              protectedQuestionIds,
+              minReplaceableOrderIndex: 1,
+            }),
+          },
+        );
+
+        if (!canAttemptDynamicFollowupPhase(qaPhaseRef.current)) {
+          devLog("[dynamic-followup:client] ignored after phase changed", {
+            sessionId,
+            qaPhase: qaPhaseRef.current,
+          });
+          return;
+        }
+
+        if (!response.ok) {
+          devLog("[dynamic-followup:client] request failed", {
+            sessionId,
+            status: response.status,
+            retryCount: dynamicFollowupRetryCountRef.current,
+          });
+          scheduleDynamicFollowupRetry(`http_${response.status}`);
+          return;
+        }
+
+        const body = (await response.json()) as {
+          ok: boolean;
+          skipped?: boolean;
+          reason?: string;
+          replacedQuestionId?: string;
+          questionText?: string;
+          source?: string;
+        };
+
+        if (body.ok && body.replacedQuestionId && body.questionText) {
+          dynamicFollowupCompletedRef.current = true;
+          clearDynamicFollowupRetryTimer();
+
+          devLog("[dynamic-followup:client] replaced question", {
+            sessionId,
+            replacedQuestionId: body.replacedQuestionId,
+          });
+
+          setQuestions((currentQuestions) =>
+            currentQuestions.map((question) =>
+              question.id === body.replacedQuestionId
+                ? {
+                    ...question,
+                    questionText: body.questionText!,
+                    source: body.source ?? "DYNAMIC_FOLLOWUP",
+                  }
+                : question,
+            ),
+          );
+        } else {
+          const reason = body.reason ?? "unknown";
+          devLog("[dynamic-followup:client] skipped", {
+            sessionId,
+            reason,
+            retryCount: dynamicFollowupRetryCountRef.current,
+          });
+
+          if (body.skipped && isTranscriptNotReadyReason(reason)) {
+            scheduleDynamicFollowupRetry(reason);
+            return;
+          }
+
+          dynamicFollowupCompletedRef.current = true;
+          clearDynamicFollowupRetryTimer();
+        }
+      } catch (error) {
+        devLog("[dynamic-followup:client] error", {
+          sessionId,
+          error: String(error),
+          retryCount: dynamicFollowupRetryCountRef.current,
+        });
+        scheduleDynamicFollowupRetry("network_error");
+      } finally {
+        dynamicFollowupInFlightRef.current = false;
+      }
+    })();
+  }, [
+    clearDynamicFollowupRetryTimer,
+    dynamicFollowupExperiment,
+    dynamicFollowupRetryTick,
+    isGuardResolved,
+    qaPhase,
+    questions,
+    scheduleDynamicFollowupRetry,
+    sessionId,
+  ]);
 
   useEffect(() => {
     const header = document.querySelector("header");
