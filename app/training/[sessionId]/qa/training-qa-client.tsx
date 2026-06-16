@@ -67,8 +67,8 @@ const recordingMimeTypeCandidates = [
   "audio/mpeg",
   "audio/wav",
 ];
-const dynamicFollowupRetryDelayMs = 2_000;
-const dynamicFollowupMaxRetries = 5;
+const dynamicFollowupRetryDelayMs = 3_000;
+const dynamicFollowupMaxRetries = 12;
 
 function formatDuration(totalSec: number) {
   const normalizedSec = Math.max(0, totalSec);
