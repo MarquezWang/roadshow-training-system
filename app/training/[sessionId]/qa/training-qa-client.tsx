@@ -261,6 +261,8 @@ export function TrainingQaClient({
   const generateTimeoutRef = useRef<number | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [preAnswerOverlay, setPreAnswerOverlay] = useState<number | null>(null);
+  const [dynamicFollowupIntroQuestion, setDynamicFollowupIntroQuestion] =
+    useState<TrainingQaQuestion | null>(null);
   const [isGuardResolved, setIsGuardResolved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   // 答辩准备页进度 (0-100)
@@ -285,6 +287,18 @@ export function TrainingQaClient({
   );
   const speechTimeoutRef = useRef<number | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
+  const dynamicFollowupIntroTimerRef = useRef<number | null>(null);
+  const beginJudgeQuestionRef = useRef<((questionIndex: number) => void) | null>(
+    null,
+  );
+  const dynamicFollowupIntroShownQuestionIdsRef = useRef<Set<string>>(
+    new Set(
+      initialStatus === "QAING" &&
+        isDynamicFollowupQuestion(initialQuestions[initialQuestionIndex] ?? null)
+        ? [initialQuestions[initialQuestionIndex]!.id]
+        : [],
+    ),
+  );
   const hasAutoEndedRef = useRef(false);
   const hasResumedQaingRef = useRef(false);
   const isCompletingNormallyRef = useRef(false);
@@ -680,6 +694,13 @@ export function TrainingQaClient({
       countdownIntervalRef.current = null;
     }
   }
+
+  const clearDynamicFollowupIntroTimer = useCallback(() => {
+    if (dynamicFollowupIntroTimerRef.current !== null) {
+      window.clearTimeout(dynamicFollowupIntroTimerRef.current);
+      dynamicFollowupIntroTimerRef.current = null;
+    }
+  }, []);
 
   const changeMaterialPage = useCallback(
     (direction: "PREV" | "NEXT") => {
@@ -1112,15 +1133,33 @@ const beginJudgeQuestion = useCallback(
         return;
       }
 
+      clearDynamicFollowupIntroTimer();
       clearSpeechTimer();
       clearCountdownTimer();
       window.speechSynthesis?.cancel();
       hasMoveOnRef.current = false;
       setCurrentQuestionIndex(questionIndex);
-      setQaPhase("ASKING");
       setMessage("");
       setQaRecordingStatus("idle");
       setQaRecordingMessage("");
+
+      if (
+        isDynamicFollowupQuestion(question) &&
+        !dynamicFollowupIntroShownQuestionIdsRef.current.has(question.id)
+      ) {
+        dynamicFollowupIntroShownQuestionIdsRef.current.add(question.id);
+        setQaPhase("ASKING");
+        setDynamicFollowupIntroQuestion(question);
+        dynamicFollowupIntroTimerRef.current = window.setTimeout(() => {
+          dynamicFollowupIntroTimerRef.current = null;
+          setDynamicFollowupIntroQuestion(null);
+          beginJudgeQuestionRef.current?.(questionIndex);
+        }, 2500);
+        return;
+      }
+
+      setDynamicFollowupIntroQuestion(null);
+      setQaPhase("ASKING");
 
       if (
         typeof window === "undefined" ||
@@ -1177,8 +1216,12 @@ const beginJudgeQuestion = useCallback(
 
       scheduleFallback();
     },
-    [beginPreAnswerCountdown, questions],
+    [beginPreAnswerCountdown, clearDynamicFollowupIntroTimer, questions],
   );
+
+  useEffect(() => {
+    beginJudgeQuestionRef.current = beginJudgeQuestion;
+  }, [beginJudgeQuestion]);
 
   const finishQaWithCurrentQuestion = useCallback(
     async (question: TrainingQaQuestion | null) => {
@@ -1306,6 +1349,7 @@ const beginJudgeQuestion = useCallback(
 
   useEffect(() => {
     return () => {
+      clearDynamicFollowupIntroTimer();
       clearSpeechTimer();
       clearCountdownTimer();
       window.speechSynthesis?.cancel();
@@ -1314,7 +1358,7 @@ const beginJudgeQuestion = useCallback(
       }
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
-  }, []);
+  }, [clearDynamicFollowupIntroTimer]);
 
   const generateQuestions = useCallback(async () => {
     devLog("[qa:client] manual retry generate", { sessionId });
@@ -1683,7 +1727,111 @@ const beginJudgeQuestion = useCallback(
           <p className="text-xl font-semibold text-white">正在结束训练...</p>
         </div>
       ) : null}
-      {preAnswerOverlay !== null ? (
+      {dynamicFollowupIntroQuestion ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-hidden bg-slate-950/45 bg-[radial-gradient(circle_at_80%_20%,rgba(99,102,241,0.16),transparent_34%),radial-gradient(circle_at_20%_80%,rgba(34,211,238,0.10),transparent_36%)] px-6 backdrop-blur-sm">
+          <div className="absolute inset-0 bg-[linear-gradient(90deg,transparent,rgba(125,211,252,0.05),transparent)] animate-[followupSweep_2.6s_ease-in-out_forwards]" />
+          <div className="relative w-full max-w-lg animate-[followupCard_2.6s_cubic-bezier(0.22,1,0.36,1)_forwards] overflow-hidden rounded-lg border border-cyan-300/35 bg-slate-950/80 p-1 shadow-[0_0_38px_rgba(34,211,238,0.18)]">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200 to-transparent" />
+            <div className="absolute -right-10 -top-10 h-28 w-28 rounded-full bg-violet-400/12 blur-3xl" />
+            <div className="absolute -bottom-10 -left-10 h-28 w-28 rounded-full bg-cyan-300/12 blur-3xl" />
+            <div className="relative overflow-hidden rounded-md border border-white/10 bg-[linear-gradient(135deg,rgba(15,23,42,0.88),rgba(30,41,59,0.78))] p-7 text-left">
+              <div className="pointer-events-none absolute inset-0 bg-[repeating-linear-gradient(0deg,rgba(255,255,255,0.03)_0px,rgba(255,255,255,0.03)_1px,transparent_1px,transparent_10px)] opacity-35" />
+              <div className="relative flex items-center justify-between gap-4">
+                <span className="inline-flex rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1 text-xs font-semibold tracking-[0.18em] text-cyan-100">
+                  DYNAMIC FOLLOW-UP
+                </span>
+                <span className="relative flex h-10 w-10 items-center justify-center rounded-full border border-violet-300/35 bg-violet-400/10">
+                  <span className="absolute h-full w-full animate-ping rounded-full border border-cyan-200/25" />
+                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-cyan-200" />
+                </span>
+              </div>
+              <div className="relative mt-8">
+                <p className="text-sm font-medium text-cyan-200">动态追问</p>
+                <h2 className="mt-2 text-4xl font-semibold tracking-wide text-white">
+                  特殊追问回合
+                </h2>
+                <p className="mt-4 text-base leading-7 text-slate-200">
+                  系统已根据本轮路演内容生成追问
+                </p>
+                <p className="mt-2 text-sm font-medium text-cyan-200">
+                  本题独立限时 1 分钟
+                </p>
+              </div>
+              <div className="relative mt-7 h-1 overflow-hidden rounded-full bg-slate-800">
+                <div className="h-full w-2/3 animate-[followupBar_2.5s_ease-in-out_forwards] rounded-full bg-gradient-to-r from-cyan-300 via-blue-400 to-violet-400" />
+              </div>
+            </div>
+          </div>
+          <style jsx>{`
+            @keyframes followupCard {
+              0% {
+                opacity: 0;
+                transform: translateX(80vw) scale(0.96);
+              }
+              18% {
+                opacity: 1;
+                transform: translateX(0) scale(1);
+              }
+              74% {
+                opacity: 1;
+                transform: translateX(0) scale(1);
+              }
+              100% {
+                opacity: 0;
+                transform: translateX(-70vw) scale(0.98);
+              }
+            }
+
+            @keyframes followupSweep {
+              0% {
+                transform: translateX(70vw);
+                opacity: 0;
+              }
+              25% {
+                opacity: 1;
+              }
+              100% {
+                transform: translateX(-70vw);
+                opacity: 0;
+              }
+            }
+
+            @keyframes followupBar {
+              0% {
+                transform: translateX(-120%);
+              }
+              82% {
+                transform: translateX(24%);
+              }
+              100% {
+                transform: translateX(120%);
+              }
+            }
+          `}</style>
+        </div>
+      ) : null}
+      {preAnswerOverlay !== null && isCurrentDynamicFollowup ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 bg-[radial-gradient(circle_at_center,rgba(79,70,229,0.10),transparent_42%)] backdrop-blur-sm">
+          <div className="relative flex h-64 w-64 items-center justify-center rounded-full border border-cyan-300/15 bg-slate-950/45 shadow-[0_0_24px_rgba(34,211,238,0.14)]">
+            <span className="absolute inset-3 animate-pulse rounded-full border border-cyan-200/20" />
+            <span className="absolute inset-8 rounded-full border border-violet-300/15" />
+            <span className="absolute h-full w-full animate-ping rounded-full border border-cyan-300/10" />
+            <div className="relative text-center">
+              <p className="text-xs font-semibold tracking-[0.18em] text-cyan-100">
+                动态追问
+              </p>
+              <p className="mt-5 animate-pulse text-7xl font-bold text-white drop-shadow-[0_0_10px_rgba(125,211,252,0.45)]">
+                {preAnswerOverlay >= 4
+                  ? "请准备"
+                  : preAnswerOverlay >= 1
+                    ? String(preAnswerOverlay)
+                    : "开始回答"}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {preAnswerOverlay !== null && !isCurrentDynamicFollowup ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <p className="text-6xl font-bold text-white">
             {preAnswerOverlay >= 4
@@ -2052,10 +2200,14 @@ const beginJudgeQuestion = useCallback(
               {qaPhase === "ANSWERING" ? (
                 <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4">
                   <p className="text-base font-semibold text-white">
-                    请开始口头回答
+                    {isCurrentDynamicFollowup
+                      ? "请回答动态追问"
+                      : "请开始口头回答"}
                   </p>
                   <p className="mt-2 text-sm leading-6 text-slate-300">
-                    仅回答期间扣减答题时间。答完后点击下方按钮保存本题用时和录音。
+                    {isCurrentDynamicFollowup
+                      ? "本题限时 1 分钟"
+                      : "仅回答期间扣减答题时间。答完后点击下方按钮保存本题用时和录音。"}
                   </p>
                   {remainingSec < 30 && hasNextBaseQuestion ? (
                     <p className="mt-3 rounded-md border border-amber-400/40 bg-amber-500/10 p-3 text-sm leading-6 text-amber-100">

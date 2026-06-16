@@ -413,15 +413,41 @@ export async function POST(
     }
 
     function isMismatchStyleQuestion(text: string) {
+      const normalizedText = text.replace(/\s+/g, "");
+      const mismatchMarkers = [
+        "材料里写",
+        "材料里写的是",
+        "材料中写",
+        "材料中写的是",
+        "材料显示",
+        "项目材料显示",
+        "项目材料里",
+        "刚才主要讲",
+        "刚才主要讲的是",
+        "刚才讲的是",
+        "主要讲到了",
+        "这两者之间有什么关联",
+        "两者之间有什么关联",
+        "两者有什么关联",
+        "项目定位发生了调整",
+        "定位发生了调整",
+        "偏离了提交项目",
+        "本轮路演内容",
+        "现场讲述和项目材料",
+        "智能咖啡机",
+      ];
+
       return (
-        text.includes("材料里写") ||
-        text.includes("提交的是") ||
-        text.includes("刚才主要讲") ||
-        text.includes("主要讲到了") ||
-        text.includes("跨度") ||
-        text.includes("偏离了提交项目") ||
-        text.includes("本轮路演内容") ||
-        text.includes("现场讲述和项目材料")
+        mismatchMarkers.some((marker) => normalizedText.includes(marker)) ||
+        ((normalizedText.includes("材料") ||
+          normalizedText.includes("提交")) &&
+          (normalizedText.includes("刚才") ||
+            normalizedText.includes("现场") ||
+            normalizedText.includes("Pitch"))) ||
+        (normalizedText.includes("两者") &&
+          normalizedText.includes("关联")) ||
+        (normalizedText.includes("材料") &&
+          normalizedText.includes("项目定位"))
       );
     }
 
@@ -493,6 +519,19 @@ export async function POST(
       return validateQuestionText(text);
     }
 
+    function validateFallbackFollowupText(text: string) {
+      if (isMismatchStyleQuestion(text)) return "fallback_output_mismatch_style";
+      if (hasContextLeak(text)) return "fallback_output_context_leak";
+      if (countQuestionMarks(text) > 1) {
+        return "fallback_output_multiple_questions";
+      }
+      if (duplicatesRegularQuestion(text, otherQuestions)) {
+        return "fallback_output_duplicate_regular_question";
+      }
+
+      return validateQuestionText(text);
+    }
+
     const rawAiOutput = followupResult.text;
     const followupText = rawAiOutput.trim();
     const mainValidationReason =
@@ -521,7 +560,7 @@ export async function POST(
       debugInfo.validationReason = mainValidationReason;
 
       // 兜底：有项目上下文时，尝试 mismatch fallback
-      const hasProjectCtx = projectContextText.length > 0;
+      const hasProjectCtx = false;
       if (hasProjectCtx) {
         debugInfo.fallbackAttempted = true;
         try {
@@ -684,7 +723,7 @@ export async function POST(
               { sessionId },
             );
           } else {
-            const validationReason = validateQuestionText(contentText);
+            const validationReason = validateFallbackFollowupText(contentText);
             if (validationReason) {
               debugInfo.contentFallbackValidationReason = validationReason;
               debugInfo.contentFallbackUsed = false;
@@ -735,9 +774,10 @@ export async function POST(
 1. 只输出问题文本；
 2. 不输出解释；
 3. 不输出 JSON；
-4. 不要输出 NO_DYNAMIC_FOLLOWUP；
-5. 问题不超过 100 字；
-6. 优先追问“讲到了但没有讲透”的点，例如验证方式、数据指标、落地计划、用户反馈、商业模式。
+4. 只能基于路演转写中明确出现的内容追问，不要引用项目材料和转写之间的差异；
+5. 如果无法基于转写可靠生成追问，只输出 NO_DYNAMIC_FOLLOWUP；
+6. 问题不超过 100 字；
+7. 优先追问“讲到了但没有讲透”的点，例如验证方式、数据指标、落地计划、用户反馈、商业模式。
 
 项目标题：
 ${projectName ?? ""}
@@ -768,7 +808,8 @@ ${otherQuestionsText.slice(0, 800)}`;
                 "content_fallback_error";
               debugInfo.contentFallbackUsed = false;
             } else {
-              const retryValidationReason = validateQuestionText(retryText);
+              const retryValidationReason =
+                validateFallbackFollowupText(retryText);
               if (retryValidationReason) {
                 debugInfo.contentFallbackRetryValidationReason =
                   retryValidationReason;
@@ -817,7 +858,7 @@ ${otherQuestionsText.slice(0, 800)}`;
       }
 
       return NextResponse.json(
-        buildDebugResponse({ reason: "no_supported_followup" }),
+        buildDebugResponse({ reason: "no_dynamic_followup" }),
       );
     }
 
