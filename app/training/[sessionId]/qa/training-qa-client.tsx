@@ -52,6 +52,7 @@ type QaRecordingStatus = "idle" | "recording" | "saving" | "saved" | "disabled";
 type PreviewMode = "standard" | "compatible";
 
 const qaLimitSec = 3 * 60;
+const dynamicFollowupAnswerLimitSec = 60;
 const pdfWorkerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.mjs",
   import.meta.url,
@@ -150,7 +151,14 @@ function isEditableOrClickableTarget(target: EventTarget | null) {
 }
 
 function canAttemptDynamicFollowupPhase(phase: QaPhase) {
-  return phase === "PREPARING" || phase === "READY";
+  return phase !== "DONE";
+}
+
+function isDynamicFollowupQuestion(question: TrainingQaQuestion | null) {
+  return (
+    question?.source === "DYNAMIC_FOLLOWUP" ||
+    question?.questionType === "FOLLOWUP"
+  );
 }
 
 function isTranscriptNotReadyReason(reason: string | undefined) {
@@ -245,6 +253,7 @@ export function TrainingQaClient({
   const [usedAnswerSec, setUsedAnswerSec] = useState(
     Math.max(0, qaLimitSec - Math.min(initialRemainingSec, qaLimitSec)),
   );
+  const [dynamicFollowupUsedSec, setDynamicFollowupUsedSec] = useState(0);
   const [message, setMessage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -295,10 +304,25 @@ export function TrainingQaClient({
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const currentQuestion = questions[currentQuestionIndex] ?? null;
   const isQaing = status === "QAING";
-  const remainingSec = Math.max(0, qaLimitSec - usedAnswerSec);
+  const isCurrentDynamicFollowup = isDynamicFollowupQuestion(currentQuestion);
+  const currentQuestionLimitSec = isCurrentDynamicFollowup
+    ? dynamicFollowupAnswerLimitSec
+    : qaLimitSec;
+  const currentQuestionUsedSec = isCurrentDynamicFollowup
+    ? dynamicFollowupUsedSec
+    : usedAnswerSec;
+  const remainingSec = Math.max(
+    0,
+    currentQuestionLimitSec - currentQuestionUsedSec,
+  );
   const isLastQuestion = currentQuestionIndex >= questions.length - 1;
+  const hasNextBaseQuestion = questions
+    .slice(currentQuestionIndex + 1)
+    .some((question) => !isDynamicFollowupQuestion(question));
   const shouldFinishAfterCurrent =
-    isLastQuestion || (remainingSec < 30 && !isLastQuestion);
+    isCurrentDynamicFollowup ||
+    isLastQuestion ||
+    (remainingSec < 30 && hasNextBaseQuestion);
   const previewUrl = previewFile
     ? `/api/files/${previewFile.id}/preview`
     : null;
@@ -524,31 +548,40 @@ export function TrainingQaClient({
           ok: boolean;
           skipped?: boolean;
           reason?: string;
-          replacedQuestionId?: string;
+          createdQuestion?: TrainingQaQuestion;
+          createdQuestionId?: string;
           questionText?: string;
           source?: string;
         };
 
-        if (body.ok && body.replacedQuestionId && body.questionText) {
+        if (body.ok && body.createdQuestion) {
           dynamicFollowupCompletedRef.current = true;
           clearDynamicFollowupRetryTimer();
 
-          devLog("[dynamic-followup:client] replaced question", {
+          devLog("[dynamic-followup:client] appended dynamic question", {
             sessionId,
-            replacedQuestionId: body.replacedQuestionId,
+            createdQuestionId:
+              body.createdQuestionId ?? body.createdQuestion.id,
           });
 
-          setQuestions((currentQuestions) =>
-            currentQuestions.map((question) =>
-              question.id === body.replacedQuestionId
-                ? {
-                    ...question,
-                    questionText: body.questionText!,
-                    source: body.source ?? "DYNAMIC_FOLLOWUP",
-                  }
-                : question,
-            ),
-          );
+          if (qaPhaseRef.current !== "DONE") {
+            setQuestions((currentQuestions) => {
+              const hasDynamicQuestion = currentQuestions.some(
+                (question) =>
+                  question.id === body.createdQuestion!.id ||
+                  (question.orderIndex === body.createdQuestion!.orderIndex &&
+                    question.source === "DYNAMIC_FOLLOWUP"),
+              );
+
+              if (hasDynamicQuestion) {
+                return currentQuestions;
+              }
+
+              return [...currentQuestions, body.createdQuestion!].sort(
+                (first, second) => first.orderIndex - second.orderIndex,
+              );
+            });
+          }
         } else {
           const reason = body.reason ?? "unknown";
           devLog("[dynamic-followup:client] skipped", {
@@ -666,6 +699,19 @@ export function TrainingQaClient({
   );
 
   const getCurrentUsedAnswerSec = useCallback(() => {
+    if (isDynamicFollowupQuestion(currentQuestion)) {
+      if (qaPhase !== "ANSWERING" || answerPhaseStartedMsRef.current === null) {
+        return dynamicFollowupUsedSec;
+      }
+
+      const elapsedInPhase = Math.max(
+        0,
+        Math.floor((Date.now() - answerPhaseStartedMsRef.current) / 1000),
+      );
+
+      return Math.min(dynamicFollowupAnswerLimitSec, elapsedInPhase);
+    }
+
     if (qaPhase !== "ANSWERING" || answerPhaseStartedMsRef.current === null) {
       return usedAnswerSec;
     }
@@ -679,7 +725,7 @@ export function TrainingQaClient({
       qaLimitSec,
       answerElapsedBeforePhaseRef.current + elapsedInPhase,
     );
-  }, [qaPhase, usedAnswerSec]);
+  }, [currentQuestion, dynamicFollowupUsedSec, qaPhase, usedAnswerSec]);
 
   useEffect(() => {
     if (!previewFile || !previewUrl) {
@@ -986,6 +1032,7 @@ export function TrainingQaClient({
     answerPhaseStartedMsRef.current = Date.now();
     answerElapsedBeforePhaseRef.current = currentUsedAnswerSec;
     setUsedAnswerSec(currentUsedAnswerSec);
+    setDynamicFollowupUsedSec(0);
     setQaPhase("ANSWERING");
     // 确保评委语音已停止，避免被录进用户回答
     window.speechSynthesis?.cancel();
@@ -1210,6 +1257,23 @@ const beginJudgeQuestion = useCallback(
         0,
         Math.floor((Date.now() - phaseStartedMs) / 1000),
       );
+
+      if (isDynamicFollowupQuestion(currentQuestion)) {
+        const nextUsedSec = Math.min(
+          dynamicFollowupAnswerLimitSec,
+          elapsedInPhase,
+        );
+
+        setDynamicFollowupUsedSec(nextUsedSec);
+
+        if (nextUsedSec >= dynamicFollowupAnswerLimitSec) {
+          window.clearInterval(timer);
+          void finishQaWithCurrentQuestion(currentQuestion);
+        }
+
+        return;
+      }
+
       const nextUsedSec = Math.min(
         qaLimitSec,
         answerElapsedBeforePhaseRef.current + elapsedInPhase,
@@ -1608,11 +1672,9 @@ const beginJudgeQuestion = useCallback(
     saved: "本题录音已保存",
     disabled: "本题未启用录音",
   };
-  const mainButtonLabel = isLastQuestion
+  const mainButtonLabel = shouldFinishAfterCurrent
     ? "完成答辩"
-    : remainingSec < 30
-      ? "保存本题并完成答辩"
-      : "回答完毕，进入下一题";
+    : "回答完毕，进入下一题";
 
   return (
     <>
@@ -1995,7 +2057,7 @@ const beginJudgeQuestion = useCallback(
                   <p className="mt-2 text-sm leading-6 text-slate-300">
                     仅回答期间扣减答题时间。答完后点击下方按钮保存本题用时和录音。
                   </p>
-                  {remainingSec < 30 && !isLastQuestion ? (
+                  {remainingSec < 30 && hasNextBaseQuestion ? (
                     <p className="mt-3 rounded-md border border-amber-400/40 bg-amber-500/10 p-3 text-sm leading-6 text-amber-100">
                       剩余答题时间较少，建议保存本题并完成答辩。
                     </p>

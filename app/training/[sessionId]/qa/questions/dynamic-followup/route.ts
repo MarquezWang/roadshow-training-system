@@ -24,8 +24,6 @@ interface DebugInfo {
   rawAiOutput?: string;
   normalizedAiOutput?: string;
   validationReason?: string;
-  replaceableQuestionIds?: string[];
-  targetQuestionId?: string;
   hasProjectContext?: boolean;
   projectTitle?: string | null;
   projectContextLength?: number;
@@ -54,12 +52,73 @@ interface DebugInfo {
   contentFallbackRetryValidationReason?: string | null;
   contentFallbackRetryUsed?: boolean;
   contentFallbackError?: string | null;
-  targetQuestionText?: string | null;
   otherQuestionsCount?: number;
   otherQuestionsPreview?: string[];
   hasPitchProjectContent?: boolean;
   pitchProjectContentMatchedKeywords?: string[];
   usedStage?: "main" | "mismatch" | "content";
+}
+
+const DYNAMIC_FOLLOWUP_ORDER_INDEX = 4;
+const DYNAMIC_FOLLOWUP_SOURCE = "DYNAMIC_FOLLOWUP";
+const DYNAMIC_FOLLOWUP_TYPE = "FOLLOWUP";
+const DYNAMIC_FOLLOWUP_BASIS = "基于本轮 Pitch 转写生成的动态追问";
+
+const dynamicQuestionSelect = {
+  id: true,
+  orderIndex: true,
+  questionText: true,
+  questionType: true,
+  source: true,
+  basis: true,
+  answer: {
+    select: {
+      id: true,
+      answerText: true,
+      revealedQuestionText: true,
+      startedAt: true,
+      endedAt: true,
+      durationSec: true,
+    },
+  },
+} as const;
+
+function serializeDynamicQuestion(
+  question: Awaited<ReturnType<typeof findExistingDynamicQuestion>>,
+) {
+  if (!question) {
+    return null;
+  }
+
+  return {
+    id: question.id,
+    orderIndex: question.orderIndex,
+    questionText: question.questionText,
+    questionType: question.questionType,
+    source: question.source,
+    basis: question.basis,
+    answer: question.answer
+      ? {
+          id: question.answer.id,
+          answerText: question.answer.answerText,
+          revealedQuestionText: question.answer.revealedQuestionText,
+          startedAt: question.answer.startedAt?.toISOString() ?? null,
+          endedAt: question.answer.endedAt?.toISOString() ?? null,
+          durationSec: question.answer.durationSec,
+        }
+      : null,
+  };
+}
+
+async function findExistingDynamicQuestion(sessionId: string) {
+  return prisma.trainingQuestion.findFirst({
+    where: {
+      sessionId,
+      orderIndex: DYNAMIC_FOLLOWUP_ORDER_INDEX,
+      source: DYNAMIC_FOLLOWUP_SOURCE,
+    },
+    select: dynamicQuestionSelect,
+  });
 }
 
 export async function POST(
@@ -105,13 +164,15 @@ export async function POST(
       return base;
     }
 
-    function buildSuccessResponse(data: {
-      replacedQuestionId: string;
-      orderIndex: number;
-      questionText: string;
-      source: string;
-    }) {
-      const base = { ok: true, ...data };
+    function buildSuccessResponse(question: NonNullable<ReturnType<typeof serializeDynamicQuestion>>) {
+      const base = {
+        ok: true,
+        createdQuestion: question,
+        createdQuestionId: question.id,
+        orderIndex: question.orderIndex,
+        questionText: question.questionText,
+        source: question.source,
+      };
       if (debug) {
         return { ...base, debug: debugInfo };
       }
@@ -129,6 +190,67 @@ export async function POST(
       return NextResponse.json(
         { error: "训练场次不存在。" },
         { status: 404 },
+      );
+    }
+
+    async function createOrReturnDynamicQuestion(questionText: string) {
+      const existingQuestion = await findExistingDynamicQuestion(sessionId);
+      const serializedExistingQuestion =
+        serializeDynamicQuestion(existingQuestion);
+
+      if (serializedExistingQuestion) {
+        return serializedExistingQuestion;
+      }
+
+      try {
+        const createdQuestion = await prisma.trainingQuestion.create({
+          data: {
+            sessionId,
+            projectId: session.projectId,
+            orderIndex: DYNAMIC_FOLLOWUP_ORDER_INDEX,
+            questionText,
+            questionType: DYNAMIC_FOLLOWUP_TYPE,
+            source: DYNAMIC_FOLLOWUP_SOURCE,
+            basis: DYNAMIC_FOLLOWUP_BASIS,
+          },
+          select: dynamicQuestionSelect,
+        });
+
+        const serializedCreatedQuestion =
+          serializeDynamicQuestion(createdQuestion);
+
+        if (serializedCreatedQuestion) {
+          return serializedCreatedQuestion;
+        }
+      } catch (error) {
+        const fallbackQuestion = await findExistingDynamicQuestion(sessionId);
+        const serializedFallbackQuestion =
+          serializeDynamicQuestion(fallbackQuestion);
+
+        if (serializedFallbackQuestion) {
+          return serializedFallbackQuestion;
+        }
+
+        throw error;
+      }
+
+      throw new Error("dynamic followup question create failed");
+    }
+
+    const existingDynamicQuestion = await findExistingDynamicQuestion(sessionId);
+    const serializedExistingDynamicQuestion = serializeDynamicQuestion(
+      existingDynamicQuestion,
+    );
+
+    if (serializedExistingDynamicQuestion) {
+      devLog("[dynamic-followup:POST] dynamic followup already exists", {
+        sessionId,
+        createdQuestionId: serializedExistingDynamicQuestion.id,
+        orderIndex: serializedExistingDynamicQuestion.orderIndex,
+      });
+      debugInfo.usedStage = "main";
+      return NextResponse.json(
+        buildSuccessResponse(serializedExistingDynamicQuestion),
       );
     }
 
@@ -188,12 +310,11 @@ export async function POST(
 
     if (questions.length === 0) {
       devLog("[dynamic-followup:POST] no questions found", { sessionId });
-      debugInfo.validationReason = "no_replaceable_question";
-      debugInfo.replaceableQuestionIds = [];
+      debugInfo.validationReason = "no_base_questions";
       debugInfo.regularQuestionsCount = 0;
       debugInfo.regularQuestionsPreview = [];
       return NextResponse.json(
-        buildDebugResponse({ reason: "no_replaceable_question" }),
+        buildDebugResponse({ reason: "no_base_questions" }),
       );
     }
 
@@ -204,51 +325,21 @@ export async function POST(
         : q.questionText
     );
 
-    // 找到最早可替换问题
-    const targetQuestion = questions.find((q) => {
-      if (q.orderIndex < minReplaceableOrderIndex) return false;
-      if (protectedQuestionIds.includes(q.id)) return false;
-      if (q.answer !== null) return false;
-      if (q.source === "DYNAMIC_FOLLOWUP") return false;
-      return true;
-    });
-
-    if (!targetQuestion) {
-      devLog("[dynamic-followup:POST] no replaceable question", {
-        sessionId,
-        questionsCount: questions.length,
-        protectedCount: protectedQuestionIds.length,
-      });
-      const replaceableIds = questions
-        .filter((q) => {
-          if (q.orderIndex < minReplaceableOrderIndex) return false;
-          if (protectedQuestionIds.includes(q.id)) return false;
-          if (q.answer !== null) return false;
-          if (q.source === "DYNAMIC_FOLLOWUP") return false;
-          return true;
-        })
-        .map((q) => q.id);
-      debugInfo.replaceableQuestionIds = replaceableIds;
-      debugInfo.validationReason = "no_replaceable_question";
-      return NextResponse.json(
-        buildDebugResponse({ reason: "no_replaceable_question" }),
-      );
-    }
-
-    // 构建 AI 上下文
-    devLog("[dynamic-followup:POST] generating dynamic followup", {
+    // 旧参数仅保留兼容；本阶段动态追问改为追加 Q4，不再选择替换目标。
+    devLog("[dynamic-followup:POST] generating dynamic followup append", {
       sessionId,
-      targetQuestionId: targetQuestion.id,
-      targetOrderIndex: targetQuestion.orderIndex,
+      questionsCount: questions.length,
+      legacyProtectedCount: protectedQuestionIds.length,
+      legacyMinReplaceableOrderIndex: minReplaceableOrderIndex,
     });
 
-    // 构造 otherQuestions（排除 targetQuestion），避免目标问题本身阻止 AI 生成追问
-    const otherQuestions = questions.filter((q) => q.id !== targetQuestion.id);
+    const otherQuestions = questions.filter(
+      (q) => q.source !== DYNAMIC_FOLLOWUP_SOURCE,
+    );
     const otherQuestionsText = otherQuestions
       .map((q) => `第${q.orderIndex}题：${q.questionText}`)
       .join("\n");
 
-    debugInfo.targetQuestionText = targetQuestion.questionText;
     debugInfo.otherQuestionsCount = otherQuestions.length;
     debugInfo.otherQuestionsPreview = otherQuestions.slice(0, 3).map((q) =>
       q.questionText.length > 100
@@ -428,7 +519,6 @@ export async function POST(
       debugInfo.rawAiOutput = rawAiOutput;
       debugInfo.normalizedAiOutput = followupText;
       debugInfo.validationReason = mainValidationReason;
-      debugInfo.targetQuestionId = targetQuestion.id;
 
       // 兜底：有项目上下文时，尝试 mismatch fallback
       const hasProjectCtx = projectContextText.length > 0;
@@ -490,33 +580,22 @@ export async function POST(
               },
             );
           } else {
-            // fallback 生成成功，替换目标问题
             debugInfo.fallbackValidationReason = null;
             debugInfo.fallbackUsed = true;
-            await prisma.trainingQuestion.update({
-              where: { id: targetQuestion.id },
-              data: {
-                questionText: fallbackText,
-                source: "DYNAMIC_FOLLOWUP",
-              },
-            });
+            const createdQuestion =
+              await createOrReturnDynamicQuestion(fallbackText);
             devLog(
-              "[dynamic-followup:POST] mismatch fallback replaced question",
+              "[dynamic-followup:POST] mismatch fallback created dynamic question",
               {
                 sessionId,
-                replacedQuestionId: targetQuestion.id,
-                orderIndex: targetQuestion.orderIndex,
+                createdQuestionId: createdQuestion.id,
+                orderIndex: createdQuestion.orderIndex,
                 textLength: fallbackText.length,
               },
             );
             debugInfo.usedStage = "mismatch";
             return NextResponse.json(
-              buildSuccessResponse({
-                replacedQuestionId: targetQuestion.id,
-                orderIndex: targetQuestion.orderIndex,
-                questionText: fallbackText,
-                source: "DYNAMIC_FOLLOWUP",
-              }),
+              buildSuccessResponse(createdQuestion),
             );
           }
         } catch (fallbackError) {
@@ -620,30 +699,20 @@ export async function POST(
             } else {
               debugInfo.contentFallbackValidationReason = null;
               debugInfo.contentFallbackUsed = true;
-              await prisma.trainingQuestion.update({
-                where: { id: targetQuestion.id },
-                data: {
-                  questionText: contentText,
-                  source: "DYNAMIC_FOLLOWUP",
-                },
-              });
+              const createdQuestion =
+                await createOrReturnDynamicQuestion(contentText);
               devLog(
-                "[dynamic-followup:POST] content fallback replaced question",
+                "[dynamic-followup:POST] content fallback created dynamic question",
                 {
                   sessionId,
-                  replacedQuestionId: targetQuestion.id,
-                  orderIndex: targetQuestion.orderIndex,
+                  createdQuestionId: createdQuestion.id,
+                  orderIndex: createdQuestion.orderIndex,
                   textLength: contentText.length,
                 },
               );
               debugInfo.usedStage = "content";
               return NextResponse.json(
-                buildSuccessResponse({
-                  replacedQuestionId: targetQuestion.id,
-                  orderIndex: targetQuestion.orderIndex,
-                  questionText: contentText,
-                  source: "DYNAMIC_FOLLOWUP",
-                }),
+                buildSuccessResponse(createdQuestion),
               );
             }
           }
@@ -712,30 +781,20 @@ ${otherQuestionsText.slice(0, 800)}`;
                 debugInfo.contentFallbackRetryUsed = true;
                 debugInfo.contentFallbackValidationReason = null;
                 debugInfo.contentFallbackUsed = true;
-                await prisma.trainingQuestion.update({
-                  where: { id: targetQuestion.id },
-                  data: {
-                    questionText: retryText,
-                    source: "DYNAMIC_FOLLOWUP",
-                  },
-                });
+                const createdQuestion =
+                  await createOrReturnDynamicQuestion(retryText);
                 devLog(
-                  "[dynamic-followup:POST] content fallback retry replaced question",
+                  "[dynamic-followup:POST] content fallback retry created dynamic question",
                   {
                     sessionId,
-                    replacedQuestionId: targetQuestion.id,
-                    orderIndex: targetQuestion.orderIndex,
+                    createdQuestionId: createdQuestion.id,
+                    orderIndex: createdQuestion.orderIndex,
                     textLength: retryText.length,
                   },
                 );
                 debugInfo.usedStage = "content";
                 return NextResponse.json(
-                  buildSuccessResponse({
-                    replacedQuestionId: targetQuestion.id,
-                    orderIndex: targetQuestion.orderIndex,
-                    questionText: retryText,
-                    source: "DYNAMIC_FOLLOWUP",
-                  }),
+                  buildSuccessResponse(createdQuestion),
                 );
               }
             }
@@ -787,36 +846,23 @@ ${otherQuestionsText.slice(0, 800)}`;
       debugInfo.rawAiOutput = rawAiOutput;
       debugInfo.normalizedAiOutput = followupText;
       debugInfo.validationReason = validationReason;
-      debugInfo.targetQuestionId = targetQuestion.id;
       return NextResponse.json(
         buildDebugResponse({ reason: "ai_generation_failed" }),
       );
     }
 
-    // 替换目标问题
-    await prisma.trainingQuestion.update({
-      where: { id: targetQuestion.id },
-      data: {
-        questionText: followupText,
-        source: "DYNAMIC_FOLLOWUP",
-      },
-    });
+    const createdQuestion = await createOrReturnDynamicQuestion(followupText);
 
-    devLog("[dynamic-followup:POST] dynamic followup replaced", {
+    devLog("[dynamic-followup:POST] dynamic followup created", {
       sessionId,
-      replacedQuestionId: targetQuestion.id,
-      orderIndex: targetQuestion.orderIndex,
+      createdQuestionId: createdQuestion.id,
+      orderIndex: createdQuestion.orderIndex,
       textLength: followupText.length,
     });
 
     debugInfo.usedStage = "main";
     return NextResponse.json(
-      buildSuccessResponse({
-        replacedQuestionId: targetQuestion.id,
-        orderIndex: targetQuestion.orderIndex,
-        questionText: followupText,
-        source: "DYNAMIC_FOLLOWUP",
-      }),
+      buildSuccessResponse(createdQuestion),
     );
   } catch (error) {
     devWarn("[dynamic-followup:POST] unexpected error", {
