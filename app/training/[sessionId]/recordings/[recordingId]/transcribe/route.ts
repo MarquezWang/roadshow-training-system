@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { transcribeAudio } from "@/lib/transcription";
 import { TranscribeBusinessError } from "@/lib/transcribe-error";
+import { devError, devLog, devWarn } from "@/lib/dev-log";
 
 type TranscribeRouteContext = Readonly<{
   params: Promise<{
@@ -11,6 +12,95 @@ type TranscribeRouteContext = Readonly<{
     recordingId: string;
   }>;
 }>;
+
+const MAX_TRANSCRIBE_ATTEMPTS = 3;
+const TRANSCRIBE_RETRY_DELAYS_MS = [1_500, 3_000] as const;
+const TEMPORARY_TRANSCRIBE_ERROR_MESSAGE =
+  "转写服务暂时不可用，请稍后重试。";
+
+const transcriptSelect = {
+  id: true,
+  recordingId: true,
+  sessionId: true,
+  status: true,
+  source: true,
+  language: true,
+  text: true,
+  segmentsJson: true,
+  errorMessage: true,
+  startedAt: true,
+  completedAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorSummary(error: unknown) {
+  const message =
+    error instanceof TranscribeBusinessError
+      ? error.rawMessage || error.userMessage
+      : error instanceof Error
+        ? error.message
+        : String(error);
+
+  return message
+    .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [redacted]")
+    .slice(0, 500);
+}
+
+function isRetryableTranscribeError(error: unknown) {
+  const summary = getErrorSummary(error).toLowerCase();
+  const isBusinessError = error instanceof TranscribeBusinessError;
+
+  const nonRetryableIndicators = [
+    "api key",
+    "unsupported",
+    "not supported",
+    "ffmpeg",
+    "file does not exist",
+    "audio file does not exist",
+  ];
+
+  if (nonRetryableIndicators.some((indicator) => summary.includes(indicator))) {
+    return false;
+  }
+
+  const retryableIndicators = [
+    "fetch failed",
+    "network",
+    "timeout",
+    "timed out",
+    "econnreset",
+    "etimedout",
+    "socket hang up",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "internal server error",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+    "5xx",
+    "empty",
+    "为空",
+    "涓虹┖",
+    "orderresult",
+  ];
+
+  if (isBusinessError) {
+    return retryableIndicators.some((indicator) =>
+      summary.includes(indicator),
+    );
+  }
+
+  return retryableIndicators.some((indicator) => summary.includes(indicator));
+}
 
 export async function POST(
   _request: Request,
@@ -31,11 +121,7 @@ export async function POST(
       filePath: true,
       mimeType: true,
       transcript: {
-        select: {
-          id: true,
-          status: true,
-          text: true,
-        },
+        select: transcriptSelect,
       },
     },
   });
@@ -67,6 +153,19 @@ export async function POST(
     );
   }
 
+  if (
+    recording.transcript?.status === "COMPLETED" &&
+    recording.transcript.text.trim()
+  ) {
+    devLog("[transcribe:POST] completed transcript exists", {
+      sessionId,
+      recordingId,
+      transcriptId: recording.transcript.id,
+    });
+
+    return NextResponse.json({ transcript: recording.transcript });
+  }
+
   const now = new Date();
 
   await prisma.trainingTranscript.upsert({
@@ -95,39 +194,77 @@ export async function POST(
   });
 
   try {
-    const text = await transcribeAudio(absolutePath, recording.mimeType);
-    const completedAt = new Date();
+    let finalError: unknown = null;
 
-    const updated = await prisma.trainingTranscript.update({
-      where: {
+    for (
+      let attemptIndex = 1;
+      attemptIndex <= MAX_TRANSCRIBE_ATTEMPTS;
+      attemptIndex++
+    ) {
+      devLog("[transcribe:POST] ASR attempt started", {
+        sessionId,
         recordingId,
-      },
-      data: {
-        status: "COMPLETED",
-        text,
-        completedAt,
-        errorMessage: null,
-      },
-      select: {
-        id: true,
-        recordingId: true,
-        sessionId: true,
-        status: true,
-        source: true,
-        language: true,
-        text: true,
-        segmentsJson: true,
-        errorMessage: true,
-        startedAt: true,
-        completedAt: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+        attemptIndex,
+        maxAttempts: MAX_TRANSCRIBE_ATTEMPTS,
+      });
 
-    return NextResponse.json({ transcript: updated });
+      try {
+        const text = await transcribeAudio(absolutePath, recording.mimeType);
+        const completedAt = new Date();
+
+        const updated = await prisma.trainingTranscript.update({
+          where: {
+            recordingId,
+          },
+          data: {
+            status: "COMPLETED",
+            text,
+            completedAt,
+            errorMessage: null,
+          },
+          select: transcriptSelect,
+        });
+
+        devLog("[transcribe:POST] ASR attempt succeeded", {
+          sessionId,
+          recordingId,
+          attemptIndex,
+          maxAttempts: MAX_TRANSCRIBE_ATTEMPTS,
+        });
+
+        return NextResponse.json({ transcript: updated });
+      } catch (error) {
+        finalError = error;
+        const retryable = isRetryableTranscribeError(error);
+        const errorSummary = getErrorSummary(error);
+
+        devWarn("[transcribe:POST] ASR attempt failed", {
+          sessionId,
+          recordingId,
+          attemptIndex,
+          maxAttempts: MAX_TRANSCRIBE_ATTEMPTS,
+          retryable,
+          errorSummary,
+        });
+
+        if (!retryable || attemptIndex >= MAX_TRANSCRIBE_ATTEMPTS) {
+          break;
+        }
+
+        await sleep(TRANSCRIBE_RETRY_DELAYS_MS[attemptIndex - 1] ?? 3_000);
+      }
+    }
+
+    throw finalError ?? new Error(TEMPORARY_TRANSCRIBE_ERROR_MESSAGE);
   } catch (error) {
     const now = new Date();
+    const errorSummary = getErrorSummary(error);
+
+    devError("[transcribe:POST] ASR final failure", {
+      sessionId,
+      recordingId,
+      errorSummary,
+    });
 
     if (error instanceof TranscribeBusinessError) {
       // 业务失败：写入用户友好 errorMessage，返回 200
@@ -140,21 +277,7 @@ export async function POST(
           errorMessage: error.userMessage,
           completedAt: now,
         },
-        select: {
-          id: true,
-          recordingId: true,
-          sessionId: true,
-          status: true,
-          source: true,
-          language: true,
-          text: true,
-          segmentsJson: true,
-          errorMessage: true,
-          startedAt: true,
-          completedAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: transcriptSelect,
       });
 
       return NextResponse.json(
@@ -170,8 +293,9 @@ export async function POST(
     }
 
     // 系统错误：返回 500
-    const errorMessage =
-      error instanceof Error ? error.message : "转写失败。";
+    const errorMessage = isRetryableTranscribeError(error)
+      ? TEMPORARY_TRANSCRIBE_ERROR_MESSAGE
+      : errorSummary;
 
     const updated = await prisma.trainingTranscript.update({
       where: {
@@ -182,21 +306,7 @@ export async function POST(
         errorMessage,
         completedAt: now,
       },
-      select: {
-        id: true,
-        recordingId: true,
-        sessionId: true,
-        status: true,
-        source: true,
-        language: true,
-        text: true,
-        segmentsJson: true,
-        errorMessage: true,
-        startedAt: true,
-        completedAt: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: transcriptSelect,
     });
 
     return NextResponse.json(
