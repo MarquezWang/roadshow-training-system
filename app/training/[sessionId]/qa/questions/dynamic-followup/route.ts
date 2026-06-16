@@ -512,6 +512,9 @@ export async function POST(
       if (text.length > 180) return "main_output_too_long";
       if (hasContextLeak(text)) return "main_output_context_leak";
       if (countQuestionMarks(text) > 1) return "main_output_multiple_questions";
+      if (hasUnsupportedTranscriptClaim(text)) {
+        return "main_output_unsupported_transcript_claim";
+      }
       if (duplicatesRegularQuestion(text, otherQuestions)) {
         return "main_output_duplicate_regular_question";
       }
@@ -525,6 +528,9 @@ export async function POST(
       if (countQuestionMarks(text) > 1) {
         return "fallback_output_multiple_questions";
       }
+      if (hasUnsupportedTranscriptClaim(text)) {
+        return "fallback_output_unsupported_transcript_claim";
+      }
       if (duplicatesRegularQuestion(text, otherQuestions)) {
         return "fallback_output_duplicate_regular_question";
       }
@@ -532,12 +538,112 @@ export async function POST(
       return validateQuestionText(text);
     }
 
+    function hasUnsupportedTranscriptClaim(text: string) {
+      const claimGroups = [
+        {
+          outputMarkers: ["小范围试点", "试点阶段", "进入试点"],
+          transcriptMarkers: ["小范围试点", "试点阶段", "试点"],
+        },
+        {
+          outputMarkers: ["有效数据"],
+          transcriptMarkers: ["有效数据"],
+        },
+        {
+          outputMarkers: ["规模化复制", "规模化复制条件"],
+          transcriptMarkers: ["规模化", "复制"],
+        },
+        {
+          outputMarkers: ["客户反馈"],
+          transcriptMarkers: ["客户反馈"],
+        },
+        {
+          outputMarkers: ["付费客户"],
+          transcriptMarkers: ["付费客户"],
+        },
+        {
+          outputMarkers: ["数据指标"],
+          transcriptMarkers: ["数据指标"],
+        },
+      ];
+
+      return claimGroups.some(
+        ({ outputMarkers, transcriptMarkers }) =>
+          outputMarkers.some((marker) => text.includes(marker)) &&
+          !transcriptMarkers.some((marker) => transcriptText.includes(marker)),
+      );
+    }
+
+    function normalizeMainMultipleQuestionText(text: string) {
+      if (countQuestionMarks(text) !== 2) {
+        return null;
+      }
+      if (
+        isMismatchStyleQuestion(text) ||
+        hasContextLeak(text) ||
+        text.length > 180
+      ) {
+        return null;
+      }
+
+      const questionMarks = Array.from(text.matchAll(/[?？]/g));
+      if (questionMarks.length !== 2) {
+        return null;
+      }
+
+      const firstQuestionMarkIndex = questionMarks[0].index;
+      const lastQuestionMarkIndex = questionMarks[1].index;
+      if (
+        firstQuestionMarkIndex === undefined ||
+        lastQuestionMarkIndex === undefined
+      ) {
+        return null;
+      }
+
+      const firstPart = text
+        .slice(0, firstQuestionMarkIndex)
+        .trim()
+        .replace(/^请问/, "请说明");
+      const secondPart = text
+        .slice(firstQuestionMarkIndex + 1, lastQuestionMarkIndex)
+        .trim()
+        .replace(/^(并且|同时|另外|还有|具体|请问)/, "")
+        .trim();
+      const trailingText = text.slice(lastQuestionMarkIndex + 1).trim();
+
+      if (!firstPart || !secondPart || trailingText) {
+        return null;
+      }
+
+      return `${firstPart}，以及${secondPart}？`;
+    }
+
     const rawAiOutput = followupResult.text;
     const followupText = rawAiOutput.trim();
-    const mainValidationReason =
+    let acceptedFollowupText = followupText;
+    let mainValidationReason =
       followupText === "NO_DYNAMIC_FOLLOWUP"
         ? "ai_returned_no_dynamic_followup"
         : validateMainFollowupText(followupText);
+
+    if (mainValidationReason === "main_output_multiple_questions") {
+      const normalizedFollowupText =
+        normalizeMainMultipleQuestionText(followupText);
+      const normalizedValidationReason = normalizedFollowupText
+        ? validateMainFollowupText(normalizedFollowupText)
+        : "main_output_multiple_questions";
+
+      if (normalizedFollowupText && !normalizedValidationReason) {
+        acceptedFollowupText = normalizedFollowupText;
+        mainValidationReason = null;
+        debugInfo.rawAiOutput = rawAiOutput;
+        debugInfo.normalizedAiOutput = normalizedFollowupText;
+        devLog("[dynamic-followup:POST] normalized main followup question", {
+          sessionId,
+          rawQuestionText: followupText,
+          questionText: normalizedFollowupText,
+        });
+      }
+    }
 
     // AI 明确表示无法生成合格追问，或 main 输出不适合直接入库
     if (mainValidationReason) {
@@ -747,6 +853,7 @@ export async function POST(
                   createdQuestionId: createdQuestion.id,
                   orderIndex: createdQuestion.orderIndex,
                   textLength: contentText.length,
+                  questionText: contentText,
                 },
               );
               debugInfo.usedStage = "content";
@@ -831,6 +938,7 @@ ${otherQuestionsText.slice(0, 800)}`;
                     createdQuestionId: createdQuestion.id,
                     orderIndex: createdQuestion.orderIndex,
                     textLength: retryText.length,
+                    questionText: retryText,
                   },
                 );
                 debugInfo.usedStage = "content";
@@ -864,41 +972,44 @@ ${otherQuestionsText.slice(0, 800)}`;
 
     // 校验 AI 返回结果
     if (
-      !followupText ||
-      followupText.length < MIN_QUESTION_LENGTH ||
-      followupText.length > MAX_QUESTION_LENGTH ||
-      (!followupText.includes("?") && !followupText.includes("？"))
+      !acceptedFollowupText ||
+      acceptedFollowupText.length < MIN_QUESTION_LENGTH ||
+      acceptedFollowupText.length > MAX_QUESTION_LENGTH ||
+      (!acceptedFollowupText.includes("?") &&
+        !acceptedFollowupText.includes("？"))
     ) {
       let validationReason = "output_not_question";
-      if (!followupText) {
+      if (!acceptedFollowupText) {
         validationReason = "output_empty";
-      } else if (followupText.length < MIN_QUESTION_LENGTH) {
+      } else if (acceptedFollowupText.length < MIN_QUESTION_LENGTH) {
         validationReason = "output_too_short";
-      } else if (followupText.length > MAX_QUESTION_LENGTH) {
+      } else if (acceptedFollowupText.length > MAX_QUESTION_LENGTH) {
         validationReason = "output_too_long";
       }
       devWarn("[dynamic-followup:POST] AI returned invalid question", {
         sessionId,
-        textLength: followupText.length,
-        text: followupText.slice(0, 100),
+        textLength: acceptedFollowupText.length,
+        text: acceptedFollowupText.slice(0, 100),
       });
       debugInfo.pitchTextLength = transcriptText.length;
       debugInfo.pitchTextPreview = transcriptText.slice(0, 200);
       debugInfo.rawAiOutput = rawAiOutput;
-      debugInfo.normalizedAiOutput = followupText;
+      debugInfo.normalizedAiOutput = acceptedFollowupText;
       debugInfo.validationReason = validationReason;
       return NextResponse.json(
         buildDebugResponse({ reason: "ai_generation_failed" }),
       );
     }
 
-    const createdQuestion = await createOrReturnDynamicQuestion(followupText);
+    const createdQuestion =
+      await createOrReturnDynamicQuestion(acceptedFollowupText);
 
     devLog("[dynamic-followup:POST] dynamic followup created", {
       sessionId,
       createdQuestionId: createdQuestion.id,
       orderIndex: createdQuestion.orderIndex,
-      textLength: followupText.length,
+      textLength: acceptedFollowupText.length,
+      questionText: acceptedFollowupText,
     });
 
     debugInfo.usedStage = "main";
