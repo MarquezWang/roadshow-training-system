@@ -31,6 +31,33 @@ const PITCH_ANALYSIS_TYPE = "PITCH";
 const PITCH_ANALYSIS_MAX_OUTPUT_TOKENS = 6_000;
 const CONTEXT_EXPERT_COMMENT_LIMIT = 10;
 const CONTEXT_HISTORICAL_QUESTION_LIMIT = 10;
+const FALLBACK_ANALYSIS_SCORE = 15;
+const COVERAGE_ITEMS = [
+  "项目背景",
+  "痛点问题",
+  "技术方案",
+  "核心创新",
+  "应用场景",
+  "市场空间",
+  "商业模式",
+  "团队能力",
+  "融资/合作需求",
+] as const;
+
+type AnalysisQuestionData = {
+  questionId: string;
+  orderIndex: number;
+  questionType: string;
+  source: string;
+  questionText: string;
+  answerDurationSec: number | null;
+  answerText: string | null;
+  transcribeText: string | null;
+  transcribeStatus: string | null;
+  transcribeFailed: boolean;
+  transcribePending: boolean;
+  transcribeNote: string | null;
+};
 
 function parseStoredJson<T>(value: string, fallback: T): T {
   try {
@@ -119,6 +146,134 @@ function isDynamicFollowupQuestion(question: {
   );
 }
 
+function summarizeAnswer(question: AnalysisQuestionData) {
+  const answerText =
+    question.transcribeText?.trim() || question.answerText?.trim();
+
+  if (answerText) {
+    return answerText.length > 120 ? `${answerText.slice(0, 120)}...` : answerText;
+  }
+
+  if (question.transcribePending) {
+    return "回答转写尚未完成，当前降级报告无法准确概括回答内容。";
+  }
+
+  if (question.transcribeFailed) {
+    return "回答转写失败，当前降级报告无法准确概括回答内容。";
+  }
+
+  return "未检测到可用于复盘的有效回答文本。";
+}
+
+function buildFallbackQaReview(question: AnalysisQuestionData): QaReview {
+  const hasAnswerText = Boolean(
+    question.transcribeText?.trim() || question.answerText?.trim(),
+  );
+
+  return {
+    questionId: question.questionId,
+    questionIndex: question.orderIndex,
+    dimension: "OTHER",
+    question: question.questionText,
+    judgeIntent: "评委意图暂未能由 AI 结构化结果稳定解析，当前为降级复盘。",
+    answerSummary: summarizeAnswer(question),
+    responseQuality: hasAnswerText ? "PARTIAL" : "WEAK",
+    responseQualityLabel: hasAnswerText
+      ? "降级复盘，需人工复核"
+      : "回答依据不足",
+    missingPoints: [
+      "结构化报告生成失败，当前无法完整判断回答覆盖情况",
+      "建议补充数据、案例或验证依据来支撑回答",
+    ],
+    evidenceUse: hasAnswerText
+      ? "检测到回答文本，但证据使用情况需人工复核。"
+      : "未能提取到有效回答证据。",
+    improvementAdvice:
+      "建议围绕评委问题先给出直接结论，再补充关键事实、数据或案例支撑。",
+    betterAnswerOutline: [
+      "先正面回答问题核心",
+      "补充项目相关数据、案例或验证结果",
+      "总结对落地、风险或商业化的影响",
+    ],
+  };
+}
+
+function buildFallbackAnalysis(input: {
+  durationSec: number;
+  pageCount: number | null;
+  slideEventCount: number;
+  transcriptMissing: boolean;
+  qaData: AnalysisQuestionData[];
+  dynamicFollowupData: AnalysisQuestionData | null;
+}) {
+  const fallbackAnalysis = {
+    overallScore: FALLBACK_ANALYSIS_SCORE,
+    summary:
+      "报告生成时 AI 结构化 JSON 解析失败，系统已基于可用转写和答辩数据降级生成基础报告；该结果用于避免报告中断，建议重新生成以获得更完整分析。",
+    strengths: [],
+    weaknesses: [
+      "结构化报告生成失败，当前报告为降级版本，细节判断可能不完整。",
+      input.transcriptMissing
+        ? "路演转写缺失或不可用，无法充分评估项目表达。"
+        : "当前降级报告未能完整抽取路演中的证据覆盖情况。",
+      "答辩复盘仅基于已有问题、回答文本和转写状态生成，建议人工复核关键判断。",
+    ],
+    suggestions: [
+      "建议重新生成报告，获取完整的路演表现、答辩表现和改进建议。",
+      "下一轮路演中请用数字、客户案例、测试结果或合同订单支撑关键结论。",
+      "答辩时先直接回应评委问题，再补充证据和下一步计划。",
+      "如再次生成失败，请缩短输入材料或减少长文本后重试。",
+    ],
+    contentCoverage: COVERAGE_ITEMS.map((item) => ({
+      item,
+      covered: "false",
+      evidence: input.transcriptMissing
+        ? "路演转写缺失，无法确认覆盖情况。"
+        : "降级报告未能稳定解析该维度证据。",
+      suggestion: `建议补充${item}相关的可验证事实、数据或案例。`,
+    })),
+    timing: {
+      durationSec: input.durationSec,
+      targetDurationSec: 540,
+      assessment: "当前为降级报告，仅保留基础时长信息。",
+      opening: "降级报告未能细分开场节奏。",
+      middle: "降级报告未能细分中段表达节奏。",
+      ending: "降级报告未能细分结尾收束情况。",
+      suggestion: "建议按背景、方案、验证、商业化和需求拆分路演时间。",
+    },
+    slideSync: {
+      slideEventCount: input.slideEventCount,
+      pageCount: input.pageCount ?? 0,
+      assessment: "当前为降级报告，仅保留基础翻页信息。",
+      frequentFlipRisk: "降级报告未能判断是否频繁翻页。",
+      longStayRisk: "降级报告未能判断是否长时间停留。",
+      suggestion: "建议按核心章节控制翻页节奏，避免讲述与页面信息脱节。",
+    },
+    riskQuestions: [
+      "请说明项目当前最关键的验证指标是什么，以及已有数据是否达标？",
+      "如果客户转化或落地进度低于预期，你们准备如何调整？",
+      "项目在技术实现、交付和运营过程中最大的风险是什么？",
+      "后续融资或合作需求将如何对应到明确的里程碑？",
+    ],
+    qaReviews: input.qaData.map(buildFallbackQaReview),
+    dynamicFollowupReview: input.dynamicFollowupData
+      ? {
+          questionId: input.dynamicFollowupData.questionId,
+          question: input.dynamicFollowupData.questionText,
+          answerSummary: summarizeAnswer(input.dynamicFollowupData),
+          targetWeakness:
+            "动态追问表现未能由 AI 结构化结果稳定解析，当前为降级复盘。",
+          evidenceSupplement:
+            "请人工复核该回答是否补充了数据、案例或验证依据。",
+          improvementAdvice:
+            "建议围绕动态追问的核心点补充直接结论、关键证据和下一步计划。",
+        }
+      : null,
+  };
+
+  return validateTrainingAnalysisResult(fallbackAnalysis);
+}
+
 function buildAnalysisPrompt(
   context: ProjectAIContext,
   template: string,
@@ -156,9 +311,15 @@ function buildRepairPrompt(rawText: string, error: AIJsonParseError) {
     [
       "请修复下面这段 AI 输出，使其成为一个合法 JSON 对象。",
       "只输出修复后的 JSON，不要输出 Markdown、代码块或解释文字。",
+      "必须返回完整 JSON object，不能省略字段。",
+      "输出结构必须符合 TrainingAnalysisResult。",
+      "不能新增 schema 外字段。",
       "不要新增事实，不要补充转写文本中没有的表达。",
       "如果原文被截断或字段不完整，请在保持结构合法的前提下，用短句补齐未闭合的字符串、数组和对象。",
       "所有字符串必须闭合，所有数组和对象必须闭合。",
+      "所有字符串必须是合法 JSON string，不能包含未转义换行或未转义双引号。",
+      "如果某字段无法修复，用空字符串、空数组、false、null 或安全默认值补齐。",
+      "必须保留原始内容中可恢复的信息。",
       "",
       "解析错误：{{parseError}}",
       "原始返回长度：{{originalLength}}",
@@ -198,7 +359,7 @@ function buildRepairPrompt(rawText: string, error: AIJsonParseError) {
       '    "suggestion": ""',
       "  },",
       '  "riskQuestions": [],',
-      '  "qaReviews": []',
+      '  "qaReviews": [],',
       '  "dynamicFollowupReview": null',
       "}",
       "",
@@ -230,15 +391,26 @@ async function parseAnalysisJsonWithRepair(rawText: string) {
       parsePosition: error.parsePosition,
     });
 
-    const repairResult = await callAI({
-      systemPrompt:
-        "你是严格的 JSON 修复器。只输出合法 JSON，不输出 Markdown 或解释。",
-      userPrompt: buildRepairPrompt(rawText, error),
-      temperature: 0,
-      maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
-    });
+    try {
+      const repairResult = await callAI({
+        systemPrompt:
+          "你是严格的 JSON 修复器。只输出合法 JSON，不输出 Markdown 或解释。",
+        userPrompt: buildRepairPrompt(rawText, error),
+        temperature: 0,
+        maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
+      });
 
-    return validateTrainingAnalysisResult(parseAIJson(repairResult.text));
+      const repairedAnalysis = validateTrainingAnalysisResult(
+        parseAIJson(repairResult.text),
+      );
+      devLog("路演表现分析 JSON 修复重试成功。");
+      return repairedAnalysis;
+    } catch (repairError) {
+      devError("路演表现分析 JSON 修复重试失败。", {
+        error: repairError instanceof Error ? repairError.message : String(repairError),
+      });
+      throw repairError;
+    }
   }
 }
 
@@ -594,7 +766,9 @@ export async function POST(
     const dynamicFollowupQuestion =
       enteredQuestions.find((q) => isDynamicFollowupQuestion(q)) ?? null;
 
-    const mapQuestionToAnalysisData = (q: (typeof enteredQuestions)[number]) => {
+    const mapQuestionToAnalysisData = (
+      q: (typeof enteredQuestions)[number],
+    ): AnalysisQuestionData => {
       const transcribeStatus = q.answer?.recording?.transcript?.status ?? null;
       const transcribeText = q.answer?.recording?.transcript?.text ?? null;
       const isPendingOrProcessing =
@@ -672,7 +846,31 @@ export async function POST(
       temperature: 0.2,
       maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
     });
-    const analysisJson = await parseAnalysisJsonWithRepair(aiResult.text);
+    let analysisJson: TrainingAnalysisResult;
+    try {
+      analysisJson = await parseAnalysisJsonWithRepair(aiResult.text);
+    } catch (analysisParseError) {
+      devError("路演表现分析 JSON 修复后仍失败，使用降级 fallback。", {
+        sessionId,
+        error:
+          analysisParseError instanceof Error
+            ? analysisParseError.message
+            : String(analysisParseError),
+      });
+      analysisJson = buildFallbackAnalysis({
+        durationSec,
+        pageCount,
+        slideEventCount: session.slideEvents.length,
+        transcriptMissing,
+        qaData,
+        dynamicFollowupData,
+      });
+      devLog("[analysis:POST] fallback analysis created", {
+        sessionId,
+        qaReviewCount: analysisJson.qaReviews?.length ?? 0,
+        hasDynamicFollowupReview: analysisJson.dynamicFollowupReview !== null,
+      });
+    }
 
     // 空回答/无效回答容错：确保每个 QA 问题都有合理的 qaReview
     const noAnswerQuestionIds = new Set(
