@@ -56,6 +56,11 @@ interface DebugInfo {
   otherQuestionsPreview?: string[];
   hasPitchProjectContent?: boolean;
   pitchProjectContentMatchedKeywords?: string[];
+  transcriptProjectSignalCount?: number;
+  matchedProjectSignals?: string[];
+  hasProjectNameInTranscript?: boolean;
+  hasSparseProjectContext?: boolean;
+  preflightSkippedReason?: string;
   usedStage?: "main" | "mismatch" | "content";
 }
 
@@ -158,6 +163,14 @@ export async function POST(
       error?: string;
     }) {
       const base = { ok: false, skipped: true, ...props };
+      if (debug) {
+        return { ...base, debug: debugInfo };
+      }
+      return base;
+    }
+
+    function buildSkippedSuccessResponse(reason: string) {
+      const base = { ok: true, skipped: true, reason };
       if (debug) {
         return { ...base, debug: debugInfo };
       }
@@ -359,10 +372,15 @@ export async function POST(
 
     // 填充项目上下文 debug 信息
     const projectName = aiContext?.project?.name ?? null;
-    const projectContextText = [
-      projectName ?? "",
+    const projectDetailText = [
       aiContext?.project?.description ?? "",
       ...(aiContext?.files ?? []).map((f) => f.extractedText ?? ""),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const projectContextText = [
+      projectName ?? "",
+      projectDetailText,
     ]
       .filter(Boolean)
       .join("\n");
@@ -370,6 +388,164 @@ export async function POST(
     debugInfo.projectTitle = projectName;
     debugInfo.projectContextLength = projectContextText.length;
     debugInfo.projectContextPreview = projectContextText.slice(0, 200);
+
+    function normalizeForProjectSignal(text: string) {
+      return text.toLowerCase().replace(/\s+/g, "");
+    }
+
+    function analyzePitchProjectContent(text: string) {
+      const normalizedText = normalizeForProjectSignal(text);
+      const normalizedProjectName = projectName
+        ? normalizeForProjectSignal(projectName)
+        : "";
+      const hasProjectNameInTranscript =
+        normalizedProjectName.length >= 2 &&
+        normalizedText.includes(normalizedProjectName);
+      const projectSignals = [
+        "技术",
+        "产品",
+        "方案",
+        "客户",
+        "市场",
+        "团队",
+        "商业模式",
+        "收入",
+        "融资",
+        "专利",
+        "测试",
+        "指标",
+        "试点",
+        "落地",
+        "应用场景",
+        "痛点",
+        "成本",
+        "效率",
+        "竞品",
+        "合同",
+        "订单",
+      ];
+      const matchedProjectSignals = projectSignals.filter((signal) =>
+        normalizedText.includes(normalizeForProjectSignal(signal)),
+      );
+      const productOrServiceMarkers = [
+        "产品",
+        "系统",
+        "平台",
+        "服务",
+        "方案",
+        "工具",
+        "应用",
+        "软件",
+        "硬件",
+        "设备",
+        "模型",
+        "算法",
+      ];
+      const hasProductOrServiceMarker = productOrServiceMarkers.some(
+        (marker) => normalizedText.includes(normalizeForProjectSignal(marker)),
+      );
+      const dimensionGroups = [
+        ["技术", "算法", "模型", "研发", "专利", "测试", "指标", "数据", "ai", "人工智能"],
+        ["客户", "用户", "市场", "需求", "痛点", "竞品", "竞争", "场景"],
+        ["商业模式", "收入", "营收", "收费", "付费", "融资", "成本", "订单", "合同"],
+        ["团队", "成员", "创始", "研发", "运营", "销售"],
+        ["试点", "落地", "交付", "部署", "上线", "实施", "合作", "验证"],
+      ];
+      const matchedDimensionCount = dimensionGroups.filter((group) =>
+        group.some((marker) =>
+          normalizedText.includes(normalizeForProjectSignal(marker)),
+        ),
+      ).length;
+
+      return {
+        hasProjectNameInTranscript,
+        matchedProjectSignals,
+        hasEnoughProjectPitchContent:
+          hasProjectNameInTranscript ||
+          matchedProjectSignals.length >= 3 ||
+          (hasProductOrServiceMarker && matchedDimensionCount >= 2),
+      };
+    }
+
+    function hasClearlyUnrelatedPitchContent(text: string) {
+      const normalizedText = normalizeForProjectSignal(text);
+      const unrelatedMarkers = [
+        "不轻信",
+        "不乱点",
+        "不泄漏",
+        "网上贷款",
+        "刷单",
+        "刷信誉",
+        "刷流水",
+        "先缴费",
+        "验证码",
+        "诈骗",
+        "反诈",
+        "杀猪盘",
+        "中奖",
+        "转账",
+        "陌生链接",
+        "不要相信",
+        "防诈骗",
+      ];
+
+      return unrelatedMarkers.some((marker) =>
+        normalizedText.includes(normalizeForProjectSignal(marker)),
+      );
+    }
+
+    const pitchProjectContent = analyzePitchProjectContent(transcriptText);
+    const projectDetailLength = projectDetailText.replace(/\s+/g, "").length;
+    const hasSparseProjectContext =
+      !aiContext ||
+      (projectDetailLength < 80 && (aiContext.files ?? []).length === 0);
+    const isClearlyUnrelatedPitch =
+      hasClearlyUnrelatedPitchContent(transcriptText) &&
+      !pitchProjectContent.hasEnoughProjectPitchContent;
+
+    debugInfo.transcriptProjectSignalCount =
+      pitchProjectContent.matchedProjectSignals.length;
+    debugInfo.matchedProjectSignals =
+      pitchProjectContent.matchedProjectSignals;
+    debugInfo.hasProjectNameInTranscript =
+      pitchProjectContent.hasProjectNameInTranscript;
+    debugInfo.hasSparseProjectContext = hasSparseProjectContext;
+
+    devLog("[dynamic-followup:POST] preflight project content check", {
+      sessionId,
+      transcriptProjectSignalCount:
+        pitchProjectContent.matchedProjectSignals.length,
+      matchedProjectSignals: pitchProjectContent.matchedProjectSignals,
+      hasProjectNameInTranscript:
+        pitchProjectContent.hasProjectNameInTranscript,
+      hasSparseProjectContext,
+      hasEnoughProjectPitchContent:
+        pitchProjectContent.hasEnoughProjectPitchContent,
+      isClearlyUnrelatedPitch,
+    });
+
+    if (
+      (hasSparseProjectContext &&
+        !pitchProjectContent.hasEnoughProjectPitchContent) ||
+      isClearlyUnrelatedPitch
+    ) {
+      const reason = "insufficient_project_pitch_content";
+      debugInfo.pitchTextLength = transcriptText.length;
+      debugInfo.pitchTextPreview = transcriptText.slice(0, 200);
+      debugInfo.validationReason = reason;
+      debugInfo.preflightSkippedReason = reason;
+      devLog("[dynamic-followup:POST] skipped by preflight", {
+        sessionId,
+        reason,
+        transcriptProjectSignalCount:
+          pitchProjectContent.matchedProjectSignals.length,
+        matchedProjectSignals: pitchProjectContent.matchedProjectSignals,
+        hasProjectNameInTranscript:
+          pitchProjectContent.hasProjectNameInTranscript,
+        hasSparseProjectContext,
+      });
+      return NextResponse.json(buildSkippedSuccessResponse(reason));
+    }
 
     // 生成动态追问
     const followupTemplate = await loadPromptTemplate("dynamic-followup");
