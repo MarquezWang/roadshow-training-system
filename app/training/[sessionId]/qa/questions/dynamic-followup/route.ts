@@ -131,6 +131,8 @@ export async function POST(
   context: DynamicFollowupContext,
 ) {
   const { sessionId } = await context.params;
+  const debugInfo: DebugInfo = {};
+  let debug = false;
 
   try {
     // 实验开关
@@ -151,11 +153,9 @@ export async function POST(
       // body 为空时使用默认值
     }
 
-    const debug = body.debug === true;
+    debug = body.debug === true;
     const protectedQuestionIds: string[] = body.protectedQuestionIds ?? [];
     const minReplaceableOrderIndex = body.minReplaceableOrderIndex ?? 1;
-
-    const debugInfo: DebugInfo = {};
 
     function buildDebugResponse(props: {
       skipped?: boolean;
@@ -1198,8 +1198,13 @@ ${otherQuestionsText.slice(0, 800)}`;
       error: String(error),
     });
     debugInfo.validationReason = "unexpected_error";
+    const base = {
+      ok: true,
+      skipped: true,
+      reason: "ai_generation_failed",
+    };
     return NextResponse.json(
-      buildDebugResponse({ reason: "ai_generation_failed" }),
+      debug ? { ...base, debug: debugInfo } : base,
     );
   }
 }
