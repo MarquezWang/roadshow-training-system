@@ -27,6 +27,15 @@ export type QaReview = {
   betterAnswerOutline: string[];
 };
 
+export type DynamicFollowupReview = {
+  questionId: string;
+  question: string;
+  answerSummary: string;
+  targetWeakness: string;
+  evidenceSupplement: string;
+  improvementAdvice: string;
+};
+
 export type TrainingAnalysisResult = {
   overallScore: number;
   summary: string;
@@ -58,6 +67,7 @@ export type TrainingAnalysisResult = {
   };
   riskQuestions: string[];
   qaReviews?: QaReview[];
+  dynamicFollowupReview?: DynamicFollowupReview | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -286,6 +296,27 @@ function validateQaReviews(value: unknown): QaReview[] | undefined {
     });
 }
 
+function validateDynamicFollowupReview(
+  value: unknown,
+): DynamicFollowupReview | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return {
+    questionId: safeString(value.questionId, ""),
+    question: safeString(value.question, ""),
+    answerSummary: safeString(value.answerSummary, ""),
+    targetWeakness: safeString(value.targetWeakness, ""),
+    evidenceSupplement: safeString(value.evidenceSupplement, ""),
+    improvementAdvice: safeString(value.improvementAdvice, ""),
+  };
+}
+
 export function validateTrainingAnalysisResult(
   analysisJson: unknown,
 ): TrainingAnalysisResult {
@@ -321,5 +352,8 @@ export function validateTrainingAnalysisResult(
       max: 5,
     }),
     qaReviews: validateQaReviews(analysis.qaReviews),
+    dynamicFollowupReview: validateDynamicFollowupReview(
+      analysis.dynamicFollowupReview,
+    ),
   };
 }

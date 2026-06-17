@@ -14,6 +14,7 @@ import {
   validateTrainingAnalysisResult,
   type TrainingAnalysisResult,
   type QaReview,
+  type DynamicFollowupReview,
 } from "@/lib/training-analysis-validator";
 
 type TrainingAnalysisRouteContext = Readonly<{
@@ -73,6 +74,11 @@ function serializeAnalysis(analysis: TrainingAnalysisRecord) {
     qaReviews: (Array.isArray(rawResult.qaReviews)
       ? rawResult.qaReviews
       : []) as QaReview[],
+    dynamicFollowupReview:
+      rawResult.dynamicFollowupReview === null ||
+      rawResult.dynamicFollowupReview === undefined
+        ? null
+        : (rawResult.dynamicFollowupReview as DynamicFollowupReview),
     rawResult,
     errorMessage: analysis.errorMessage,
     createdAt: analysis.createdAt.toISOString(),
@@ -103,6 +109,16 @@ function compactContext(context: ProjectAIContext): ProjectAIContext {
   };
 }
 
+function isDynamicFollowupQuestion(question: {
+  source?: string | null;
+  questionType?: string | null;
+}) {
+  return (
+    question.source === "DYNAMIC_FOLLOWUP" ||
+    question.questionType === "FOLLOWUP"
+  );
+}
+
 function buildAnalysisPrompt(
   context: ProjectAIContext,
   template: string,
@@ -111,6 +127,7 @@ function buildAnalysisPrompt(
     slideEvents: unknown;
     transcript: unknown;
     qaData: unknown;
+    dynamicFollowupData: unknown;
   },
 ) {
   return renderPrompt(template, {
@@ -118,6 +135,7 @@ function buildAnalysisPrompt(
     slideEvents: input.slideEvents,
     transcript: input.transcript,
     qaData: input.qaData,
+    dynamicFollowupData: input.dynamicFollowupData,
     project: context.project,
     files: context.files.map((file) => ({
       id: file.id,
@@ -181,6 +199,7 @@ function buildRepairPrompt(rawText: string, error: AIJsonParseError) {
       "  },",
       '  "riskQuestions": [],',
       '  "qaReviews": []',
+      '  "dynamicFollowupReview": null',
       "}",
       "",
       "需要修复的原始返回：",
@@ -409,6 +428,7 @@ export async function POST(
             orderIndex: true,
             questionText: true,
             questionType: true,
+            source: true,
             answer: {
               select: {
                 id: true,
@@ -568,8 +588,13 @@ export async function POST(
     const enteredQuestions = session.trainingQuestions.filter(
       (q) => q.answer !== null,
     );
+    const baseEnteredQuestions = enteredQuestions.filter(
+      (q) => !isDynamicFollowupQuestion(q),
+    );
+    const dynamicFollowupQuestion =
+      enteredQuestions.find((q) => isDynamicFollowupQuestion(q)) ?? null;
 
-    const qaData = enteredQuestions.map((q) => {
+    const mapQuestionToAnalysisData = (q: (typeof enteredQuestions)[number]) => {
       const transcribeStatus = q.answer?.recording?.transcript?.status ?? null;
       const transcribeText = q.answer?.recording?.transcript?.text ?? null;
       const isPendingOrProcessing =
@@ -578,6 +603,7 @@ export async function POST(
         questionId: q.id,
         orderIndex: q.orderIndex,
         questionType: q.questionType,
+        source: q.source,
         questionText: q.questionText,
         answerDurationSec: q.answer?.durationSec ?? null,
         answerText: q.answer?.answerText ?? null,
@@ -592,7 +618,12 @@ export async function POST(
               ? "该题转写超时未完成，分析依据不足，请基于项目材料和答题时长进行有限分析。"
               : null,
       };
-    });
+    };
+
+    const qaData = baseEnteredQuestions.map(mapQuestionToAnalysisData);
+    const dynamicFollowupData = dynamicFollowupQuestion
+      ? mapQuestionToAnalysisData(dynamicFollowupQuestion)
+      : null;
 
     const [contextResult, template] = await Promise.all([
       buildProjectAIContext(session.projectId),
@@ -630,8 +661,9 @@ export async function POST(
             text: transcriptMissing
               ? "【路演转写缺失】路演录音转写失败或超时，分析将基于项目材料、答辩数据及录音元信息降级进行。"
               : "",
-          },
+      },
       qaData,
+      dynamicFollowupData,
     });
     const aiResult = await callAI({
       systemPrompt:

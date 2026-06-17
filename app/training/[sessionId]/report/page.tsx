@@ -181,6 +181,25 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
   }
 }
 
+function parseDynamicFollowupReview(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const readString = (key: string) =>
+    typeof record[key] === "string" ? record[key] : "";
+
+  return {
+    questionId: readString("questionId"),
+    question: readString("question"),
+    answerSummary: readString("answerSummary"),
+    targetWeakness: readString("targetWeakness"),
+    evidenceSupplement: readString("evidenceSupplement"),
+    improvementAdvice: readString("improvementAdvice"),
+  };
+}
+
   const analysis = session.analyses[0]
     ? (() => {
         const rawResult = parseJsonObject(session.analyses[0].rawResultJson);
@@ -200,6 +219,9 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
           slideSync: parseJsonObject(session.analyses[0].slideSyncJson),
           riskQuestions: parseJsonArray<string>(session.analyses[0].riskQuestionsJson),
           qaReviews: Array.isArray(rawResult.qaReviews) ? rawResult.qaReviews : [],
+          dynamicFollowupReview: parseDynamicFollowupReview(
+            rawResult.dynamicFollowupReview,
+          ),
         };
       })()
     : null;
@@ -236,6 +258,7 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
     orderIndex: question.orderIndex,
     questionText: question.questionText,
     questionType: question.questionType,
+    source: question.source,
     basis: question.basis,
     answer: question.answer
       ? {

@@ -97,7 +97,8 @@ JSON 结构必须为：
       "improvementAdvice": "",
       "betterAnswerOutline": []
     }
-  ]
+  ],
+  "dynamicFollowupReview": null
 }
 
 字段约束：
@@ -137,6 +138,14 @@ JSON 结构必须为：
   - 如果转写质量较差，应在相关字段中说明"基于当前转写判断"。
 
 输入变量：
+动态追问隔离规则：
+- overallScore 只基于 Pitch 表现和 QA Questions and Answers 中的常规答辩题（Q1-Q3）判断。
+- strengths、weaknesses、suggestions 主要基于 Pitch 和常规答辩题（Q1-Q3）。
+- Dynamic Follow-up Question and Answer 是 Q4 动态追问，只用于 dynamicFollowupReview，不得影响 overallScore。
+- Q4 动态追问不得进入常规 qaReviews；qaReviews 只覆盖 QA Questions and Answers 中提供的常规 QA。
+- 如果没有 Dynamic Follow-up Question and Answer，dynamicFollowupReview 输出 null 或省略。
+- 如果有 Dynamic Follow-up Question and Answer，dynamicFollowupReview 使用以下结构：{"questionId":"","question":"","answerSummary":"","targetWeakness":"","evidenceSupplement":"","improvementAdvice":""}。
+
 TrainingSession:
 {{session}}
 
@@ -166,3 +175,6 @@ Historical Questions:
 
 QA Questions and Answers:
 {{qaData}}
+
+Dynamic Follow-up Question and Answer:
+{{dynamicFollowupData}}
