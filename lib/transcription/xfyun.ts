@@ -24,7 +24,7 @@ const XFYUN_DEBUG = process.env.XFYUN_DEBUG === "true";
 const KEEP_TEMP_AUDIO = process.env.XFYUN_KEEP_TEMP_AUDIO === "true";
 
 function debugLog(...args: unknown[]) {
-  if (XFYUN_DEBUG) debugLog(...args);
+  if (XFYUN_DEBUG) console.log(...args);
 }
 
 const formatToExt: Record<string, string> = {
@@ -264,6 +264,14 @@ async function uploadAudio(
   const uploadResponseJson = JSON.stringify(body, null, 2);
   await saveDebugJson(debugDir, "upload-response.json", uploadResponseJson);
 
+  debugLog(
+    `[xfyun upload response] httpStatus=${response.status}` +
+      ` code=${body.code}` +
+      ` descInfo=${body.descInfo}` +
+      ` orderId=${body.content?.orderId ?? "?"}` +
+      ` taskEstimateTime=${body.content?.taskEstimateTime ?? "?"}`,
+  );
+
   if (!response.ok || body.code !== "000000") {
     throw new Error(
       `讯飞上传失败：${body.descInfo ?? `HTTP ${response.status}`}`,
@@ -425,6 +433,40 @@ function formatVariantSummary(result: {
   );
 }
 
+function formatPollSnapshot(
+  attempt: number,
+  elapsedMs: number,
+  result: {
+    body: XfyunResultBody;
+    variantName: string;
+  },
+) {
+  const orderInfo = result.body.content?.orderInfo;
+  const contentKeys = result.body.content ? Object.keys(result.body.content) : [];
+  const orderResult = result.body.content?.orderResult;
+  const hasOrderResult =
+    orderResult !== undefined && orderResult !== null && orderResult !== "";
+  const orderResultLen =
+    typeof orderResult === "string" ? orderResult.length : 0;
+
+  return (
+    `[xfyun poll #${attempt}]` +
+    ` elapsedMs=${elapsedMs}` +
+    ` variant=${result.variantName}` +
+    ` code=${result.body.code}` +
+    ` descInfo=${result.body.descInfo}` +
+    ` status=${orderInfo?.status ?? "?"}` +
+    ` failType=${orderInfo?.failType ?? "?"}` +
+    ` originalDuration=${orderInfo?.originalDuration ?? "?"}` +
+    ` realDuration=${orderInfo?.realDuration ?? "?"}` +
+    ` taskEstimateTime=${result.body.content?.taskEstimateTime ?? "?"}` +
+    ` contentKeys=[${contentKeys.join(",")}]` +
+    ` hasOrderResult=${hasOrderResult}` +
+    ` orderResultType=${typeof orderResult}` +
+    ` orderResultLen=${orderResultLen}`
+  );
+}
+
 // ---- pollResult（含变体回退、status=4 空结果重试） ----
 
 function makeDebugInfo(
@@ -476,6 +518,7 @@ async function pollResult(
   let status4EmptyCount = 0;
 
   for (let attempt = 0; attempt < MAX_POLL_COUNT; attempt++) {
+    const pollAttempt = attempt + 1;
     // 优先使用变体 A：GET / 不传 resultType
     const primaryResult = await getResultOnce(
       orderId,
@@ -485,8 +528,14 @@ async function pollResult(
     );
 
     const primaryBody = primaryResult.body;
+    const elapsedMs = Date.now() - startTime;
+
+    debugLog(formatPollSnapshot(pollAttempt, elapsedMs, primaryResult));
 
     if (!primaryBody.code || primaryBody.code !== "000000") {
+      debugLog(
+        `[xfyun poll #${pollAttempt}] getResult returned non-success code=${primaryBody.code} descInfo=${primaryBody.descInfo}`,
+      );
       throw new Error(
         `讯飞查询结果失败：${primaryBody.descInfo ?? `code=${primaryBody.code}`}`,
       );
@@ -495,12 +544,18 @@ async function pollResult(
     const orderInfo = primaryBody.content?.orderInfo;
 
     if (!orderInfo) {
+      debugLog(
+        `[xfyun poll #${pollAttempt}] missing orderInfo contentKeys=[${primaryBody.content ? Object.keys(primaryBody.content).join(",") : ""}]`,
+      );
       throw new Error("讯飞查询结果失败：未返回订单信息。");
     }
 
     // status=-1：失败
     if (orderInfo.status === -1) {
       const failType = orderInfo.failType;
+      debugLog(
+        `[xfyun poll #${pollAttempt}] order failed status=-1 failType=${failType} descInfo=${primaryBody.descInfo ?? "?"}`,
+      );
       const rawMsg = `讯飞转写失败：订单 ${orderId} 处理失败 (failType=${failType} descInfo=${primaryBody.descInfo ?? "无详情"})。`;
       const userMsg = formatTranscriptErrorMessage(rawMsg);
       throw new TranscribeBusinessError(userMsg, rawMsg);
@@ -509,7 +564,7 @@ async function pollResult(
     // status=0 或 3：继续轮询
     if (orderInfo.status === 0 || orderInfo.status === 3) {
       debugLog(
-        `[xfyun poll #${attempt + 1}] 订单处理中 (status=${orderInfo.status})，等待 ${POLL_INTERVAL_MS / 1000}s 后重试。`,
+        `[xfyun poll #${pollAttempt}] 订单处理中 (status=${orderInfo.status})，等待 ${POLL_INTERVAL_MS / 1000}s 后重试。`,
       );
 
       if (Date.now() - startTime > MAX_POLL_DURATION_MS) {
@@ -537,6 +592,9 @@ async function pollResult(
         primaryBody.content?.orderResult !== "";
 
       if (aHasResult) {
+        debugLog(
+          `[xfyun poll #${pollAttempt}] completed with primary orderResult status=4 orderResultLen=${typeof primaryBody.content!.orderResult === "string" ? primaryBody.content!.orderResult.length : "object"}`,
+        );
         return extractTextFromResult(
           primaryBody.content!.orderResult,
         );
@@ -556,6 +614,9 @@ async function pollResult(
         );
 
         variantSummaries.push(formatVariantSummary(fallback));
+        debugLog(
+          `[xfyun poll #${pollAttempt}] fallback variant summary ${formatVariantSummary(fallback)}`,
+        );
 
         const fContent = fallback.body.content;
         const hasResult =
@@ -581,6 +642,9 @@ async function pollResult(
       status4EmptyCount++;
 
       if (status4EmptyCount > STATUS4_EMPTY_RETRY_COUNT) {
+        debugLog(
+          `[xfyun poll #${pollAttempt}] status=4 orderResult empty final failure status4EmptyCount=${status4EmptyCount} variantSummaries=${variantSummaries.join(" | ")}`,
+        );
         throw new Error(
           buildUploadError(
             `讯飞订单已完成但所有变体 orderResult 均为空（已重试 ${status4EmptyCount} 次）。`,
@@ -593,7 +657,7 @@ async function pollResult(
       }
 
       debugLog(
-        `[xfyun poll #${attempt + 1}] status=4 但 orderResult 为空（第 ${status4EmptyCount} 次），等待 ${STATUS4_EMPTY_RETRY_INTERVAL_MS / 1000}s 后重试。`,
+        `[xfyun poll #${pollAttempt}] status=4 但 orderResult 为空（第 ${status4EmptyCount} 次），等待 ${STATUS4_EMPTY_RETRY_INTERVAL_MS / 1000}s 后重试。variantSummaries=${variantSummaries.join(" | ")}`,
       );
 
       if (Date.now() - startTime > MAX_POLL_DURATION_MS) {
@@ -615,7 +679,7 @@ async function pollResult(
     }
 
     debugLog(
-      `[xfyun poll #${attempt + 1}] 未知状态 status=${orderInfo.status}，等待 ${POLL_INTERVAL_MS / 1000}s 后重试。`,
+      `[xfyun poll #${pollAttempt}] 未知状态 status=${orderInfo.status}，等待 ${POLL_INTERVAL_MS / 1000}s 后重试。`,
     );
 
     if (Date.now() - startTime > MAX_POLL_DURATION_MS) {
@@ -632,6 +696,10 @@ async function pollResult(
 
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
+
+  debugLog(
+    `[xfyun poll] timeout after max poll count orderId=${orderId} maxPollCount=${MAX_POLL_COUNT} elapsedMs=${Date.now() - startTime}`,
+  );
 
   throw new Error(
     `讯飞转写超时：订单 ${orderId} 轮询 ${MAX_POLL_COUNT} 次后仍未完成。`,
