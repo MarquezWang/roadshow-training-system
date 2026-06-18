@@ -11,6 +11,14 @@
 - 已结束状态重复调用保持幂等；
 - `PITCHING` 正常结束只新增一个 END 事件。
 
+## Report Status Guard
+
+测试覆盖报告生成前的 QA 转写状态判断：
+
+- 三道基础题已回答但没有录音时允许降级生成报告；
+- 仍有基础题未回答时继续阻塞；
+- 未回答的 Q4 动态追问不阻塞基础报告。
+
 ## 安全要求
 
 测试不会使用默认开发数据库。必须显式提供 `STABILITY_TEST_DATABASE_URL`，且 URL：
@@ -44,6 +52,7 @@ npm run dev
 $env:STABILITY_TEST_DATABASE_URL="file:./stability-test.db"
 $env:STABILITY_TEST_BASE_URL="http://localhost:3000"
 npm run test:stability:end-pitch
+npm run test:stability:report-status
 ```
 
 如果本地服务没有连接同一个测试数据库，测试会因找不到 fixture 而明确失败。测试不调用 AI、ASR，也不上传文件。
