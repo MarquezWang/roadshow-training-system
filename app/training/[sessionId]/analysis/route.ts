@@ -29,9 +29,11 @@ type TrainingAnalysisRecord = NonNullable<
 
 const PITCH_ANALYSIS_TYPE = "PITCH";
 const PITCH_ANALYSIS_MAX_OUTPUT_TOKENS = 6_000;
+const PROCESSING_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1_000;
 const CONTEXT_EXPERT_COMMENT_LIMIT = 10;
 const CONTEXT_HISTORICAL_QUESTION_LIMIT = 10;
 const FALLBACK_ANALYSIS_SCORE = 15;
+const activeAnalysisGenerationLocks = new Set<string>();
 const COVERAGE_ITEMS = [
   "项目背景",
   "痛点问题",
@@ -111,6 +113,13 @@ function serializeAnalysis(analysis: TrainingAnalysisRecord) {
     createdAt: analysis.createdAt.toISOString(),
     updatedAt: analysis.updatedAt.toISOString(),
   };
+}
+
+function isProcessingAnalysisFresh(analysis: TrainingAnalysisRecord) {
+  return (
+    analysis.status === "PROCESSING" &&
+    Date.now() - analysis.updatedAt.getTime() < PROCESSING_ANALYSIS_TIMEOUT_MS
+  );
 }
 
 async function findLatestAnalysis(sessionId: string) {
@@ -550,6 +559,7 @@ export async function POST(
 ) {
   const { sessionId } = await context.params;
   let processingAnalysisId: string | null = null;
+  let hasGenerationLock = false;
 
   try {
     const session = await prisma.trainingSession.findUnique({
@@ -629,11 +639,44 @@ export async function POST(
       return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
     }
 
+    if (activeAnalysisGenerationLocks.has(sessionId)) {
+      const activeAnalysis = await findLatestAnalysis(sessionId);
+
+      if (activeAnalysis && isProcessingAnalysisFresh(activeAnalysis)) {
+        return NextResponse.json({
+          analysis: serializeAnalysis(activeAnalysis),
+        });
+      }
+
+      return NextResponse.json(
+        {
+          error: "路演表现分析正在生成中，请稍后再试。",
+          reason: "analysis_generation_in_progress",
+          analysisProcessing: true,
+        },
+        { status: 409 },
+      );
+    }
+
+    activeAnalysisGenerationLocks.add(sessionId);
+    hasGenerationLock = true;
+
     // 防止重复生成：检查是否已有处理中或已完成的 analysis
     const existingAnalysis = await findLatestAnalysis(sessionId);
     if (existingAnalysis) {
       if (existingAnalysis.status === "PROCESSING") {
-        return NextResponse.json({ analysis: serializeAnalysis(existingAnalysis) });
+        if (isProcessingAnalysisFresh(existingAnalysis)) {
+          return NextResponse.json({
+            analysis: serializeAnalysis(existingAnalysis),
+          });
+        }
+
+        devLog("[analysis:POST] stale processing analysis detected, taking over", {
+          sessionId,
+          analysisId: existingAnalysis.id,
+          processingAgeMs: Date.now() - existingAnalysis.updatedAt.getTime(),
+          timeoutMs: PROCESSING_ANALYSIS_TIMEOUT_MS,
+        });
       }
       if (existingAnalysis.status === "COMPLETED") {
         const staleCheck = await isAnalysisStale(existingAnalysis);
@@ -1036,5 +1079,9 @@ export async function POST(
     devError("路演表现分析生成失败。", { error: message });
 
     return NextResponse.json({ error: message }, { status: 500 });
+  } finally {
+    if (hasGenerationLock) {
+      activeAnalysisGenerationLocks.delete(sessionId);
+    }
   }
 }
