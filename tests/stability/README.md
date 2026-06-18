@@ -61,6 +61,12 @@ npm run dev
 ```powershell
 $env:STABILITY_TEST_DATABASE_URL="file:./stability-test.db"
 $env:STABILITY_TEST_BASE_URL="http://localhost:3000"
+npm run test:stability
+```
+
+`npm run test:stability` 会一次运行当前全部 stability HTTP tests。定位单项失败时可分别运行：
+
+```powershell
 npm run test:stability:end-pitch
 npm run test:stability:report-status
 npm run test:stability:qa-answer
