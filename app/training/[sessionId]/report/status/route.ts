@@ -89,13 +89,24 @@ export async function GET(
     },
   });
 
+  const qaQuestions = await prisma.trainingQuestion.findMany({
+    where: {
+      sessionId,
+    },
+    select: {
+      id: true,
+      source: true,
+      questionType: true,
+    },
+  });
+
   // 生成 qaTranscriptItems：每道题一条轻量状态
   const qaTranscriptItems = qaAnswers.map((a) => {
     const ts = a.recording?.transcript;
     return {
       questionId: a.question.id,
       recordingId: a.recordingId,
-      transcriptStatus: ts?.status ?? (a.recordingId ? "PENDING" : "MISSING"),
+      transcriptStatus: ts?.status ?? "MISSING",
       updatedAt: ts?.updatedAt?.toISOString() ?? null,
       completedAt: ts?.completedAt?.toISOString() ?? null,
     };
@@ -117,14 +128,26 @@ export async function GET(
   const qaMissingCount = qaTranscriptItems.filter(
     (t) => t.transcriptStatus === "MISSING",
   ).length;
+  const qaAnsweredWithoutRecordingCount = qaTranscriptItems.filter(
+    (t) => !t.recordingId,
+  ).length;
   const qaTotalCount = qaTranscriptItems.length;
+  const answeredQuestionIds = new Set(qaAnswers.map((answer) => answer.questionId));
+  const baseQuestions = qaQuestions.filter(
+    (question) =>
+      question.source !== "DYNAMIC_FOLLOWUP" &&
+      question.questionType !== "FOLLOWUP",
+  );
+  const qaUnansweredBaseQuestionCount = baseQuestions.filter(
+    (question) => !answeredQuestionIds.has(question.id),
+  ).length;
 
-  // 所有 QA transcript 都已完成或失败
+  // 已回答但缺少录音或 transcript 时允许降级；真正未回答的基础题仍阻塞。
   const allQaCompleteOrFailed =
-    qaTotalCount > 0 &&
+    baseQuestions.length > 0 &&
+    qaUnansweredBaseQuestionCount === 0 &&
     qaPendingCount === 0 &&
-    qaProcessingCount === 0 &&
-    qaMissingCount === 0;
+    qaProcessingCount === 0;
 
   // 判断是否可以生成 analysis
   // 条件：Pitch transcript 不是 PENDING/PROCESSING，且 QA transcript 全部完成/失败
@@ -169,6 +192,8 @@ export async function GET(
     qaTranscriptCompletedCount: qaCompletedCount,
     qaTranscriptFailedCount: qaFailedCount,
     qaTranscriptMissingCount: qaMissingCount,
+    qaAnsweredWithoutRecordingCount,
+    qaUnansweredBaseQuestionCount,
     qaTotalCount,
     canGenerateAnalysis,
     hasStaleAnalysis,
