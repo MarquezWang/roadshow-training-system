@@ -26,6 +26,7 @@
 | ASR | 外部服务临时失败导致转写链路中断 | 有限重试并保留最终失败状态 | 重试/降级 |
 | ASR 可观测性 | 轮询状态不透明，难以定位长时间未完成 | `XFYUN_DEBUG` 输出关键状态字段 | 诊断增强 |
 | Analysis | AI 偶发输出非法 JSON 导致报告失败 | main parse、repair、fallback 三层保护 | 修复/降级 |
+| Analysis 并发 | 重复生成报告、重复调用 AI、产生多条记录或状态不稳定 | 未超时 `PROCESSING` 直接复用，`COMPLETED` 未 stale 直接返回，`FAILED` 允许重试，超时 `PROCESSING` 可接管 | 幂等/轻量锁 |
 | 状态机 | 重复 end-pitch 将后续或终态拉回 `QA_READY` | 仅允许合法状态转换，重复请求幂等处理 | 硬阻断/幂等 |
 | Report status | 已答题但无录音时永久等待 | 缺录音或 transcript 的已答题可降级生成报告 | 降级 |
 | Answer 保存 | 弱重复请求覆盖有效录音或文本 | 只增强、不降级地合并 answer | 幂等合并 |
@@ -104,6 +105,8 @@ repair prompt 已修复 `qaReviews` 后缺少逗号的问题，并明确禁止 M
 
 fallback analysis 不再调用 AI，并且必须先通过现有 validator。验证通过后写入 `COMPLETED`，清除 `errorMessage`，避免用户因一次非法 JSON 看到报告失败页。降级报告会说明结构化生成失败，其内容完整度可能低于正常 AI 报告，但仍提供基础复盘和可执行建议。
 
+Analysis POST 已增加轻量并发保护，同一 session 在单实例内尽量只保留一个 active generation。未超过 5 分钟的 `PROCESSING` 记录直接复用，不重复调用 AI；超过 5 分钟的 `PROCESSING` 允许接管生成。`COMPLETED` 且未 stale 时直接返回，`FAILED` 则允许重新生成。该保护用于降低单实例重复调用风险，不是数据库级强锁；多实例部署前仍需补充数据库级幂等或唯一约束。
+
 报告状态判断也已调整：
 
 - `PENDING`、`PROCESSING` transcript 继续等待。
@@ -150,10 +153,10 @@ phase 与 session status 不匹配时采用硬阻断，不写文件记录。正�
 
 ## 仍待观察的问题
 
-以下 P2/P3 项目尚未在本轮稳定性修复中处理：
+以下 P2/P3 项目仍需继续观察或后续增强：
 
 - 常规问题生成使用进程内锁，多实例部署时仍需数据库级幂等保护。
-- Analysis 并发请求可能重复触发 AI 调用，需要继续观察实际并发情况。
+- Analysis 当前已有单实例轻量保护，多实例部署前仍需数据库级强幂等。
 - 文件 preview 当前缺少面向多用户场景的资源权限隔离。
 - 录音播放仍可能整文件读入内存，后续可改为流式 range 读取。
 - 外部 ASR 的长轮询、provider 延迟和状态字段变化仍需通过 `XFYUN_DEBUG` 持续观察。
@@ -170,4 +173,3 @@ phase 与 session status 不匹配时采用硬阻断，不写文件记录。正�
 5. 在多实例部署前处理问题生成锁和 analysis 并发幂等。
 6. 在引入账号或项目权限前补齐文件 preview 授权校验。
 7. 保持 Q4 暂不计分，待专项评价稳定并完成评分验证后再评估是否纳入答辩表现。
-
