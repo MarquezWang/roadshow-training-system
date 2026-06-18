@@ -29,6 +29,15 @@
 - 不同 recording 不替换已有 recording；
 - 重复请求不重置已保存的答题时间和时长。
 
+## Dynamic Follow-up Preflight
+
+测试覆盖 dynamic follow-up 在进入 AI 调用前的保护：
+
+- 项目资料稀疏且 Pitch 明显离题时跳过 Q4；
+- Pitch 内容过短时跳过 Q4；
+- 已有 Q4 时重复调用保持幂等；
+- 跳过时不修改 Q1-Q3，也不创建新的动态追问。
+
 ## 安全要求
 
 测试不会使用默认开发数据库。必须显式提供 `STABILITY_TEST_DATABASE_URL`，且 URL：
@@ -53,6 +62,7 @@ npx prisma db push
 
 ```powershell
 $env:DATABASE_URL=$env:STABILITY_TEST_DATABASE_URL
+$env:DYNAMIC_FOLLOWUP_EXPERIMENT="true"
 npm run dev
 ```
 
@@ -70,6 +80,7 @@ npm run test:stability
 npm run test:stability:end-pitch
 npm run test:stability:report-status
 npm run test:stability:qa-answer
+npm run test:stability:dynamic-followup
 ```
 
 如果本地服务没有连接同一个测试数据库，测试会因找不到 fixture 而明确失败。测试不调用 AI、ASR，也不上传文件。
