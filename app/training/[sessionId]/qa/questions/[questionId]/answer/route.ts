@@ -146,7 +146,16 @@ export async function POST(
     return NextResponse.json({ error: "答辩问题不存在。" }, { status: 404 });
   }
 
-  if (recordingId) {
+  const existingAnswer = await prisma.trainingAnswer.findUnique({
+    where: {
+      questionId,
+    },
+    select: {
+      recordingId: true,
+    },
+  });
+
+  if (recordingId && !existingAnswer?.recordingId) {
     const recording = await prisma.trainingRecording.findFirst({
       where: {
         id: recordingId,
@@ -166,40 +175,82 @@ export async function POST(
     }
   }
 
-  const existingAnswer = await prisma.trainingAnswer.findUnique({
-    where: {
-      questionId,
-    },
-    select: {
-      startedAt: true,
-    },
-  });
   const now = new Date();
-  const startedAt = existingAnswer?.startedAt ?? answerStartedAt ?? now;
+  const startedAt = answerStartedAt ?? now;
   const durationSec = getDurationSec(startedAt, now);
 
-  await prisma.trainingAnswer.upsert({
-    where: {
-      questionId,
-    },
-    update: {
-      answerText,
-      revealedQuestionText,
-      recordingId,
-      startedAt,
-      endedAt: now,
-      durationSec,
-    },
-    create: {
-      sessionId,
-      questionId,
-      answerText,
-      revealedQuestionText,
-      recordingId,
-      startedAt,
-      endedAt: now,
-      durationSec,
-    },
+  const savedAnswer = await prisma.$transaction(async (transaction) => {
+    const answer = await transaction.trainingAnswer.upsert({
+      where: {
+        questionId,
+      },
+      update: revealedQuestionText
+        ? {
+            revealedQuestionText: true,
+          }
+        : {},
+      create: {
+        sessionId,
+        questionId,
+        answerText,
+        revealedQuestionText,
+        recordingId,
+        startedAt,
+        endedAt: now,
+        durationSec,
+      },
+      select: {
+        id: true,
+        questionId: true,
+        answerText: true,
+        revealedQuestionText: true,
+        recordingId: true,
+        startedAt: true,
+        endedAt: true,
+        durationSec: true,
+      },
+    });
+
+    if (recordingId && !answer.recordingId) {
+      await transaction.trainingAnswer.updateMany({
+        where: {
+          id: answer.id,
+          recordingId: null,
+        },
+        data: {
+          recordingId,
+        },
+      });
+    }
+
+    const existingAnswerText = answer.answerText?.trim() ?? "";
+    if (answerText && answerText.length > existingAnswerText.length) {
+      await transaction.trainingAnswer.updateMany({
+        where: {
+          id: answer.id,
+          answerText: answer.answerText,
+        },
+        data: {
+          answerText,
+        },
+      });
+    }
+
+    return transaction.trainingAnswer.findUniqueOrThrow({
+      where: {
+        id: answer.id,
+      },
+      select: {
+        id: true,
+        questionId: true,
+        answerText: true,
+        revealedQuestionText: true,
+        recordingId: true,
+        startedAt: true,
+        endedAt: true,
+        durationSec: true,
+      },
+    });
   });
 
   const nextQuestion = shouldFinish
@@ -225,6 +276,7 @@ export async function POST(
 
     return NextResponse.json({
       completed: true,
+      answer: savedAnswer,
       session: {
         ...updatedSession,
         qaEndedAt: updatedSession.qaEndedAt?.toISOString() ?? null,
@@ -234,6 +286,7 @@ export async function POST(
 
   return NextResponse.json({
     completed: false,
+    answer: savedAnswer,
     nextQuestionId: nextQuestion.id,
     nextOrderIndex: nextQuestion.orderIndex,
   });
