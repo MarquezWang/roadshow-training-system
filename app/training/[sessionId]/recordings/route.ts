@@ -11,6 +11,7 @@ type RecordingRouteContext = Readonly<{
 }>;
 
 const maxRecordingSizeBytes = 100 * 1024 * 1024;
+const pitchUploadGraceAfterEndMs = 60_000;
 const allowedAudioTypes = new Map([
   ["audio/webm", "webm"],
   ["audio/mp4", "m4a"],
@@ -53,6 +54,30 @@ function readRecordingPhase(value: FormDataEntryValue | null) {
   return phase === "QA" ? "QA" : "PITCH";
 }
 
+function canUploadRecording(
+  phase: "PITCH" | "QA",
+  sessionStatus: string,
+  pitchEndedAt: Date | null,
+  requestReceivedAt: Date,
+) {
+  if (phase === "QA") {
+    return sessionStatus === "QAING";
+  }
+
+  if (sessionStatus === "PITCHING") {
+    return true;
+  }
+
+  // 当前前端会先结束路演，再立即上传刚停止的 Pitch 录音。
+  return (
+    sessionStatus === "QA_READY" &&
+    pitchEndedAt !== null &&
+    requestReceivedAt.getTime() - pitchEndedAt.getTime() >= 0 &&
+    requestReceivedAt.getTime() - pitchEndedAt.getTime() <=
+      pitchUploadGraceAfterEndMs
+  );
+}
+
 function buildRecordingPath(sessionId: string, extension: string) {
   const safeFileName = `${randomUUID()}.${extension}`;
   const uploadRoot = path.resolve(process.cwd(), "uploads");
@@ -86,6 +111,7 @@ export async function POST(
   request: NextRequest,
   context: RecordingRouteContext,
 ) {
+  const requestReceivedAt = new Date();
   const { sessionId } = await context.params;
   const session = await prisma.trainingSession.findUnique({
     where: {
@@ -94,6 +120,8 @@ export async function POST(
     select: {
       id: true,
       projectId: true,
+      status: true,
+      pitchEndedAt: true,
     },
   });
 
@@ -103,6 +131,24 @@ export async function POST(
 
   const formData = await request.formData();
   const file = formData.get("file");
+  const phase = readRecordingPhase(formData.get("phase"));
+
+  if (
+    !canUploadRecording(
+      phase,
+      session.status,
+      session.pitchEndedAt,
+      requestReceivedAt,
+    )
+  ) {
+    return NextResponse.json(
+      {
+        error: "当前训练状态不能上传该阶段的录音。",
+        reason: "invalid_recording_phase_for_session_status",
+      },
+      { status: 409 },
+    );
+  }
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "缺少录音文件。" }, { status: 400 });
@@ -141,7 +187,7 @@ export async function POST(
       data: {
         sessionId,
         projectId: session.projectId,
-        phase: readRecordingPhase(formData.get("phase")),
+        phase,
         status: "RECORDED",
         originalName: file.name || null,
         fileName: safeFileName,
