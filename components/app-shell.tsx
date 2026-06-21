@@ -1,4 +1,14 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
+  const pathname = usePathname();
+
+  if (pathname === "/") {
+    return children;
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 text-slate-950">
       <header className="border-b border-slate-200 bg-white">

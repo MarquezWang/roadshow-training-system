@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Roadshow Training System",
-  description: "A roadshow training system built with Next.js.",
+  title: "AI 路演训练系统",
+  description:
+    "上传项目材料，模拟真实路演与评委答辩，生成结构化评分报告和优化建议。",
 };
 
 export default function RootLayout({
