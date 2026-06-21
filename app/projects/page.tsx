@@ -15,14 +15,19 @@ export default async function ProjectsPage() {
       summary: true,
       cooperationDemand: true,
       createdAt: true,
+      _count: {
+        select: {
+          fileAssets: true,
+        },
+      },
     },
   });
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
       <PageHeader
-        title="项目管理"
-        description="查看、新建和编辑路演项目基础信息。"
+        title="我的项目"
+        description="查看项目、管理项目材料并开始路演训练。"
         action={{ href: "/projects/new", label: "新建项目" }}
       />
 

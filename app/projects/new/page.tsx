@@ -85,7 +85,7 @@ export default function NewProjectPage() {
     <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
       <PageHeader
         title="新建项目"
-        description="填写项目的基础路演信息，后续训练功能会基于这些内容展开。"
+        description="填写项目基础信息，创建后可继续上传项目材料并开始路演训练。"
       />
       <section className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <ProjectForm

@@ -325,6 +325,13 @@ export default async function ProjectDetailPage({
   const latestScoreDetail = latestScoreResult
     ? parseScoreDetail(latestScoreResult.scoreDetail)
     : null;
+  const uploadedMaterialCount = project.fileAssets.length;
+  const aiReadyMaterialCount = project.fileAssets.filter(
+    (file) =>
+      file.parseStatus === "SUCCESS" &&
+      file.includeInAIContext &&
+      Boolean(file.extractedText),
+  ).length;
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
@@ -353,6 +360,12 @@ export default async function ProjectDetailPage({
         >
           查看 AI 上下文
         </Link>
+        <Link
+          href="#project-materials"
+          className="inline-flex h-10 items-center justify-center rounded-md border border-cyan-200 bg-cyan-50 px-4 text-sm font-medium text-cyan-800 transition-colors hover:bg-cyan-100"
+        >
+          上传或查看材料
+        </Link>
         <form
           action={`/projects/${project.id}/training-sessions?redirect=1`}
           method="post"
@@ -365,6 +378,20 @@ export default async function ProjectDetailPage({
           </button>
         </form>
       </div>
+
+      {uploadedMaterialCount === 0 ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+          当前项目尚未上传材料，仍可开始训练，但材料诊断、追问生成和报告建议可能不够完整。建议先上传
+          PPT/PDF 后再训练。
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm leading-6 text-cyan-900">
+          已上传 {uploadedMaterialCount} 份项目材料
+          {aiReadyMaterialCount > 0
+            ? `，其中 ${aiReadyMaterialCount} 份已解析并纳入 AI 上下文。`
+            : "，建议先完成解析并纳入 AI 上下文，以获得更完整的训练反馈。"}
+        </div>
+      )}
 
       <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {stats.map((item) => (
@@ -905,7 +932,10 @@ export default async function ProjectDetailPage({
         )}
       </section>
 
-      <section className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <section
+        id="project-materials"
+        className="mt-6 scroll-mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+      >
         <div className="flex flex-col gap-2 border-b border-slate-200 pb-5">
           <h2 className="text-base font-semibold text-slate-950">项目材料</h2>
           <p className="text-sm text-slate-600">

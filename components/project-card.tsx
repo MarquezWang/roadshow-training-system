@@ -9,6 +9,9 @@ type ProjectCardProps = Readonly<{
     summary: string;
     cooperationDemand: string;
     createdAt: Date;
+    _count: {
+      fileAssets: number;
+    };
   };
 }>;
 
@@ -42,6 +45,17 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <span className="rounded-md bg-slate-100 px-2.5 py-1 text-slate-700">
               {project.stage || "未填写阶段"}
             </span>
+            <span
+              className={
+                project._count.fileAssets > 0
+                  ? "rounded-md bg-cyan-50 px-2.5 py-1 text-cyan-800"
+                  : "rounded-md bg-amber-50 px-2.5 py-1 text-amber-800"
+              }
+            >
+              {project._count.fileAssets > 0
+                ? `已上传 ${project._count.fileAssets} 份材料`
+                : "暂无材料"}
+            </span>
           </div>
         </div>
         <p className="text-sm text-slate-500">{formatDate(project.createdAt)}</p>
@@ -63,7 +77,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
           href={`/projects/${project.id}`}
           className="text-sm font-medium text-teal-700 hover:text-teal-900"
         >
-          查看详情
+          查看项目
         </Link>
       </div>
     </article>
