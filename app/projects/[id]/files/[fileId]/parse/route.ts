@@ -18,6 +18,7 @@ function redirectToProject(
   params.forEach((value, key) => {
     url.searchParams.set(key, value);
   });
+  url.hash = "project-materials";
 
   return NextResponse.redirect(url, 303);
 }

@@ -95,6 +95,37 @@ const parseStatusLabel: Record<string, string> = {
   FAILED: "解析失败",
 };
 
+function getAIContextStatus(
+  parseStatus: string,
+  includeInAIContext: boolean,
+) {
+  if (parseStatus === "PENDING") {
+    return {
+      label: "待解析，尚未用于 AI",
+      className: "mt-1 text-amber-700",
+    };
+  }
+
+  if (parseStatus === "FAILED") {
+    return {
+      label: "解析失败，尚未用于 AI",
+      className: "mt-1 text-red-700",
+    };
+  }
+
+  if (parseStatus === "SUCCESS" && includeInAIContext) {
+    return {
+      label: "已解析并纳入 AI",
+      className: "mt-1 text-teal-700",
+    };
+  }
+
+  return {
+    label: "已解析但未纳入 AI",
+    className: "mt-1 text-slate-500",
+  };
+}
+
 const textPreview = (text: string) =>
   text.length > 500 ? `${text.slice(0, 500)}...` : text;
 
@@ -382,7 +413,7 @@ export default async function ProjectDetailPage({
       {uploadedMaterialCount === 0 ? (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
           当前项目尚未上传材料，仍可开始训练，但材料诊断、追问生成和报告建议可能不够完整。建议先上传
-          PPT/PDF 后再训练。
+          PPTX/PDF 后再训练。
         </div>
       ) : (
         <div className="mt-4 rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm leading-6 text-cyan-900">
@@ -941,17 +972,25 @@ export default async function ProjectDetailPage({
           <p className="text-sm text-slate-600">
             支持上传并解析 PDF、PPTX、DOCX、TXT，单个文件最大 30MB。当前仅提取主要文字，不做 OCR 或复杂版式识别。
           </p>
+          <ol className="mt-2 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
+            <li className="rounded-md bg-slate-100 px-2.5 py-1">1. 上传材料</li>
+            <li aria-hidden="true">→</li>
+            <li className="rounded-md bg-slate-100 px-2.5 py-1">2. 解析材料</li>
+            <li aria-hidden="true">→</li>
+            <li className="rounded-md bg-slate-100 px-2.5 py-1">3. 确认纳入 AI</li>
+          </ol>
         </div>
 
         {uploadStatus === "success" ? (
           <p className="mt-5 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-800">
-            文件上传成功。
+            文件上传成功。下一步请点击文件卡片中的“解析材料”，提取可用于 AI
+            的文本。
           </p>
         ) : null}
 
         {parseStatus === "success" ? (
           <p className="mt-5 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-800">
-            文件解析成功。
+            文件解析成功，请确认该文件的 AI 使用状态。
           </p>
         ) : null}
 
@@ -991,6 +1030,7 @@ export default async function ProjectDetailPage({
             type="file"
             name="file"
             accept=".pdf,.pptx,.docx,.txt"
+            required
             className="block w-full text-sm text-slate-700 file:mr-4 file:rounded-md file:border-0 file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700"
           />
           <button
@@ -1003,11 +1043,17 @@ export default async function ProjectDetailPage({
 
         {project.fileAssets.length > 0 ? (
           <div className="mt-6 grid gap-4">
-            {project.fileAssets.map((file) => (
-              <article
-                key={file.id}
-                className="rounded-lg border border-slate-200 bg-white p-4"
-              >
+            {project.fileAssets.map((file) => {
+              const aiContextStatus = getAIContextStatus(
+                file.parseStatus,
+                file.includeInAIContext,
+              );
+
+              return (
+                <article
+                  key={file.id}
+                  className="rounded-lg border border-slate-200 bg-white p-4"
+                >
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <h3 className="truncate text-sm font-semibold text-slate-950">
@@ -1035,16 +1081,8 @@ export default async function ProjectDetailPage({
                       </div>
                       <div>
                         <dt className="text-xs text-slate-500">AI 分析</dt>
-                        <dd
-                          className={
-                            file.includeInAIContext
-                              ? "mt-1 text-teal-700"
-                              : "mt-1 text-slate-500"
-                          }
-                        >
-                          {file.includeInAIContext
-                            ? "纳入 AI 分析"
-                            : "不纳入 AI 分析"}
+                        <dd className={aiContextStatus.className}>
+                          {aiContextStatus.label}
                         </dd>
                       </div>
                     </dl>
@@ -1059,7 +1097,9 @@ export default async function ProjectDetailPage({
                         type="submit"
                         className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
                       >
-                        解析
+                        {file.parseStatus === "PENDING"
+                          ? "解析材料"
+                          : "重新解析"}
                       </button>
                     </form>
                     <form
@@ -1071,7 +1111,9 @@ export default async function ProjectDetailPage({
                         disabled={file.parseStatus !== "SUCCESS"}
                         className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                       >
-                        {file.includeInAIContext ? "排除分析" : "纳入分析"}
+                        {file.includeInAIContext
+                          ? "暂不用于 AI"
+                          : "纳入 AI"}
                       </button>
                     </form>
                   </div>
@@ -1096,10 +1138,14 @@ export default async function ProjectDetailPage({
                     <p className="mt-2 text-sm leading-6 text-red-700">
                       {file.parseError}
                     </p>
+                    <p className="mt-2 text-sm leading-6 text-red-700">
+                      请确认文件未损坏且格式受支持，然后点击“重新解析”。
+                    </p>
                   </div>
                 ) : null}
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         ) : (
           <div className="mt-6 rounded-lg border border-dashed border-slate-300 p-6 text-center">
