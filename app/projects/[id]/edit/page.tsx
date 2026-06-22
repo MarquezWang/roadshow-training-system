@@ -12,6 +12,22 @@ type EditProjectPageProps = Readonly<{
 const getValue = (formData: FormData, key: string) =>
   String(formData.get(key) ?? "").trim();
 
+function getOptionalInt(formData: FormData, key: string) {
+  const value = getValue(formData, key);
+
+  if (!value) {
+    return null;
+  }
+
+  const numericValue = Number(value);
+
+  if (!Number.isInteger(numericValue) || numericValue < 1 || numericValue > 9) {
+    return null;
+  }
+
+  return numericValue;
+}
+
 async function updateProject(id: string, formData: FormData) {
   "use server";
 
@@ -34,6 +50,11 @@ async function updateProject(id: string, formData: FormData) {
       applicationScenario: getValue(formData, "applicationScenario"),
       businessModel: getValue(formData, "businessModel"),
       cooperationDemand: getValue(formData, "cooperationDemand"),
+      productForm: getValue(formData, "productForm"),
+      trlLevel: getOptionalInt(formData, "trlLevel"),
+      trlReason: getValue(formData, "trlReason"),
+      teamInfo: getValue(formData, "teamInfo"),
+      currentProgress: getValue(formData, "currentProgress"),
     },
   });
 
@@ -56,6 +77,11 @@ export default async function EditProjectPage({ params }: EditProjectPageProps) 
       applicationScenario: true,
       businessModel: true,
       cooperationDemand: true,
+      productForm: true,
+      trlLevel: true,
+      trlReason: true,
+      teamInfo: true,
+      currentProgress: true,
     },
   });
 
