@@ -29,6 +29,11 @@ model Project {
   applicationScenario String
   businessModel       String
   cooperationDemand   String
+  productForm         String               @default("")
+  trlLevel            Int?
+  trlReason           String               @default("")
+  teamInfo            String               @default("")
+  currentProgress     String               @default("")
   fileAssets          FileAsset[]
   diagnoses           Diagnosis[]
   scoreResults        ScoreResult[]
