@@ -1,0 +1,3 @@
+ALTER TABLE "Project" ADD COLUMN "needsConversionSupport" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Project" ADD COLUMN "projectContact" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "Project" ADD COLUMN "contactPhone" TEXT NOT NULL DEFAULT '';

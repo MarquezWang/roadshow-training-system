@@ -4,6 +4,7 @@ import { pathToFileURL } from "url";
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import JSZip from "jszip";
+import { validateProjectUpload } from "@/lib/file-upload";
 
 const MAX_EXTRACTED_TEXT_LENGTH = 100_000;
 const SUPPORTED_FILE_TYPES = new Set(["txt", "pdf", "docx", "pptx"]);
@@ -40,12 +41,11 @@ async function resolveUploadPath(filePath: string) {
   return absolutePath;
 }
 
-async function parseTxt(absolutePath: string) {
-  return readFile(absolutePath, "utf8");
+async function parseTxt(buffer: Buffer) {
+  return buffer.toString("utf8");
 }
 
-async function parsePdf(absolutePath: string) {
-  const buffer = await readFile(absolutePath);
+async function parsePdf(buffer: Buffer) {
   const workerPath = path.join(
     process.cwd(),
     "node_modules",
@@ -70,14 +70,13 @@ async function parsePdf(absolutePath: string) {
   }
 }
 
-async function parseDocx(absolutePath: string) {
-  const result = await mammoth.extractRawText({ path: absolutePath });
+async function parseDocx(buffer: Buffer) {
+  const result = await mammoth.extractRawText({ buffer });
 
   return result.value;
 }
 
-async function parsePptx(absolutePath: string) {
-  const buffer = await readFile(absolutePath);
+async function parsePptx(buffer: Buffer) {
   const zip = await JSZip.loadAsync(buffer);
   const slideFiles = Object.keys(zip.files)
     .filter((fileName) => /^ppt\/slides\/slide\d+\.xml$/.test(fileName))
@@ -106,13 +105,49 @@ async function parsePptx(absolutePath: string) {
   return slideTexts.join("\n\n");
 }
 
-export async function parseFileToText(filePath: string, fileType: string) {
+async function parseBufferToText(buffer: Buffer, fileType: string) {
   const normalizedType = fileType.toLowerCase().replace(/^\./, "");
 
   if (!SUPPORTED_FILE_TYPES.has(normalizedType)) {
     throw new Error(`暂不支持解析 ${fileType} 文件。`);
   }
 
+  let extractedText = "";
+
+  if (normalizedType === "txt") {
+    extractedText = await parseTxt(buffer);
+  }
+
+  if (normalizedType === "pdf") {
+    extractedText = await parsePdf(buffer);
+  }
+
+  if (normalizedType === "docx") {
+    extractedText = await parseDocx(buffer);
+  }
+
+  if (normalizedType === "pptx") {
+    extractedText = await parsePptx(buffer);
+  }
+
+  const normalizedText = normalizeText(extractedText);
+
+  if (!normalizedText) {
+    throw new Error("未能从文件中提取到有效文本。");
+  }
+
+  return limitExtractedText(normalizedText);
+}
+
+export async function parseUploadedFileToText(file: File) {
+  validateProjectUpload(file);
+  const fileType = path.extname(file.name).toLowerCase().replace(".", "");
+  const buffer = Buffer.from(await file.arrayBuffer());
+
+  return parseBufferToText(buffer, fileType);
+}
+
+export async function parseFileToText(filePath: string, fileType: string) {
   let absolutePath: string;
 
   try {
@@ -125,29 +160,7 @@ export async function parseFileToText(filePath: string, fileType: string) {
     throw new Error("文件不存在或不可读取。");
   }
 
-  let extractedText = "";
+  const buffer = await readFile(absolutePath);
 
-  if (normalizedType === "txt") {
-    extractedText = await parseTxt(absolutePath);
-  }
-
-  if (normalizedType === "pdf") {
-    extractedText = await parsePdf(absolutePath);
-  }
-
-  if (normalizedType === "docx") {
-    extractedText = await parseDocx(absolutePath);
-  }
-
-  if (normalizedType === "pptx") {
-    extractedText = await parsePptx(absolutePath);
-  }
-
-  const normalizedText = normalizeText(extractedText);
-
-  if (!normalizedText) {
-    throw new Error("未能从文件中提取到有效文本。");
-  }
-
-  return limitExtractedText(normalizedText);
+  return parseBufferToText(buffer, fileType);
 }

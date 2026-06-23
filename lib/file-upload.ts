@@ -4,6 +4,7 @@ import path from "path";
 export const MAX_UPLOAD_SIZE = 30 * 1024 * 1024;
 
 const ALLOWED_EXTENSIONS = new Set([".pdf", ".pptx", ".docx", ".txt"]);
+const INITIAL_MATERIAL_EXTENSIONS = new Set([".pdf", ".pptx"]);
 
 export type StoredProjectFile = {
   originalName: string;
@@ -22,6 +23,58 @@ export function formatFileSize(size: number) {
 
 export function isSupportedUploadFile(fileName: string) {
   return ALLOWED_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
+
+export function validateProjectUpload(file: File) {
+  if (!file || file.size === 0) {
+    throw new Error("请选择需要上传的文件。");
+  }
+
+  if (file.size > MAX_UPLOAD_SIZE) {
+    throw new Error("文件大小不能超过 30MB。");
+  }
+
+  if (!isSupportedUploadFile(file.name)) {
+    throw new Error("仅支持上传 PDF、PPTX、DOCX 或 TXT 文件。");
+  }
+}
+
+export class InitialProjectMaterialValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InitialProjectMaterialValidationError";
+  }
+}
+
+export function validateInitialProjectMaterial(files: File[]) {
+  if (files.length !== 1 || files[0].size === 0) {
+    throw new InitialProjectMaterialValidationError(
+      "仅支持上传 1 个 PPTX 或 PDF 文件。",
+    );
+  }
+
+  const file = files[0];
+  const extension = path.extname(file.name).toLowerCase();
+
+  if (extension === ".ppt") {
+    throw new InitialProjectMaterialValidationError(
+      "暂不支持旧版 .ppt 文件，请另存为 .pptx 后上传。",
+    );
+  }
+
+  if (!INITIAL_MATERIAL_EXTENSIONS.has(extension)) {
+    throw new InitialProjectMaterialValidationError(
+      "仅支持上传 1 个 PPTX 或 PDF 文件。",
+    );
+  }
+
+  if (file.size > MAX_UPLOAD_SIZE) {
+    throw new InitialProjectMaterialValidationError(
+      "文件大小不能超过 30MB，请压缩后重新上传。",
+    );
+  }
+
+  return file;
 }
 
 function sanitizeProjectId(projectId: string) {
@@ -43,17 +96,7 @@ function sanitizeFileName(fileName: string) {
 }
 
 export async function saveProjectUpload(projectId: string, file: File) {
-  if (!file || file.size === 0) {
-    throw new Error("请选择需要上传的文件。");
-  }
-
-  if (file.size > MAX_UPLOAD_SIZE) {
-    throw new Error("文件大小不能超过 30MB。");
-  }
-
-  if (!isSupportedUploadFile(file.name)) {
-    throw new Error("仅支持上传 PDF、PPTX、DOCX 或 TXT 文件。");
-  }
+  validateProjectUpload(file);
 
   const safeProjectId = sanitizeProjectId(projectId);
   const safeFileName = sanitizeFileName(file.name);

@@ -5,6 +5,7 @@ type CallAIOptions = {
   userPrompt: string;
   temperature?: number;
   maxOutputTokens?: number;
+  seed?: number;
 };
 
 type CallAIResult = {
@@ -83,6 +84,7 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
         ],
         temperature: options.temperature ?? 0.2,
         max_tokens: options.maxOutputTokens ?? config.maxOutputTokens,
+        seed: options.seed,
       },
       {
         signal: controller.signal,

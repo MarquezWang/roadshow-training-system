@@ -18,29 +18,36 @@ model User {
 }
 
 model Project {
-  id                  String               @id @default(cuid())
-  ownerId             String
-  owner               User                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  name                String
-  field               String
-  stage               String
-  summary             String
-  coreTechnology      String
-  applicationScenario String
-  businessModel       String
-  cooperationDemand   String
-  fileAssets          FileAsset[]
-  diagnoses           Diagnosis[]
-  scoreResults        ScoreResult[]
-  questions           Question[]
-  reports             Report[]
-  trainingSessions    TrainingSession[]
-  trainingRecordings  TrainingRecording[]
-  trainingTranscripts TrainingTranscript[]
-  trainingAnalyses    TrainingAnalysis[]
-  trainingQuestions   TrainingQuestion[]
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
+  id                      String               @id @default(cuid())
+  ownerId                 String
+  owner                   User                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name                    String
+  field                   String
+  stage                   String
+  summary                 String
+  coreTechnology          String
+  applicationScenario     String
+  businessModel           String
+  cooperationDemand       String
+  productForm             String               @default("")
+  trlBasis                String               @default("")
+  teamInfo                String               @default("")
+  cooperationDemandDetail String               @default("")
+  needsConversionSupport  Boolean              @default(false)
+  projectContact          String               @default("")
+  contactPhone            String               @default("")
+  fileAssets              FileAsset[]
+  diagnoses               Diagnosis[]
+  scoreResults            ScoreResult[]
+  questions               Question[]
+  reports                 Report[]
+  trainingSessions        TrainingSession[]
+  trainingRecordings      TrainingRecording[]
+  trainingTranscripts     TrainingTranscript[]
+  trainingAnalyses        TrainingAnalysis[]
+  trainingQuestions       TrainingQuestion[]
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
 
   @@index([ownerId])
 }

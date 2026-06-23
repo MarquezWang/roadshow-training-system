@@ -80,13 +80,15 @@ function formatDurationSec(durationSec: number | null) {
 }
 
 const projectFields = [
-  { key: "field", label: "所属赛道" },
-  { key: "stage", label: "项目阶段" },
-  { key: "summary", label: "项目简介" },
-  { key: "coreTechnology", label: "核心技术" },
+  { key: "summary", label: "一句话简介" },
+  { key: "field", label: "所属领域" },
   { key: "applicationScenario", label: "应用场景" },
-  { key: "businessModel", label: "商业模式" },
-  { key: "cooperationDemand", label: "合作/融资诉求" },
+  { key: "coreTechnology", label: "技术关键词" },
+  { key: "productForm", label: "产品形态" },
+  { key: "stage", label: "TRL 成熟度" },
+  { key: "trlBasis", label: "TRL 判断依据" },
+  { key: "cooperationDemand", label: "合作需求" },
+  { key: "cooperationDemandDetail", label: "合作需求补充说明" },
 ] as const;
 
 const parseStatusLabel: Record<string, string> = {
