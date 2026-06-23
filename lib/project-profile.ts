@@ -28,6 +28,18 @@ export const COOPERATION_DEMAND_OPTIONS = [
   "其他",
 ] as const;
 
+export const PROJECT_TRL_OPTIONS = [
+  ["TRL 1", "基础原理阶段：有基础理论或科学原理，但还没有明确技术方案"],
+  ["TRL 2", "技术概念阶段：已提出技术概念、应用设想或初步方案"],
+  ["TRL 3", "原理验证阶段：已完成关键原理、算法、功能或实验验证"],
+  ["TRL 4", "实验室样机阶段：已形成实验室样机、Demo、模型或初步系统"],
+  ["TRL 5", "相关环境验证阶段：已在实验环境、模拟环境或相关场景中验证"],
+  ["TRL 6", "工程样机验证阶段：已形成较完整原型，并完成接近真实环境的测试"],
+  ["TRL 7", "真实场景试点阶段：已在真实用户、真实场景或示范项目中试用"],
+  ["TRL 8", "定型应用阶段：产品或系统基本定型，具备交付、部署或推广条件"],
+  ["TRL 9", "成熟应用阶段：已稳定运行、商业化应用、批量交付或规模推广"],
+] as const;
+
 export type ProjectField = (typeof PROJECT_FIELD_OPTIONS)[number];
 export type CooperationDemand = (typeof COOPERATION_DEMAND_OPTIONS)[number];
 

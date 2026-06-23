@@ -2,6 +2,10 @@ import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { ProjectForm } from "@/components/project-form";
 import { prisma } from "@/lib/prisma";
+import {
+  isCooperationDemand,
+  isProjectField,
+} from "@/lib/project-profile";
 
 type EditProjectPageProps = Readonly<{
   params: Promise<{
@@ -16,9 +20,41 @@ async function updateProject(id: string, formData: FormData) {
   "use server";
 
   const name = getValue(formData, "name");
+  const summary = getValue(formData, "summary");
+  const field = getValue(formData, "field");
+  const stage = getValue(formData, "stage");
+  const coreTechnology = getValue(formData, "coreTechnology");
+  const applicationScenario = getValue(formData, "applicationScenario");
+  const cooperationDemands = [
+    ...new Set(
+      formData
+        .getAll("cooperationDemand")
+        .map((value) => String(value).trim())
+        .filter(Boolean),
+    ),
+  ];
+  const cooperationDemandDetail = getValue(
+    formData,
+    "cooperationDemandDetail",
+  );
 
-  if (!name) {
-    throw new Error("项目名称不能为空");
+  if (
+    !name ||
+    !summary ||
+    !isProjectField(field) ||
+    !applicationScenario ||
+    !coreTechnology ||
+    !/^TRL [1-9]$/.test(stage)
+  ) {
+    throw new Error("请完整填写项目档案。");
+  }
+
+  if (
+    cooperationDemands.length === 0 ||
+    cooperationDemands.some((demand) => !isCooperationDemand(demand)) ||
+    (cooperationDemands.includes("其他") && !cooperationDemandDetail)
+  ) {
+    throw new Error("请完整填写合作需求。");
   }
 
   await prisma.project.update({
@@ -27,13 +63,14 @@ async function updateProject(id: string, formData: FormData) {
     },
     data: {
       name,
-      field: getValue(formData, "field"),
-      stage: getValue(formData, "stage"),
-      summary: getValue(formData, "summary"),
-      coreTechnology: getValue(formData, "coreTechnology"),
-      applicationScenario: getValue(formData, "applicationScenario"),
-      businessModel: getValue(formData, "businessModel"),
-      cooperationDemand: getValue(formData, "cooperationDemand"),
+      field,
+      stage,
+      summary,
+      coreTechnology,
+      applicationScenario,
+      productForm: getValue(formData, "productForm"),
+      cooperationDemand: cooperationDemands.join("、"),
+      cooperationDemandDetail,
     },
   });
 
@@ -54,8 +91,9 @@ export default async function EditProjectPage({ params }: EditProjectPageProps) 
       summary: true,
       coreTechnology: true,
       applicationScenario: true,
-      businessModel: true,
+      productForm: true,
       cooperationDemand: true,
+      cooperationDemandDetail: true,
     },
   });
 

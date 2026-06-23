@@ -400,7 +400,7 @@ export async function POST(
           orderIndex: question.orderIndex,
           questionText: question.questionText,
           questionType: question.questionType,
-          source: question.source ?? "AI",
+          source: "AI",
           basis: question.basis,
         })),
       });

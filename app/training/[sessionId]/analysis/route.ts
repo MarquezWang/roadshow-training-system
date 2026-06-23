@@ -49,7 +49,7 @@ const COVERAGE_ITEMS = [
 type AnalysisQuestionData = {
   questionId: string;
   orderIndex: number;
-  questionType: string;
+  questionType: string | null;
   source: string;
   questionText: string;
   answerDurationSec: number | null;
@@ -452,7 +452,7 @@ async function createOrUpdateProcessingAnalysis(input: {
     projectId: input.projectId,
     transcriptId: input.transcriptId,
     status: "PROCESSING" as const,
-    analysisType: PITCH_ANALYSIS_TYPE as const,
+    analysisType: PITCH_ANALYSIS_TYPE,
     durationSec: input.durationSec,
     pageCount: input.pageCount,
     slideEventCount: input.slideEventCount,

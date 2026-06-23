@@ -206,6 +206,8 @@ export async function POST(
       );
     }
 
+    const projectId = session.projectId;
+
     async function createOrReturnDynamicQuestion(questionText: string) {
       const existingQuestion = await findExistingDynamicQuestion(sessionId);
       const serializedExistingQuestion =
@@ -219,7 +221,7 @@ export async function POST(
         const createdQuestion = await prisma.trainingQuestion.create({
           data: {
             sessionId,
-            projectId: session.projectId,
+            projectId,
             orderIndex: DYNAMIC_FOLLOWUP_ORDER_INDEX,
             questionText,
             questionType: DYNAMIC_FOLLOWUP_TYPE,
@@ -362,7 +364,7 @@ export async function POST(
 
     let aiContext;
     try {
-      aiContext = await buildProjectAIContext(session.projectId);
+      aiContext = await buildProjectAIContext(projectId);
     } catch {
       devLog("[dynamic-followup:POST] project context not found, using minimal", {
         sessionId,
@@ -373,7 +375,7 @@ export async function POST(
     // 填充项目上下文 debug 信息
     const projectName = aiContext?.project?.name ?? null;
     const projectDetailText = [
-      aiContext?.project?.description ?? "",
+      aiContext?.project?.summary ?? "",
       ...(aiContext?.files ?? []).map((f) => f.extractedText ?? ""),
     ]
       .filter(Boolean)
@@ -554,7 +556,7 @@ export async function POST(
       transcript: pitchTranscript.text,
       project: aiContext?.project ?? null,
       files: aiContext?.files ?? [],
-      evaluationRule: aiContext?.evaluationRule ?? "",
+      evaluationRule: aiContext?.evaluationRule ?? null,
       criteria: aiContext?.criteria ?? [],
       existingQuestions: otherQuestionsText,
     });
@@ -564,7 +566,7 @@ export async function POST(
       hasProjectContext: projectContextText.length > 0,
       hasRegularQuestions: otherQuestionsText.length > 0,
       hasEvaluationRules:
-        (aiContext?.evaluationRule ?? "").length > 0 ||
+        Boolean(aiContext?.evaluationRule) ||
         (aiContext?.criteria ?? []).length > 0,
     };
 

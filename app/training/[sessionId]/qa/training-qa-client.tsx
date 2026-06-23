@@ -578,7 +578,7 @@ export function TrainingQaClient({
               body.createdQuestionId ?? body.createdQuestion.id,
           });
 
-          if (qaPhaseRef.current !== "DONE") {
+          if (canAttemptDynamicFollowupPhase(qaPhaseRef.current)) {
             setQuestions((currentQuestions) => {
               const hasDynamicQuestion = currentQuestions.some(
                 (question) =>
@@ -2175,11 +2175,9 @@ const beginJudgeQuestion = useCallback(
                 </div>
               ) : null}
 
-              {isGenerating || qaPhase === "PREPARING" ? (
+              {isGenerating ? (
                 <p className="text-center text-sm text-slate-500">
-                  {qaPhase === "PREPARING"
-                    ? "答辩准备中，请稍候..."
-                    : "评委问题准备中，请稍候..."}
+                  评委问题准备中，请稍候...
                 </p>
               ) : null}
             </div>
