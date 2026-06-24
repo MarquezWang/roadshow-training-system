@@ -9,6 +9,18 @@ type ReportStatusContext = Readonly<{
   }>;
 }>;
 
+const TRANSCRIPT_WAIT_TIMEOUT_MS = 90_000;
+
+function isWaitingTranscriptStatus(status: string | null | undefined) {
+  return status === "PENDING" || status === "PROCESSING";
+}
+
+function hasWaitTimedOut(startedAt: Date | null | undefined, nowMs: number) {
+  return startedAt
+    ? nowMs - startedAt.getTime() > TRANSCRIPT_WAIT_TIMEOUT_MS
+    : false;
+}
+
 export async function GET(
   _request: NextRequest,
   context: ReportStatusContext,
@@ -159,12 +171,24 @@ export async function GET(
   const hasQaEnded = ["QA_ENDED", "REPORT_READY", "FINISHED"].includes(
     session.status,
   );
+  const nowMs = Date.now();
+  const qaTranscriptWaitTimedOut =
+    hasQaEnded && hasWaitTimedOut(session.qaEndedAt, nowMs);
+  const pitchTranscriptWaiting = isWaitingTranscriptStatus(
+    pitchTranscript?.status,
+  );
+  const pitchTranscriptWaitTimedOut =
+    pitchTranscriptWaiting &&
+    hasWaitTimedOut(
+      pitchTranscript?.updatedAt ?? session.pitchEndedAt ?? session.qaEndedAt,
+      nowMs,
+    );
 
   // 只等待实际进入过的题。未进入的基础题不阻塞报告生成。
   const allQaCompleteOrFailed =
     hasQaEnded &&
-    qaPendingCount === 0 &&
-    qaProcessingCount === 0;
+    ((qaPendingCount === 0 && qaProcessingCount === 0) ||
+      qaTranscriptWaitTimedOut);
   const noAnalyzableAnswerContent =
     enteredQaAnswers.length === 0 ||
     enteredQaAnswers.every((answer) => {
@@ -174,11 +198,12 @@ export async function GET(
     });
 
   // 判断是否可以生成 analysis
-  // 条件：Pitch transcript 不是 PENDING/PROCESSING，且 QA transcript 全部完成/失败
+  // 条件：Pitch/QA transcript 已稳定，或等待超过阈值后允许降级生成。
   const pitchReady =
     !pitchTranscript ||
     pitchTranscript.status === "COMPLETED" ||
-    pitchTranscript.status === "FAILED";
+    pitchTranscript.status === "FAILED" ||
+    pitchTranscriptWaitTimedOut;
   const canGenerateAnalysis = pitchReady && allQaCompleteOrFailed;
 
   // 判断是否有 stale analysis

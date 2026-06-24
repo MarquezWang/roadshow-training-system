@@ -30,6 +30,7 @@ type TrainingAnalysisRecord = NonNullable<
 const PITCH_ANALYSIS_TYPE = "PITCH";
 const PITCH_ANALYSIS_MAX_OUTPUT_TOKENS = 6_000;
 const PROCESSING_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1_000;
+const TRANSCRIPT_WAIT_TIMEOUT_MS = 90_000;
 const CONTEXT_EXPERT_COMMENT_LIMIT = 10;
 const CONTEXT_HISTORICAL_QUESTION_LIMIT = 10;
 const FALLBACK_ANALYSIS_SCORE = 15;
@@ -167,6 +168,15 @@ function hasEnteredAnswer(answer: {
       answer?.recording ||
       answer?.answerText?.trim(),
   );
+}
+
+function hasTranscriptWaitTimedOut(
+  startedAt: Date | null | undefined,
+  nowMs: number,
+) {
+  return startedAt
+    ? nowMs - startedAt.getTime() > TRANSCRIPT_WAIT_TIMEOUT_MS
+    : false;
 }
 
 function summarizeAnswer(question: AnalysisQuestionData) {
@@ -721,24 +731,43 @@ export async function POST(
 
     const transcript = session.transcripts[0] ?? null;
     const transcriptMissing = !transcript?.text.trim();
+    const nowMs = Date.now();
 
-    // 如果有转写正在进行中，返回等待状态让客户端轮询
+    // 如果 Pitch 转写仍在进行中，未超时前返回等待；超时后继续降级生成。
     if (transcriptMissing) {
       const processingTranscript = await prisma.trainingTranscript.findFirst({
         where: {
           sessionId,
-          status: "PROCESSING",
+          status: {
+            in: ["PENDING", "PROCESSING"],
+          },
           recording: {
             phase: "PITCH",
           },
         },
+        orderBy: {
+          updatedAt: "desc",
+        },
         select: {
+          id: true,
           status: true,
+          updatedAt: true,
         },
       });
-      if (processingTranscript) {
+      const pitchWaitStartedAt =
+        processingTranscript?.updatedAt ?? session.pitchEndedAt;
+      const pitchCanDegrade = hasTranscriptWaitTimedOut(
+        pitchWaitStartedAt,
+        nowMs,
+      );
+
+      if (processingTranscript && !pitchCanDegrade) {
         return NextResponse.json(
-          { error: "路演转写正在进行中，请稍后再试。", transcriptProcessing: true },
+          {
+            error: "路演转写正在进行中，请稍后再试。",
+            transcriptProcessing: true,
+            transcriptStatus: processingTranscript.status,
+          },
           { status: 409 },
         );
       }
@@ -746,7 +775,6 @@ export async function POST(
 
     // 检查 QA 转写状态：有 PENDING/PROCESSING 的 QA 转录时，返回等待状态
     // 等待计时从 qaEndedAt 开始，或从最后一条 QA 录音的结束时间开始
-    const qaTranscriptWaitMs = 90_000;
     const qaEndedTime = session.qaEndedAt?.getTime();
     // 如果 qaEndedAt 不存在（例如 QA 未结束），使用最后一条 QA 录音的时间
     const latestQaAnswerTime = session.trainingQuestions
@@ -757,13 +785,19 @@ export async function POST(
 
     // 只有在有明确基线时间且已等待超过 90 秒，才允许降级生成
     const canDegrade = qaBaselineTime
-      ? Date.now() - qaBaselineTime > qaTranscriptWaitMs
+      ? nowMs - qaBaselineTime > TRANSCRIPT_WAIT_TIMEOUT_MS
       : false;
+    const enteredQaRecordingIds = session.trainingQuestions
+      .filter((q) => hasEnteredAnswer(q.answer) && q.answer?.recording?.id)
+      .map((q) => q.answer!.recording!.id);
 
-    if (!canDegrade) {
+    if (!canDegrade && enteredQaRecordingIds.length > 0) {
       const pendingQaTranscripts = await prisma.trainingTranscript.findMany({
         where: {
           sessionId,
+          recordingId: {
+            in: enteredQaRecordingIds,
+          },
           status: { in: ["PENDING", "PROCESSING"] },
           recording: {
             phase: "QA",

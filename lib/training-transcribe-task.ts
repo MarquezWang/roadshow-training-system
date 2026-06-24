@@ -9,6 +9,7 @@ const MAX_TRANSCRIBE_ATTEMPTS = 3;
 const TRANSCRIBE_RETRY_DELAYS_MS = [1_500, 3_000] as const;
 const TEMPORARY_TRANSCRIBE_ERROR_MESSAGE =
   "转写服务暂时不可用，请稍后重试。";
+const STALE_TRANSCRIPTION_TASK_TIMEOUT_MS = 90_000;
 
 export const transcriptSelect = {
   id: true,
@@ -59,6 +60,18 @@ const runningTranscriptionTasks = new Map<string, Promise<TranscriptionRunResult
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isActiveTranscriptStatus(status: string) {
+  return status === "PENDING" || status === "PROCESSING";
+}
+
+function isStaleActiveTranscript(transcript: TrainingTranscript) {
+  return (
+    isActiveTranscriptStatus(transcript.status) &&
+    Date.now() - transcript.updatedAt.getTime() >
+      STALE_TRANSCRIPTION_TASK_TIMEOUT_MS
+  );
 }
 
 export function getErrorSummary(error: unknown) {
@@ -365,6 +378,7 @@ export async function startTranscriptionTask(
   recordingId: string,
 ) {
   const target = await findTranscriptionTarget(sessionId, recordingId);
+  const runningTask = getRunningTranscriptionTask(recordingId);
 
   if (target.transcript?.status === "COMPLETED" && target.transcript.text.trim()) {
     return {
@@ -375,13 +389,23 @@ export async function startTranscriptionTask(
 
   if (
     target.transcript &&
-    (target.transcript.status === "PENDING" ||
-      target.transcript.status === "PROCESSING")
+    isActiveTranscriptStatus(target.transcript.status)
   ) {
-    return {
-      started: false,
-      transcript: target.transcript,
-    };
+    if (runningTask || !isStaleActiveTranscript(target.transcript)) {
+      return {
+        started: false,
+        transcript: target.transcript,
+      };
+    }
+
+    devWarn("[transcribe:start] stale transcript detected, restarting task", {
+      sessionId,
+      recordingId,
+      transcriptId: target.transcript.id,
+      status: target.transcript.status,
+      staleAgeMs: Date.now() - target.transcript.updatedAt.getTime(),
+      timeoutMs: STALE_TRANSCRIPTION_TASK_TIMEOUT_MS,
+    });
   }
 
   const transcript = await markTranscriptProcessing(target);

@@ -46,6 +46,7 @@ export function QaPrepareClient({
     "系统正在完成答辩前准备，即将进入正式答辩。",
   );
   const navigationStartedRef = useRef(false);
+  const navigationTimerRef = useRef<number | null>(null);
 
   const enterQa = useCallback((nextMessage?: string) => {
     if (navigationStartedRef.current) {
@@ -56,7 +57,8 @@ export function QaPrepareClient({
     setMessage(nextMessage ?? "准备完成，正在进入答辩。");
     setDetail("即将进入正式答辩。");
 
-    window.setTimeout(() => {
+    navigationTimerRef.current = window.setTimeout(() => {
+      navigationTimerRef.current = null;
       router.replace(`/training/${sessionId}/qa`);
     }, 900);
   }, [router, sessionId]);
@@ -202,6 +204,10 @@ export function QaPrepareClient({
       clearRetryTimer();
       if (transitionTimer !== null) {
         clearTimeout(transitionTimer);
+      }
+      if (navigationTimerRef.current !== null) {
+        clearTimeout(navigationTimerRef.current);
+        navigationTimerRef.current = null;
       }
     };
   }, [enterQa, recordingId, sessionId]);

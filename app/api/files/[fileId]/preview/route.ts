@@ -28,13 +28,20 @@ async function resolveUploadFilePath(filePath: string) {
     throw new Error("INVALID_UPLOAD_PATH");
   }
 
-  const uploadsRoot = path.resolve(process.cwd(), "uploads");
+  const projectsUploadsRoot = path.resolve(
+    process.cwd(),
+    "uploads",
+    "projects",
+  );
   const absolutePath = path.resolve(process.cwd(), normalizedPath);
-  const relativeToUploads = path.relative(uploadsRoot, absolutePath);
+  const relativeToProjectsUploads = path.relative(
+    projectsUploadsRoot,
+    absolutePath,
+  );
 
   if (
-    relativeToUploads.startsWith("..") ||
-    path.isAbsolute(relativeToUploads)
+    relativeToProjectsUploads.startsWith("..") ||
+    path.isAbsolute(relativeToProjectsUploads)
   ) {
     throw new Error("INVALID_UPLOAD_PATH");
   }
