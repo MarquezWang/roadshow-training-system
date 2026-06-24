@@ -2,10 +2,16 @@
 
 import { usePathname } from "next/navigation";
 
+function isTrainingFlowPath(pathname: string) {
+  return /^\/training\/[^/]+\/(prepare|pitch|qa-prepare|qa|report)(?:\/.*)?$/.test(
+    pathname,
+  );
+}
+
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
 
-  if (pathname === "/") {
+  if (pathname === "/" || isTrainingFlowPath(pathname)) {
     return children;
   }
 

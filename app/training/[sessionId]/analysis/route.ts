@@ -155,6 +155,20 @@ function isDynamicFollowupQuestion(question: {
   );
 }
 
+function hasEnteredAnswer(answer: {
+  startedAt?: Date | null;
+  endedAt?: Date | null;
+  answerText?: string | null;
+  recording?: { id: string } | null;
+} | null) {
+  return Boolean(
+    answer?.startedAt ||
+      answer?.endedAt ||
+      answer?.recording ||
+      answer?.answerText?.trim(),
+  );
+}
+
 function summarizeAnswer(question: AnalysisQuestionData) {
   const answerText =
     question.transcribeText?.trim() || question.answerText?.trim();
@@ -498,7 +512,6 @@ async function isAnalysisStale(analysis: TrainingAnalysisRecord): Promise<{
   const latestCompletedTranscript = await prisma.trainingTranscript.findFirst({
     where: {
       sessionId: analysis.sessionId,
-      status: "COMPLETED",
       completedAt: { not: null },
     },
     orderBy: { completedAt: "desc" },
@@ -614,6 +627,7 @@ export async function POST(
             answer: {
               select: {
                 id: true,
+                startedAt: true,
                 durationSec: true,
                 answerText: true,
                 endedAt: true,
@@ -736,7 +750,7 @@ export async function POST(
     const qaEndedTime = session.qaEndedAt?.getTime();
     // 如果 qaEndedAt 不存在（例如 QA 未结束），使用最后一条 QA 录音的时间
     const latestQaAnswerTime = session.trainingQuestions
-      .filter((q) => q.answer?.endedAt)
+      .filter((q) => hasEnteredAnswer(q.answer) && q.answer?.endedAt)
       .map((q) => q.answer!.endedAt!.getTime())
       .sort((a, b) => b - a)[0];
     const qaBaselineTime = qaEndedTime ?? latestQaAnswerTime;
@@ -800,8 +814,8 @@ export async function POST(
 
     processingAnalysisId = processingAnalysis.id;
 
-    const enteredQuestions = session.trainingQuestions.filter(
-      (q) => q.answer !== null,
+    const enteredQuestions = session.trainingQuestions.filter((q) =>
+      hasEnteredAnswer(q.answer),
     );
     const baseEnteredQuestions = enteredQuestions.filter(
       (q) => !isDynamicFollowupQuestion(q),
@@ -841,6 +855,58 @@ export async function POST(
     const dynamicFollowupData = dynamicFollowupQuestion
       ? mapQuestionToAnalysisData(dynamicFollowupQuestion)
       : null;
+    const hasAnalyzableText =
+      !transcriptMissing ||
+      qaData.some(
+        (question) =>
+          Boolean(question.answerText?.trim()) ||
+          Boolean(question.transcribeText?.trim()),
+      ) ||
+      Boolean(dynamicFollowupData?.answerText?.trim()) ||
+      Boolean(dynamicFollowupData?.transcribeText?.trim());
+
+    if (!hasAnalyzableText) {
+      const fallbackAnalysis = buildFallbackAnalysis({
+        durationSec,
+        pageCount,
+        slideEventCount: session.slideEvents.length,
+        transcriptMissing,
+        qaData,
+        dynamicFollowupData,
+      });
+      const completedAnalysis = await prisma.trainingAnalysis.update({
+        where: {
+          id: processingAnalysis.id,
+        },
+        data: {
+          status: "COMPLETED",
+          overallScore: fallbackAnalysis.overallScore,
+          summary:
+            "本轮路演与答辩转写文本不可用，系统已生成降级报告。答辩回答内容无法基于文本完整评分，请结合录音回放人工复核。",
+          strengthsJson: JSON.stringify(fallbackAnalysis.strengths, null, 2),
+          weaknessesJson: JSON.stringify(fallbackAnalysis.weaknesses, null, 2),
+          suggestionsJson: JSON.stringify(fallbackAnalysis.suggestions, null, 2),
+          coverageJson: JSON.stringify(
+            fallbackAnalysis.contentCoverage,
+            null,
+            2,
+          ),
+          timingJson: JSON.stringify(fallbackAnalysis.timing, null, 2),
+          slideSyncJson: JSON.stringify(fallbackAnalysis.slideSync, null, 2),
+          riskQuestionsJson: JSON.stringify(
+            fallbackAnalysis.riskQuestions,
+            null,
+            2,
+          ),
+          rawResultJson: JSON.stringify(fallbackAnalysis, null, 2),
+          errorMessage: null,
+        },
+      });
+
+      return NextResponse.json({
+        analysis: serializeAnalysis(completedAnalysis),
+      });
+    }
 
     const [contextResult, template] = await Promise.all([
       buildProjectAIContext(session.projectId),

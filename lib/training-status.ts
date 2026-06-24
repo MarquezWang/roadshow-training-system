@@ -31,7 +31,11 @@ export function getTrainingFlowPath(sessionId: string, status: string) {
     return `/training/${sessionId}/pitch`;
   }
 
-  if (status === "PITCH_ENDED" || status === "QA_READY" || status === "QAING") {
+  if (status === "PITCH_ENDED" || status === "QA_READY") {
+    return `/training/${sessionId}/qa-prepare`;
+  }
+
+  if (status === "QAING") {
     return `/training/${sessionId}/qa`;
   }
 

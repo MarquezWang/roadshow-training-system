@@ -1214,7 +1214,7 @@ export function TrainingSessionClient({
         return;
       }
 
-      const transcribeUrl = `/training/${sessionId}/recordings/${rid}/transcribe`;
+      const transcribeUrl = `/training/${sessionId}/recordings/${rid}/transcribe/start`;
       devLog("[triggerTranscribe]", {
         sessionId,
         savedRecordingId: targetRecordingId,
@@ -1259,16 +1259,19 @@ export function TrainingSessionClient({
 
         const transcript = body?.transcript;
 
-        if (
-          transcript &&
-          transcript.status === "COMPLETED" &&
-          transcript.text
-        ) {
+        if (transcript?.status === "COMPLETED" && transcript.text) {
           setTranscript(transcript);
           setTranscriptDraft(transcript.text);
           setIsTranscriptEditing(false);
           setTranscribeStatus("completed");
           setTranscriptMessage("自动转写已完成。");
+        } else if (
+          transcript?.status === "PENDING" ||
+          transcript?.status === "PROCESSING"
+        ) {
+          setTranscript(transcript);
+          setTranscribeStatus("transcribing");
+          setTranscriptMessage("自动转写已启动，系统将在后台继续处理。");
         } else {
           setTranscribeStatus("failed");
           setTranscribeErrorMessage(
@@ -1603,15 +1606,16 @@ export function TrainingSessionClient({
         Math.max(0, pitchLimitSec - body.session.pitchDurationSec),
       );
 
+      let savedPitchRecordingId: string | undefined;
+
       if (shouldUploadRecording) {
         const savedRecordingId = await stopRecordingAndUpload();
 
         if (savedRecordingId) {
-          // 后台异步转写，不阻塞跳转
-          triggerTranscribe(savedRecordingId).catch((err) => {
-            devWarn("[endPitch] auto-transcribe failed:", err);
-          });
-          setRecordingMessage("路演录音已保存，系统正在后台转写。");
+          savedPitchRecordingId = savedRecordingId;
+          // 启动后台转写，不等待真实 ASR 完成。
+          await triggerTranscribe(savedRecordingId);
+          setRecordingMessage("路演录音已保存，系统正在准备转写。");
         }
       }
 
@@ -1629,7 +1633,10 @@ export function TrainingSessionClient({
 
       if (redirectToQaAfterPitchEnd) {
         isCompletingNormallyRef.current = true;
-        router.replace(`/training/${sessionId}/qa`);
+        const nextUrl = savedPitchRecordingId
+          ? `/training/${sessionId}/qa-prepare?recordingId=${encodeURIComponent(savedPitchRecordingId)}`
+          : `/training/${sessionId}/qa-prepare`;
+        router.replace(nextUrl);
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "结束路演失败。");

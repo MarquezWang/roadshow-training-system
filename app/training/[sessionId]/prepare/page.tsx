@@ -59,9 +59,12 @@ export default async function TrainingPreparePage({
 
   if (
     session.status === "PITCH_ENDED" ||
-    session.status === "QA_READY" ||
-    session.status === "QAING"
+    session.status === "QA_READY"
   ) {
+    redirect(`/training/${session.id}/qa-prepare`);
+  }
+
+  if (session.status === "QAING") {
     redirect(`/training/${session.id}/qa`);
   }
 

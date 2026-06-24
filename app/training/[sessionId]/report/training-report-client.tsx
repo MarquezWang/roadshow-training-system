@@ -100,6 +100,15 @@ function isDynamicFollowupQuestion(question: TrainingQaQuestion) {
   );
 }
 
+function hasEnteredQaQuestion(question: TrainingQaQuestion) {
+  return Boolean(
+    question.answer?.startedAt ||
+      question.answer?.endedAt ||
+      question.answer?.recording ||
+      question.answer?.answerText?.trim(),
+  );
+}
+
 type TrainingReportClientProps = Readonly<{
   sessionId: string;
   sessionStatus: string;
@@ -819,7 +828,7 @@ export function TrainingReportClient({
                 <div className="rounded-md border border-slate-100 bg-slate-50/50 p-3">
                   <p className="text-xs text-slate-400">已进入答辩题数</p>
                   <p className="mt-1 text-sm font-medium text-slate-700">
-                    {qaQuestions.filter((q) => q.answer !== null).length} /{" "}
+                    {qaQuestions.filter(hasEnteredQaQuestion).length} /{" "}
                     {qaQuestions.length}
                   </p>
                 </div>
@@ -954,9 +963,7 @@ export function TrainingReportClient({
         {activeTab === "abort-qa" && (
           <div className="grid gap-6">
             {(() => {
-              const enteredQuestions = qaQuestions.filter(
-                (q) => q.answer !== null,
-              );
+              const enteredQuestions = qaQuestions.filter(hasEnteredQaQuestion);
 
               return (
                 <section className="rounded-lg border border-slate-100 bg-white p-6">
@@ -1652,16 +1659,14 @@ export function TrainingReportClient({
       {/* === 答辩表现 Tab === */}
       {activeTab === "qa" && (
         (() => {
-          // 只展示用户实际进入过的题目（有 TrainingAnswer 才算进入过）
+          // 只展示用户实际进入过的题目。
           const baseQuestions = qaQuestions.filter(
             (q) => !isDynamicFollowupQuestion(q),
           );
-          const enteredQuestions = baseQuestions.filter(
-            (q) => q.answer !== null,
-          );
+          const enteredQuestions = baseQuestions.filter(hasEnteredQaQuestion);
           const dynamicFollowupQuestion =
             qaQuestions.find(
-              (q) => isDynamicFollowupQuestion(q) && q.answer !== null,
+              (q) => isDynamicFollowupQuestion(q) && hasEnteredQaQuestion(q),
             ) ?? null;
           const dynamicFollowupReview =
             analysis?.dynamicFollowupReview ?? null;

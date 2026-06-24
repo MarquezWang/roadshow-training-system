@@ -47,7 +47,7 @@ type TrainingQaClientProps = Readonly<{
   dynamicFollowupExperiment: boolean;
 }>;
 
-type QaPhase = "PREPARING" | "READY" | "ASKING" | "COUNTDOWN" | "ANSWERING" | "SAVING" | "DONE";
+type QaPhase = "READY" | "ASKING" | "COUNTDOWN" | "ANSWERING" | "SAVING" | "DONE";
 type QaRecordingStatus = "idle" | "recording" | "saving" | "saved" | "disabled";
 type PreviewMode = "standard" | "compatible";
 
@@ -69,7 +69,6 @@ const recordingMimeTypeCandidates = [
   "audio/wav",
 ];
 const dynamicFollowupRetryDelayMs = 3_000;
-const dynamicFollowupMaxRetries = 12;
 
 function formatDuration(totalSec: number) {
   const normalizedSec = Math.max(0, totalSec);
@@ -236,7 +235,7 @@ export function TrainingQaClient({
   const initialQuestionIndex = findInitialQuestionIndex(initialQuestions);
   const [status, setStatus] = useState(initialStatus);
   const [qaPhase, setQaPhase] = useState<QaPhase>(
-    initialStatus === "QAING" ? "ASKING" : "PREPARING",
+    initialStatus === "QAING" ? "ASKING" : "READY",
   );
   const [questions, setQuestions] =
     useState<TrainingQaQuestion[]>(initialQuestions);
@@ -265,10 +264,6 @@ export function TrainingQaClient({
     useState<TrainingQaQuestion | null>(null);
   const [isGuardResolved, setIsGuardResolved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  // 答辩准备页进度 (0-100)
-  const [preparingProgress, setPreparingProgress] = useState(0);
-  const preparingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const preparingStartRef = useRef<number>(0);
   const [qaRecordingStatus, setQaRecordingStatus] =
     useState<QaRecordingStatus>("idle");
   const [qaRecordingMessage, setQaRecordingMessage] = useState("");
@@ -389,51 +384,6 @@ export function TrainingQaClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 答辩准备页：进度条动画约 13 秒，结束后进入 READY 或 ASKING 阶段
-  useEffect(() => {
-    if (qaPhase !== "PREPARING") return;
-
-    const PREPARING_DURATION_MS = 13_000;
-    const TICK_INTERVAL_MS = 50;
-    preparingStartRef.current = performance.now();
-
-    preparingTimerRef.current = setInterval(() => {
-      const elapsed = performance.now() - preparingStartRef.current;
-      const fraction = Math.min(elapsed / PREPARING_DURATION_MS, 1);
-
-      // 分段进度：0→35% 快，35→55% 缓，55→85% 流畅，85→100% 收尾
-      let progress: number;
-      const t = fraction;
-      if (t < 0.2) {
-        progress = t * 175; // 0 → 35
-      } else if (t < 0.55) {
-        progress = 35 + (t - 0.2) * 57.1; // 35 → 55
-      } else if (t < 0.88) {
-        progress = 55 + (t - 0.55) * 90.9; // 55 → 85
-      } else {
-        progress = 85 + (t - 0.88) * 125; // 85 → 100
-      }
-
-      setPreparingProgress(Math.min(Math.round(progress), 100));
-
-      if (elapsed >= PREPARING_DURATION_MS) {
-        if (preparingTimerRef.current) {
-          clearInterval(preparingTimerRef.current);
-          preparingTimerRef.current = null;
-        }
-        setPreparingProgress(100);
-        setQaPhase(initialStatus === "QAING" ? "ASKING" : "READY");
-      }
-    }, TICK_INTERVAL_MS);
-
-    return () => {
-      if (preparingTimerRef.current) {
-        clearInterval(preparingTimerRef.current);
-        preparingTimerRef.current = null;
-      }
-    };
-  }, [qaPhase, initialStatus]);
-
   const clearDynamicFollowupRetryTimer = useCallback(() => {
     if (dynamicFollowupRetryTimerRef.current !== null) {
       window.clearTimeout(dynamicFollowupRetryTimerRef.current);
@@ -444,17 +394,6 @@ export function TrainingQaClient({
   const scheduleDynamicFollowupRetry = useCallback(
     (reason: string) => {
       if (!canAttemptDynamicFollowupPhase(qaPhaseRef.current)) {
-        return;
-      }
-
-      if (dynamicFollowupRetryCountRef.current >= dynamicFollowupMaxRetries) {
-        dynamicFollowupCompletedRef.current = true;
-        clearDynamicFollowupRetryTimer();
-        devLog("[dynamic-followup:client] retry limit reached", {
-          sessionId,
-          reason,
-          retryCount: dynamicFollowupRetryCountRef.current,
-        });
         return;
       }
 
@@ -502,8 +441,7 @@ export function TrainingQaClient({
       questions.length === 0 ||
       dynamicFollowupCompletedRef.current ||
       dynamicFollowupInFlightRef.current ||
-      dynamicFollowupRetryTimerRef.current !== null ||
-      dynamicFollowupRetryCountRef.current > dynamicFollowupMaxRetries
+      dynamicFollowupRetryTimerRef.current !== null
     ) {
       return;
     }
@@ -1696,9 +1634,7 @@ const beginJudgeQuestion = useCallback(
   }
 
   const phaseLabel =
-    qaPhase === "PREPARING"
-      ? "答辩准备中"
-      : qaPhase === "ASKING"
+    qaPhase === "ASKING"
         ? "评委正在提问"
         : qaPhase === "COUNTDOWN"
           ? "准备回答"
@@ -1842,51 +1778,6 @@ const beginJudgeQuestion = useCallback(
           </p>
         </div>
       ) : null}
-      {qaPhase === "PREPARING" ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-sm">
-          <div className="w-full max-w-md px-6 text-center">
-            {/* 顶部小标签 */}
-            <span className="inline-block rounded-full border border-slate-600 bg-slate-900/80 px-3 py-1 text-xs font-medium text-slate-400">
-              模拟答辩
-            </span>
-
-            {/* 主标题 */}
-            <h2 className="mt-6 text-2xl font-bold text-white">
-              答辩准备中
-            </h2>
-
-            {/* 副标题 */}
-            <p className="mt-3 text-base font-medium text-slate-200">
-              路演已结束，答辩即将开始
-            </p>
-
-            {/* 说明文字 */}
-            <p className="mt-5 text-sm leading-6 text-slate-400">
-              系统正在整理本轮路演内容，并同步准备评委提问。请保持麦克风开启，稍后进入答辩环节。
-            </p>
-
-            {/* 动态加载点 */}
-            <div className="mt-6 flex items-center justify-center gap-1.5">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-white/60" style={{ animationDelay: "0ms" }} />
-              <span className="h-2 w-2 animate-pulse rounded-full bg-white/60" style={{ animationDelay: "200ms" }} />
-              <span className="h-2 w-2 animate-pulse rounded-full bg-white/60" style={{ animationDelay: "400ms" }} />
-            </div>
-
-            {/* 进度条 */}
-            <div className="mx-auto mt-6 h-2 w-full overflow-hidden rounded-full bg-slate-700">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-blue-500 to-white transition-[width] duration-75 ease-linear"
-                style={{ width: `${preparingProgress}%` }}
-              />
-            </div>
-
-            {/* 麦克风提示 */}
-            <p className="mt-8 text-xs text-slate-500">
-              麦克风已保持开启
-            </p>
-          </div>
-        </div>
-      ) : null}
       <div className="grid h-screen w-full gap-3 overflow-hidden bg-slate-950 text-white lg:grid-cols-[minmax(0,1fr)_300px]">
       <section className="flex min-h-0 flex-col rounded-lg border border-slate-700 bg-slate-900/95 p-3 shadow-2xl">
         <div className="flex flex-col gap-3 border-b border-slate-700 pb-3 sm:flex-row sm:items-start sm:justify-between">
@@ -2008,13 +1899,13 @@ const beginJudgeQuestion = useCallback(
 
         <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-2">
-            {isGenerating || qaPhase === "PREPARING" ? (
+            {isGenerating ? (
               <button
                 type="button"
                 disabled
                 className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
               >
-                {qaPhase === "PREPARING" ? "准备中……" : "评委问题准备中..."}
+                评委问题准备中...
               </button>
             ) : !isQaing && questions.length > 0 ? (
               <button
@@ -2109,11 +2000,7 @@ const beginJudgeQuestion = useCallback(
             {phaseLabel}
           </h3>
 
-          {qaPhase === "PREPARING" ? (
-            <div className="mt-5 rounded-md border border-slate-700 bg-slate-950/60 p-6 text-center">
-              <p className="text-sm text-slate-500">答辩准备中，请稍候...</p>
-            </div>
-          ) : !isQaing ? (
+          {!isQaing ? (
             <div className="mt-5 grid gap-4">
               <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4">
                 <h4 className="text-sm font-semibold text-white">答辩规则</h4>

@@ -68,6 +68,9 @@ export async function GET(
       id: true,
       questionId: true,
       recordingId: true,
+      answerText: true,
+      startedAt: true,
+      endedAt: true,
       question: {
         select: {
           id: true,
@@ -80,6 +83,7 @@ export async function GET(
             select: {
               id: true,
               status: true,
+              text: true,
               completedAt: true,
               updatedAt: true,
             },
@@ -100,8 +104,17 @@ export async function GET(
     },
   });
 
-  // 生成 qaTranscriptItems：每道题一条轻量状态
-  const qaTranscriptItems = qaAnswers.map((a) => {
+  const enteredQaAnswers = qaAnswers.filter((answer) =>
+    Boolean(
+      answer.startedAt ||
+        answer.endedAt ||
+        answer.recordingId ||
+        answer.answerText?.trim(),
+    ),
+  );
+
+  // 生成 qaTranscriptItems：每道实际进入过的题一条轻量状态
+  const qaTranscriptItems = enteredQaAnswers.map((a) => {
     const ts = a.recording?.transcript;
     return {
       questionId: a.question.id,
@@ -132,22 +145,33 @@ export async function GET(
     (t) => !t.recordingId,
   ).length;
   const qaTotalCount = qaTranscriptItems.length;
-  const answeredQuestionIds = new Set(qaAnswers.map((answer) => answer.questionId));
+  const enteredQuestionIds = new Set(
+    enteredQaAnswers.map((answer) => answer.questionId),
+  );
   const baseQuestions = qaQuestions.filter(
     (question) =>
       question.source !== "DYNAMIC_FOLLOWUP" &&
       question.questionType !== "FOLLOWUP",
   );
   const qaUnansweredBaseQuestionCount = baseQuestions.filter(
-    (question) => !answeredQuestionIds.has(question.id),
+    (question) => !enteredQuestionIds.has(question.id),
   ).length;
+  const hasQaEnded = ["QA_ENDED", "REPORT_READY", "FINISHED"].includes(
+    session.status,
+  );
 
-  // 已回答但缺少录音或 transcript 时允许降级；真正未回答的基础题仍阻塞。
+  // 只等待实际进入过的题。未进入的基础题不阻塞报告生成。
   const allQaCompleteOrFailed =
-    baseQuestions.length > 0 &&
-    qaUnansweredBaseQuestionCount === 0 &&
+    hasQaEnded &&
     qaPendingCount === 0 &&
     qaProcessingCount === 0;
+  const noAnalyzableAnswerContent =
+    enteredQaAnswers.length === 0 ||
+    enteredQaAnswers.every((answer) => {
+      const answerText = answer.answerText?.trim() ?? "";
+      const transcriptText = answer.recording?.transcript?.text?.trim() ?? "";
+      return !answerText && !transcriptText;
+    });
 
   // 判断是否可以生成 analysis
   // 条件：Pitch transcript 不是 PENDING/PROCESSING，且 QA transcript 全部完成/失败
@@ -194,6 +218,8 @@ export async function GET(
     qaTranscriptMissingCount: qaMissingCount,
     qaAnsweredWithoutRecordingCount,
     qaUnansweredBaseQuestionCount,
+    enteredQaQuestionCount: enteredQaAnswers.length,
+    noAnalyzableAnswerContent,
     qaTotalCount,
     canGenerateAnalysis,
     hasStaleAnalysis,
