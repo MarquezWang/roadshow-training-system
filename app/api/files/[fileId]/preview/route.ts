@@ -11,6 +11,16 @@ type FilePreviewRouteContext = Readonly<{
   }>;
 }>;
 
+type ResolvedRange =
+  | {
+      valid: true;
+      start: number;
+      end: number;
+    }
+  | {
+      valid: false;
+    };
+
 async function resolveUploadFilePath(filePath: string) {
   const normalizedPath = filePath.replaceAll("\\", "/");
 
@@ -41,7 +51,81 @@ async function resolveUploadFilePath(filePath: string) {
   };
 }
 
-export async function GET(_request: Request, context: FilePreviewRouteContext) {
+function buildContentDisposition(fileName: string) {
+  return `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
+function getBaseHeaders(fileName: string, contentLength: number) {
+  return {
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "private, max-age=3600",
+    "Content-Disposition": buildContentDisposition(fileName),
+    "Content-Length": String(contentLength),
+    "Content-Type": "application/pdf",
+  };
+}
+
+function parseRangeHeader(rangeHeader: string | null, size: number): ResolvedRange | null {
+  if (!rangeHeader) {
+    return null;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+
+  if (!match) {
+    return { valid: false };
+  }
+
+  const [, startValue, endValue] = match;
+
+  if (startValue === "" && endValue === "") {
+    return { valid: false };
+  }
+
+  if (size <= 0) {
+    return { valid: false };
+  }
+
+  if (startValue === "") {
+    const suffixLength = Number(endValue);
+
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+      return { valid: false };
+    }
+
+    const start = Math.max(size - suffixLength, 0);
+    return {
+      valid: true,
+      start,
+      end: size - 1,
+    };
+  }
+
+  const start = Number(startValue);
+  const requestedEnd = endValue === "" ? size - 1 : Number(endValue);
+
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(requestedEnd) ||
+    start < 0 ||
+    requestedEnd < start ||
+    start >= size
+  ) {
+    return { valid: false };
+  }
+
+  return {
+    valid: true,
+    start,
+    end: Math.min(requestedEnd, size - 1),
+  };
+}
+
+async function buildPreviewResponse(
+  request: Request,
+  context: FilePreviewRouteContext,
+  includeBody: boolean,
+) {
   const { fileId } = await context.params;
   const fileAsset = await prisma.fileAsset.findUnique({
     where: {
@@ -69,19 +153,56 @@ export async function GET(_request: Request, context: FilePreviewRouteContext) {
     const { absolutePath, size } = await resolveUploadFilePath(
       fileAsset.filePath,
     );
-    const stream = Readable.toWeb(createReadStream(absolutePath));
+    const range = parseRangeHeader(request.headers.get("range"), size);
 
-    return new Response(stream as ReadableStream<Uint8Array>, {
+    if (range && !range.valid) {
+      return new Response(null, {
+        status: 416,
+        headers: {
+          "Accept-Ranges": "bytes",
+          "Content-Range": `bytes */${size}`,
+        },
+      });
+    }
+
+    if (range?.valid) {
+      const stream = includeBody
+        ? Readable.toWeb(
+            createReadStream(absolutePath, {
+              start: range.start,
+              end: range.end,
+            }),
+          )
+        : null;
+      const contentLength = range.end - range.start + 1;
+
+      return new Response(stream as ReadableStream<Uint8Array> | null, {
+        status: 206,
+        headers: {
+          ...getBaseHeaders(fileAsset.originalName, contentLength),
+          "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
+        },
+      });
+    }
+
+    const stream = includeBody
+      ? Readable.toWeb(createReadStream(absolutePath))
+      : null;
+
+    return new Response(stream as ReadableStream<Uint8Array> | null, {
       headers: {
-        "Content-Type": "application/pdf",
-        "Content-Length": String(size),
-        "Cache-Control": "private, max-age=0",
-        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(
-          fileAsset.originalName,
-        )}`,
+        ...getBaseHeaders(fileAsset.originalName, size),
       },
     });
   } catch {
     return NextResponse.json({ error: "文件不存在。" }, { status: 404 });
   }
+}
+
+export async function GET(request: Request, context: FilePreviewRouteContext) {
+  return buildPreviewResponse(request, context, true);
+}
+
+export async function HEAD(request: Request, context: FilePreviewRouteContext) {
+  return buildPreviewResponse(request, context, false);
 }
