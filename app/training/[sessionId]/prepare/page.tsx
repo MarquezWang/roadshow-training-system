@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { PageHeader } from "@/components/page-header";
 import { prisma } from "@/lib/prisma";
 import { TrainingPrepareClient } from "./training-prepare-client";
 
@@ -82,19 +81,24 @@ export default async function TrainingPreparePage({
     ) ?? null;
 
   return (
-    <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
-      <PageHeader
-        title="训练准备"
-        description={`当前项目：${session.project.name}`}
-      />
-
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-        <Link
-          href={`/projects/${session.project.id}`}
-          className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-        >
-          返回项目详情
-        </Link>
+    <main className="mx-auto min-h-screen w-full max-w-6xl flex-1 px-6 py-8 text-[var(--foreground)] sm:px-8 lg:px-10">
+      <div className="flex flex-col gap-4 border-b border-[var(--border)] pb-6 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-[var(--foreground)]">
+            训练准备
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted-foreground)]">
+            当前项目：{session.project.name}
+          </p>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Link
+            href={`/projects/${session.project.id}`}
+            className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-slate-100 transition-colors hover:border-slate-500 hover:bg-slate-800"
+          >
+            返回项目详情
+          </Link>
+        </div>
       </div>
 
       <div className="mt-6">

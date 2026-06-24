@@ -296,17 +296,19 @@ function parseDynamicFollowupReview(value: unknown) {
   }));
 
   return (
-    <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-4 sm:px-8 lg:px-10">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+    <main className="mx-auto min-h-screen w-full max-w-5xl flex-1 px-6 py-4 text-[var(--foreground)] sm:px-8 lg:px-10">
+      <div className="flex flex-col gap-3 border-b border-[var(--border)] pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">训练报告</h1>
-          <p className="text-xs text-slate-400">
+          <h1 className="text-xl font-semibold text-[var(--foreground)]">
+            训练报告
+          </h1>
+          <p className="mt-1 text-xs text-[var(--muted-foreground)]">
             当前项目：{session.project.name}
           </p>
         </div>
         <Link
           href={`/projects/${session.project.id}`}
-          className="inline-flex h-7 items-center rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-700"
+          className="inline-flex h-8 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-3 text-xs font-medium text-slate-100 transition-colors hover:border-slate-500 hover:bg-slate-800"
         >
           返回项目详情
         </Link>

@@ -218,7 +218,8 @@ export function TrainingPrepareClient({
               </div>
             ) : (
               <p className="mt-3 rounded-md border border-dashed border-slate-300 p-4 text-sm leading-6 text-slate-600">
-                当前没有可预览的 PDF 材料，仍可继续训练。
+                当前没有可直接预览的 PDF 材料。
+                已纳入 AI 上下文的 PPT / 文档仍会用于问题生成和评分分析；如需在路演页翻页展示，请上传 PDF 版路演材料。
               </p>
             )}
           </section>
