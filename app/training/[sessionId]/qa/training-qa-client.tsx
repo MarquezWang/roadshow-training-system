@@ -69,6 +69,9 @@ const recordingMimeTypeCandidates = [
   "audio/wav",
 ];
 const dynamicFollowupRetryDelayMs = 3_000;
+const speechUnavailableMessage =
+  "题目语音播报暂不可用，请点击“查看问题文字”确认题目。你的回答录音不受影响。";
+const recoverableSpeechErrorCodes = new Set(["canceled", "interrupted"]);
 
 function formatDuration(totalSec: number) {
   const normalizedSec = Math.max(0, totalSec);
@@ -181,45 +184,65 @@ function isTranscriptNotReadyReason(reason: string | undefined) {
 function chooseJudgeVoice(voices: SpeechSynthesisVoice[]) {
   if (voices.length === 0) return null;
 
-  // 精确匹配最优先
-  const exactMatch = voices.find(
-    (v) => v.name === "Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)",
+  const zhCNVoices = voices.filter(
+    (voice) => voice.lang.toLowerCase() === "zh-cn",
   );
-  if (exactMatch) return exactMatch;
-
-  // 降级 1：zh-CN 中文语音
-  const zhCNVoices = voices.filter((v) => v.lang === "zh-CN");
   if (zhCNVoices.length > 0) {
-    // 在 zh-CN 中找包含 Xiaoyi 的
-    const xiaoyiZhCN = zhCNVoices.find(
-      (v) => v.name.toLowerCase().includes("xiaoyi"),
+    const preferredZhCNVoice = zhCNVoices.find(
+      (voice) =>
+        voice.default ||
+        voice.name.toLowerCase().includes("natural") ||
+        voice.name.toLowerCase().includes("xiaoyi") ||
+        voice.name.toLowerCase().includes("huihui"),
     );
-    if (xiaoyiZhCN) return xiaoyiZhCN;
 
-    // 在 zh-CN 中找包含 Natural 的
-    const naturalZhCN = zhCNVoices.find(
-      (v) => v.name.toLowerCase().includes("natural"),
-    );
-    if (naturalZhCN) return naturalZhCN;
-
-    // 降级：zh-CN 第一个
-    return zhCNVoices[0];
+    return preferredZhCNVoice ?? zhCNVoices[0];
   }
 
-  // 降级 2：名称中包含 Xiaoyi（不限语言）
-  const xiaoyiAny = voices.find(
-    (v) => v.name.toLowerCase().includes("xiaoyi"),
+  const zhVoices = voices.filter((voice) =>
+    voice.lang.toLowerCase().startsWith("zh-"),
   );
-  if (xiaoyiAny) return xiaoyiAny;
+  if (zhVoices.length > 0) {
+    return zhVoices.find((voice) => voice.default) ?? zhVoices[0];
+  }
 
-  // 降级 3：中文语音（lang 含 zh）
-  const zhVoice = voices.find(
-    (v) => v.lang.includes("zh") || v.lang.includes("chinese"),
-  );
-  if (zhVoice) return zhVoice;
+  return voices.find((voice) => voice.default) ?? voices[0] ?? null;
+}
 
-  // 降级 4：浏览器默认
-  return voices[0] ?? null;
+function getVoicesAfterChange(timeoutMs: number) {
+  return new Promise<SpeechSynthesisVoice[]>((resolve) => {
+    const timeout = window.setTimeout(() => {
+      window.speechSynthesis.removeEventListener("voiceschanged", handler);
+      resolve(window.speechSynthesis.getVoices());
+    }, timeoutMs);
+
+    function handler() {
+      window.clearTimeout(timeout);
+      resolve(window.speechSynthesis.getVoices());
+    }
+
+    window.speechSynthesis.addEventListener("voiceschanged", handler, {
+      once: true,
+    });
+  });
+}
+
+async function getVoicesWithRetry(timeoutMs = 3000) {
+  const startedAt = Date.now();
+  let voices = window.speechSynthesis.getVoices();
+
+  if (voices.length > 0) {
+    return voices;
+  }
+
+  voices = await getVoicesAfterChange(Math.min(1200, timeoutMs));
+
+  while (voices.length === 0 && Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    voices = window.speechSynthesis.getVoices();
+  }
+
+  return voices;
 }
 
 export function TrainingQaClient({
@@ -298,6 +321,7 @@ export function TrainingQaClient({
   const hasResumedQaingRef = useRef(false);
   const isCompletingNormallyRef = useRef(false);
   const hasMoveOnRef = useRef(false);
+  const speechRunIdRef = useRef(0);
   const qaPhaseRef = useRef<QaPhase>(qaPhase);
   const dynamicFollowupRetryCountRef = useRef(0);
   const dynamicFollowupInFlightRef = useRef(false);
@@ -1026,30 +1050,6 @@ export function TrainingQaClient({
     }, 1000);
   }, [beginAnswering]);
 
-  function getVoicesWithTimeout(timeoutMs = 3000): Promise<SpeechSynthesisVoice[]> {
-  const synth = window.speechSynthesis;
-  const voices = synth.getVoices();
-  if (voices.length > 0) {
-    return Promise.resolve(voices);
-  }
-
-  return new Promise<SpeechSynthesisVoice[]>((resolve) => {
-    const timeout = window.setTimeout(() => {
-      window.speechSynthesis.removeEventListener("voiceschanged", handler);
-      resolve(window.speechSynthesis.getVoices());
-    }, timeoutMs);
-
-    function handler() {
-      window.clearTimeout(timeout);
-      resolve(window.speechSynthesis.getVoices());
-    }
-
-    window.speechSynthesis.addEventListener("voiceschanged", handler, {
-      once: true,
-    });
-  });
-}
-
 function buildMoveOn(
   hasMovedOnRef: { current: boolean },
   beginPreAnswerCountdown: () => void,
@@ -1074,6 +1074,8 @@ const beginJudgeQuestion = useCallback(
       clearDynamicFollowupIntroTimer();
       clearSpeechTimer();
       clearCountdownTimer();
+      const speechRunId = speechRunIdRef.current + 1;
+      speechRunIdRef.current = speechRunId;
       window.speechSynthesis?.cancel();
       hasMoveOnRef.current = false;
       setCurrentQuestionIndex(questionIndex);
@@ -1104,25 +1106,69 @@ const beginJudgeQuestion = useCallback(
         !("speechSynthesis" in window) ||
         typeof SpeechSynthesisUtterance === "undefined"
       ) {
-        setMessage("当前浏览器不支持语音提问，已切换为文字提问。");
+        setMessage(speechUnavailableMessage);
         beginPreAnswerCountdown();
         return;
       }
 
-      const utterance = new SpeechSynthesisUtterance(question.questionText);
       const moveOn = buildMoveOn(hasMoveOnRef, beginPreAnswerCountdown);
+      const isCurrentSpeechRun = () =>
+        speechRunIdRef.current === speechRunId && !hasAutoEndedRef.current;
 
-      utterance.lang = "zh-CN";
-      utterance.rate = 1.15;
-      utterance.pitch = 0.92;
-      utterance.onend = moveOn;
-      utterance.onerror = () => {
-        setMessage("语音提问不可用，请点击\u201c查看问题文字\u201d确认题目。");
-        moveOn();
-      };
+      const speakQuestion = async (retryCount = 0) => {
+        const utterance = new SpeechSynthesisUtterance(question.questionText);
 
-      void (async () => {
-        const voices = await getVoicesWithTimeout(3000);
+        utterance.lang = "zh-CN";
+        utterance.rate = 1.15;
+        utterance.pitch = 0.92;
+        utterance.onend = () => {
+          if (!isCurrentSpeechRun()) {
+            return;
+          }
+
+          moveOn();
+        };
+        utterance.onerror = (event) => {
+          if (!isCurrentSpeechRun()) {
+            return;
+          }
+
+          const errorCode = event.error;
+
+          devLog("[QA TTS] 播报错误", {
+            sessionId,
+            questionId: question.id,
+            errorCode,
+            retryCount,
+          });
+
+          if (recoverableSpeechErrorCodes.has(errorCode) && retryCount < 1) {
+            window.setTimeout(() => {
+              if (!isCurrentSpeechRun()) {
+                return;
+              }
+
+              void speakQuestion(retryCount + 1);
+            }, 180);
+            return;
+          }
+
+          if (errorCode === "not-allowed") {
+            setMessage(speechUnavailableMessage);
+            moveOn();
+            return;
+          }
+
+          setMessage(speechUnavailableMessage);
+          moveOn();
+        };
+
+        const voices = await getVoicesWithRetry(3000);
+
+        if (!isCurrentSpeechRun()) {
+          return;
+        }
+
         const selectedVoice = chooseJudgeVoice(voices);
         if (selectedVoice) {
           utterance.voice = selectedVoice;
@@ -1133,14 +1179,37 @@ const beginJudgeQuestion = useCallback(
           } catch {
             // localStorage 不可用
           }
+        } else {
+          devLog("[QA TTS] 未获取到 voice，尝试使用浏览器默认语音", {
+            sessionId,
+            questionId: question.id,
+          });
         }
-        window.speechSynthesis.speak(utterance);
-      })();
+
+        try {
+          window.speechSynthesis.resume();
+          window.speechSynthesis.speak(utterance);
+        } catch (error) {
+          if (!isCurrentSpeechRun()) {
+            return;
+          }
+
+          devLog("[QA TTS] speak 调用失败", {
+            sessionId,
+            questionId: question.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          setMessage(speechUnavailableMessage);
+          moveOn();
+        }
+      };
+
+      void speakQuestion();
 
       // setTimeout 仅作为兜底保护，如果语音仍在播放则不前进
       function scheduleFallback() {
         speechTimeoutRef.current = window.setTimeout(() => {
-          if (hasMoveOnRef.current) {
+          if (hasMoveOnRef.current || speechRunIdRef.current !== speechRunId) {
             return;
           }
           if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
@@ -1154,7 +1223,7 @@ const beginJudgeQuestion = useCallback(
 
       scheduleFallback();
     },
-    [beginPreAnswerCountdown, clearDynamicFollowupIntroTimer, questions],
+    [beginPreAnswerCountdown, clearDynamicFollowupIntroTimer, questions, sessionId],
   );
 
   useEffect(() => {
