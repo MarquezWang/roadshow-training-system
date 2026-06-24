@@ -184,29 +184,63 @@ function isTranscriptNotReadyReason(reason: string | undefined) {
 function chooseJudgeVoice(voices: SpeechSynthesisVoice[]) {
   if (voices.length === 0) return null;
 
-  const zhCNVoices = voices.filter(
-    (voice) => voice.lang.toLowerCase() === "zh-cn",
+  const normalizedVoices = voices.map((voice) => ({
+    voice,
+    name: voice.name.toLowerCase(),
+    lang: voice.lang.toLowerCase(),
+  }));
+
+  const isHuihui = ({ name }: { name: string }) => name.includes("huihui");
+
+  const findByName = (keyword: string) => {
+    const normalizedKeyword = keyword.toLowerCase();
+
+    return normalizedVoices.find(({ name }) =>
+      name.includes(normalizedKeyword),
+    )?.voice;
+  };
+
+  const findZhCNByName = (keyword: string) => {
+    const normalizedKeyword = keyword.toLowerCase();
+
+    return normalizedVoices.find(
+      ({ name, lang }) => lang === "zh-cn" && name.includes(normalizedKeyword),
+    )?.voice;
+  };
+
+  const findZhByName = (keyword: string) => {
+    const normalizedKeyword = keyword.toLowerCase();
+
+    return normalizedVoices.find(
+      ({ name, lang }) =>
+        lang.startsWith("zh-") && name.includes(normalizedKeyword),
+    )?.voice;
+  };
+
+  const zhCNVoices = normalizedVoices.filter(({ lang }) => lang === "zh-cn");
+  const zhVoices = normalizedVoices.filter(({ lang }) => lang.startsWith("zh-"));
+  const nonHuihuiZhCNVoices = zhCNVoices.filter((voice) => !isHuihui(voice));
+  const nonHuihuiZhVoices = zhVoices.filter((voice) => !isHuihui(voice));
+
+  return (
+    findZhCNByName("xiaoyi") ??
+    findZhCNByName("yunyang") ??
+    findZhCNByName("natural") ??
+    nonHuihuiZhCNVoices.find(({ voice }) => voice.default)?.voice ??
+    nonHuihuiZhCNVoices[0]?.voice ??
+    findZhByName("xiaoyi") ??
+    findZhByName("yunyang") ??
+    findZhByName("natural") ??
+    nonHuihuiZhVoices.find(({ voice }) => voice.default)?.voice ??
+    nonHuihuiZhVoices[0]?.voice ??
+    findByName("xiaoyi") ??
+    findByName("yunyang") ??
+    findByName("natural") ??
+    findByName("huihui") ??
+    voices.find((voice) => voice.default) ??
+    voices[0] ??
+    null
   );
-  if (zhCNVoices.length > 0) {
-    const preferredZhCNVoice = zhCNVoices.find(
-      (voice) =>
-        voice.default ||
-        voice.name.toLowerCase().includes("natural") ||
-        voice.name.toLowerCase().includes("xiaoyi") ||
-        voice.name.toLowerCase().includes("huihui"),
-    );
-
-    return preferredZhCNVoice ?? zhCNVoices[0];
-  }
-
-  const zhVoices = voices.filter((voice) =>
-    voice.lang.toLowerCase().startsWith("zh-"),
-  );
-  if (zhVoices.length > 0) {
-    return zhVoices.find((voice) => voice.default) ?? zhVoices[0];
-  }
-
-  return voices.find((voice) => voice.default) ?? voices[0] ?? null;
 }
 
 function getVoicesAfterChange(timeoutMs: number) {
