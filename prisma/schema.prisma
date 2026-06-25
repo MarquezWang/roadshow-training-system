@@ -63,6 +63,9 @@ model FileAsset {
   extractedText      String?
   parseStatus        String       @default("PENDING")
   parseError         String?
+  previewPdfPath     String?
+  previewStatus      String       @default("NONE")
+  previewError       String?
   includeInAIContext Boolean      @default(true)
   slideEvents        SlideEvent[]
   createdAt          DateTime     @default(now())

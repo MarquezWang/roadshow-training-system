@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import {
+  getDisplayMaterialNotice,
+  selectDisplayablePdf,
+} from "@/lib/display-material";
 import { TrainingPrepareClient } from "./training-prepare-client";
 
 type TrainingPreparePageProps = Readonly<{
@@ -23,13 +27,6 @@ export default async function TrainingPreparePage({
           id: true,
           name: true,
           fileAssets: {
-            where: {
-              parseStatus: "SUCCESS",
-              includeInAIContext: true,
-              extractedText: {
-                not: null,
-              },
-            },
             orderBy: {
               createdAt: "asc",
             },
@@ -37,6 +34,12 @@ export default async function TrainingPreparePage({
               id: true,
               originalName: true,
               fileType: true,
+              extractedText: true,
+              parseStatus: true,
+              includeInAIContext: true,
+              previewPdfPath: true,
+              previewStatus: true,
+              previewError: true,
             },
           },
         },
@@ -75,10 +78,16 @@ export default async function TrainingPreparePage({
     redirect(`/training/${session.id}/report`);
   }
 
-  const previewFile =
-    session.project.fileAssets.find(
-      (file) => file.fileType.toLowerCase() === "pdf",
-    ) ?? null;
+  const aiContextFiles = session.project.fileAssets.filter(
+    (file) =>
+      file.parseStatus === "SUCCESS" &&
+      file.includeInAIContext &&
+      Boolean(file.extractedText),
+  );
+  const previewFile = selectDisplayablePdf(session.project.fileAssets);
+  const previewNotice = previewFile
+    ? null
+    : getDisplayMaterialNotice(session.project.fileAssets);
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-6xl flex-1 px-6 py-8 text-[var(--foreground)] sm:px-8 lg:px-10">
@@ -106,8 +115,9 @@ export default async function TrainingPreparePage({
           sessionId={session.id}
           projectId={session.project.id}
           projectName={session.project.name}
-          files={session.project.fileAssets}
+          files={aiContextFiles}
           previewFile={previewFile}
+          previewNotice={previewNotice}
         />
       </div>
     </main>

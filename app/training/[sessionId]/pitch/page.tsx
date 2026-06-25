@@ -1,5 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
+import {
+  getDisplayMaterialNotice,
+  selectDisplayablePdf,
+} from "@/lib/display-material";
 import { prisma } from "@/lib/prisma";
 import { TrainingSessionClient } from "../training-session-client";
 
@@ -40,13 +44,6 @@ export default async function TrainingSessionPage({
           id: true,
           name: true,
           fileAssets: {
-            where: {
-              parseStatus: "SUCCESS",
-              includeInAIContext: true,
-              extractedText: {
-                not: null,
-              },
-            },
             orderBy: {
               createdAt: "asc",
             },
@@ -54,6 +51,12 @@ export default async function TrainingSessionPage({
               id: true,
               originalName: true,
               fileType: true,
+              extractedText: true,
+              parseStatus: true,
+              includeInAIContext: true,
+              previewPdfPath: true,
+              previewStatus: true,
+              previewError: true,
             },
           },
         },
@@ -176,10 +179,16 @@ export default async function TrainingSessionPage({
         )
       : 0);
   const initialRemainingSec = Math.max(0, pitchLimitSec - initialElapsedSec);
-  const previewFile =
-    session.project.fileAssets.find(
-      (file) => file.fileType.toLowerCase() === "pdf",
-    ) ?? null;
+  const aiContextFiles = session.project.fileAssets.filter(
+    (file) =>
+      file.parseStatus === "SUCCESS" &&
+      file.includeInAIContext &&
+      Boolean(file.extractedText),
+  );
+  const previewFile = selectDisplayablePdf(session.project.fileAssets);
+  const previewNotice = previewFile
+    ? null
+    : getDisplayMaterialNotice(session.project.fileAssets);
   const initialRecording = session.recordings[0]
     ? {
         ...session.recordings[0],
@@ -268,8 +277,9 @@ export default async function TrainingSessionPage({
           initialElapsedSec={initialElapsedSec}
           initialRemainingSec={initialRemainingSec}
           initialPitchDurationSec={session.pitchDurationSec}
-          files={session.project.fileAssets}
+          files={aiContextFiles}
           previewFile={previewFile}
+          previewNotice={previewNotice}
           initialRecording={initialRecording}
           initialAnalysis={initialAnalysis}
           autoStartRecordingOnMount

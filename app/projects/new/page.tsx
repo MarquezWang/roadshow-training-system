@@ -8,6 +8,10 @@ import {
 } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
 import {
+  generatePowerPointPreviewPdf,
+  isPowerPointFile,
+} from "@/lib/powerpoint-preview";
+import {
   isCooperationDemand,
   isProjectField,
 } from "@/lib/project-profile";
@@ -162,7 +166,7 @@ async function createProject(formData: FormData) {
       error instanceof Error ? error.message : "文件解析失败，请稍后重试。";
   }
 
-  await prisma.fileAsset.create({
+  const fileAsset = await prisma.fileAsset.create({
     data: {
       projectId: project.id,
       originalName: savedFile.originalName,
@@ -174,6 +178,16 @@ async function createProject(formData: FormData) {
       parseError,
     },
   });
+
+  if (isPowerPointFile(savedFile)) {
+    await generatePowerPointPreviewPdf({
+      id: fileAsset.id,
+      projectId: project.id,
+      originalName: savedFile.originalName,
+      fileType: savedFile.fileType,
+      filePath: savedFile.filePath,
+    });
+  }
 
   redirect(`/projects/${project.id}`);
 }

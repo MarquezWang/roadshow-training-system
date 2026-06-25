@@ -1,9 +1,10 @@
-import { stat } from "fs/promises";
 import { createReadStream } from "fs";
+import { stat } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isPdfFile, isPowerPointFile } from "@/lib/powerpoint-preview";
 
 type FilePreviewRouteContext = Readonly<{
   params: Promise<{
@@ -23,17 +24,19 @@ type ResolvedRange =
 
 async function resolveUploadFilePath(filePath: string) {
   const normalizedPath = filePath.replaceAll("\\", "/");
+  const uploadPrefix = "uploads/projects/";
 
-  if (!normalizedPath.startsWith("uploads/projects/")) {
+  if (!normalizedPath.startsWith(uploadPrefix)) {
     throw new Error("INVALID_UPLOAD_PATH");
   }
 
-  const projectsUploadsRoot = path.resolve(
-    process.cwd(),
+  const projectsUploadsRoot = path.join(
+    /*turbopackIgnore: true*/ process.cwd(),
     "uploads",
     "projects",
   );
-  const absolutePath = path.resolve(process.cwd(), normalizedPath);
+  const relativeProjectPath = normalizedPath.slice(uploadPrefix.length);
+  const absolutePath = path.resolve(projectsUploadsRoot, relativeProjectPath);
   const relativeToProjectsUploads = path.relative(
     projectsUploadsRoot,
     absolutePath,
@@ -62,6 +65,17 @@ function buildContentDisposition(fileName: string) {
   return `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
+function buildPreviewFileName(fileName: string) {
+  const extension = path.extname(fileName);
+
+  if (extension.toLowerCase() === ".pdf") {
+    return fileName;
+  }
+
+  const baseName = path.basename(fileName, extension);
+  return `${baseName || "preview"}.pdf`;
+}
+
 function getBaseHeaders(fileName: string, contentLength: number) {
   return {
     "Accept-Ranges": "bytes",
@@ -72,7 +86,10 @@ function getBaseHeaders(fileName: string, contentLength: number) {
   };
 }
 
-function parseRangeHeader(rangeHeader: string | null, size: number): ResolvedRange | null {
+function parseRangeHeader(
+  rangeHeader: string | null,
+  size: number,
+): ResolvedRange | null {
   if (!rangeHeader) {
     return null;
   }
@@ -142,6 +159,9 @@ async function buildPreviewResponse(
       originalName: true,
       fileType: true,
       filePath: true,
+      previewPdfPath: true,
+      previewStatus: true,
+      previewError: true,
     },
   });
 
@@ -149,18 +169,45 @@ async function buildPreviewResponse(
     return NextResponse.json({ error: "文件不存在。" }, { status: 404 });
   }
 
-  if (fileAsset.fileType.toLowerCase().replace(/^\./, "") !== "pdf") {
+  const isOriginalPdf = isPdfFile(fileAsset);
+  const isConvertedPowerPoint =
+    isPowerPointFile(fileAsset) &&
+    fileAsset.previewStatus === "READY" &&
+    Boolean(fileAsset.previewPdfPath);
+
+  if (!isOriginalPdf && !isConvertedPowerPoint) {
+    const isPowerPoint = isPowerPointFile(fileAsset);
+    const error =
+      isPowerPoint && fileAsset.previewStatus === "PENDING"
+        ? "正在生成路演展示预览，请稍后刷新。"
+        : isPowerPoint && fileAsset.previewStatus === "FAILED"
+          ? "PPT 展示预览生成失败，但该材料仍可用于 AI 分析。"
+          : "当前文件没有可展示的 PDF 预览。";
+
     return NextResponse.json(
-      { error: "当前预览接口仅支持 PDF 文件。" },
-      { status: 415 },
+      {
+        error,
+        detail: fileAsset.previewError,
+      },
+      { status: isPowerPoint ? 409 : 415 },
+    );
+  }
+
+  const previewPath = isOriginalPdf
+    ? fileAsset.filePath
+    : fileAsset.previewPdfPath;
+
+  if (!previewPath) {
+    return NextResponse.json(
+      { error: "当前文件没有可展示的 PDF 预览。" },
+      { status: 404 },
     );
   }
 
   try {
-    const { absolutePath, size } = await resolveUploadFilePath(
-      fileAsset.filePath,
-    );
+    const { absolutePath, size } = await resolveUploadFilePath(previewPath);
     const range = parseRangeHeader(request.headers.get("range"), size);
+    const previewFileName = buildPreviewFileName(fileAsset.originalName);
 
     if (range && !range.valid) {
       return new Response(null, {
@@ -186,7 +233,7 @@ async function buildPreviewResponse(
       return new Response(stream as ReadableStream<Uint8Array> | null, {
         status: 206,
         headers: {
-          ...getBaseHeaders(fileAsset.originalName, contentLength),
+          ...getBaseHeaders(previewFileName, contentLength),
           "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
         },
       });
@@ -198,7 +245,7 @@ async function buildPreviewResponse(
 
     return new Response(stream as ReadableStream<Uint8Array> | null, {
       headers: {
-        ...getBaseHeaders(fileAsset.originalName, size),
+        ...getBaseHeaders(previewFileName, size),
       },
     });
   } catch {

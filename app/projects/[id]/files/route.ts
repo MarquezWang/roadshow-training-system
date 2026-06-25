@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveProjectUpload } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
+import {
+  generatePowerPointPreviewPdf,
+  isPowerPointFile,
+} from "@/lib/powerpoint-preview";
 
 type UploadRouteContext = Readonly<{
   params: Promise<{
@@ -51,7 +55,7 @@ export async function POST(request: NextRequest, context: UploadRouteContext) {
 
     const savedFile = await saveProjectUpload(id, file);
 
-    await prisma.fileAsset.create({
+    const fileAsset = await prisma.fileAsset.create({
       data: {
         projectId: id,
         originalName: savedFile.originalName,
@@ -63,6 +67,16 @@ export async function POST(request: NextRequest, context: UploadRouteContext) {
         parseError: null,
       },
     });
+
+    if (isPowerPointFile(savedFile)) {
+      await generatePowerPointPreviewPdf({
+        id: fileAsset.id,
+        projectId: id,
+        originalName: savedFile.originalName,
+        fileType: savedFile.fileType,
+        filePath: savedFile.filePath,
+      });
+    }
 
     return redirectToProject(
       request,

@@ -24,10 +24,26 @@ export async function POST(request: Request) {
           value instanceof File && value.size > 0 && value.name.trim() !== "",
       );
     const material = validateInitialProjectMaterial(materials);
-    const extractedText = await parseUploadedFileToText(material);
-    const fileType = material.name.toLowerCase().endsWith(".pdf")
+    const lowerName = material.name.toLowerCase();
+    const fileType = lowerName.endsWith(".pdf")
       ? "pdf"
-      : "pptx";
+      : lowerName.endsWith(".ppt")
+        ? "ppt"
+        : "pptx";
+    let extractedText = "";
+
+    try {
+      extractedText = await parseUploadedFileToText(material);
+    } catch (error) {
+      if (fileType !== "ppt") {
+        throw error;
+      }
+
+      debugLog("legacy_ppt_parse_skipped", {
+        fileName: material.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     debugLog("parse_succeeded", {
       fileName: material.name,

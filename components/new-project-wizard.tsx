@@ -67,7 +67,7 @@ type MaterialParseResponse =
       status: "parsed";
       material: {
         fileName: string;
-        fileType: "pdf" | "pptx";
+        fileType: "pdf" | "ppt" | "pptx";
         extractedText: string;
       };
     }
@@ -282,7 +282,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
   const [isRecognitionOverlayVisible, setRecognitionOverlayVisible] =
     useState(false);
   const [fileNames, setFileNames] = useState<string[]>([]);
-  const [fileType, setFileType] = useState<"pdf" | "pptx" | "">("");
+  const [fileType, setFileType] = useState<"pdf" | "ppt" | "pptx" | "">("");
   const [materialError, setMaterialError] = useState("");
   const [statuses, setStatuses] = useState(initialStatuses("idle"));
   const [animatedFields, setAnimatedFields] = useState<Set<ProfileField>>(
@@ -1014,7 +1014,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
             ref={fileInputRef}
             type="file"
             name="materials"
-            accept=".pptx,.pdf"
+            accept=".ppt,.pptx,.pdf"
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
 
@@ -1035,11 +1035,12 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
                 .toLowerCase();
               let error = "";
 
-              if (extension === ".ppt") {
-                error =
-                  "暂不支持旧版 .ppt 文件，请另存为 .pptx 后上传。";
-              } else if (extension !== ".pptx" && extension !== ".pdf") {
-                error = "仅支持上传 1 个 PPTX 或 PDF 文件。";
+              if (
+                extension !== ".ppt" &&
+                extension !== ".pptx" &&
+                extension !== ".pdf"
+              ) {
+                error = "仅支持上传 1 个 PPT、PPTX 或 PDF 文件。";
               } else if (file.size > 30 * 1024 * 1024) {
                 error = "文件大小不能超过 30MB，请压缩后重新上传。";
               }
@@ -1056,7 +1057,12 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
                 return;
               }
 
-              const nextFileType = extension === ".pdf" ? "pdf" : "pptx";
+              const nextFileType =
+                extension === ".pdf"
+                  ? "pdf"
+                  : extension === ".ppt"
+                    ? "ppt"
+                    : "pptx";
               resetProfileDraft(false);
               setFileNames([file.name]);
               setParsedMaterial(null);

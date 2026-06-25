@@ -17,6 +17,15 @@ type TrainingFile = {
   id: string;
   originalName: string;
   fileType: string;
+  previewPdfPath?: string | null;
+  previewStatus?: string;
+  previewError?: string | null;
+  displaySource?: "PDF" | "POWERPOINT_PREVIEW";
+};
+
+type PreviewNotice = {
+  type: "converting" | "failed" | "unavailable";
+  message: string;
 };
 
 type TrainingTranscript = {
@@ -104,6 +113,7 @@ type TrainingSessionClientProps = Readonly<{
   initialPitchDurationSec: number | null;
   files: TrainingFile[];
   previewFile: TrainingFile | null;
+  previewNotice: PreviewNotice | null;
   initialRecording: TrainingRecording | null;
   initialAnalysis: TrainingAnalysis | null;
   autoStartRecordingOnMount?: boolean;
@@ -235,6 +245,7 @@ export function TrainingSessionClient({
   initialRemainingSec,
   initialPitchDurationSec,
   previewFile,
+  previewNotice,
   initialRecording,
   initialAnalysis,
   autoStartRecordingOnMount = false,
@@ -1822,6 +1833,17 @@ export function TrainingSessionClient({
                         : "mt-1 text-xs text-slate-500"
                     }
                   >
+                    {previewFile.displaySource === "POWERPOINT_PREVIEW"
+                      ? "路演展示材料：PPT/PPTX 已生成展示 PDF"
+                      : "路演展示材料：PDF 原文件"}
+                  </p>
+                  <p
+                    className={
+                      isBigScreenMode
+                        ? "mt-1 text-xs text-slate-300"
+                        : "mt-1 text-xs text-slate-500"
+                    }
+                  >
                     PDF 单页预览，当前 {pageLabel}
                   </p>
                   <p
@@ -1910,6 +1932,26 @@ export function TrainingSessionClient({
                   />
                 )}
               </div>
+            </div>
+          ) : previewNotice ? (
+            <div>
+              <p
+                className={`rounded-md border px-4 py-3 text-sm leading-6 ${
+                  previewNotice.type === "failed"
+                    ? isBigScreenMode
+                      ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+                      : "border-amber-200 bg-amber-50 text-amber-800"
+                    : isBigScreenMode
+                      ? "border-slate-700 bg-slate-900 text-slate-300"
+                      : "border-dashed border-slate-300 text-slate-600"
+                }`}
+              >
+                {previewNotice.message}
+              </p>
+              <p className="mt-4 text-6xl font-semibold text-slate-950">
+                {currentPageNumber}
+              </p>
+              <p className="mt-3 text-sm text-slate-600">当前页码</p>
             </div>
           ) : (
             <div>

@@ -10,6 +10,15 @@ type PrepareFile = {
   id: string;
   originalName: string;
   fileType: string;
+  previewPdfPath?: string | null;
+  previewStatus?: string;
+  previewError?: string | null;
+  displaySource?: "PDF" | "POWERPOINT_PREVIEW";
+};
+
+type PreviewNotice = {
+  type: "converting" | "failed" | "unavailable";
+  message: string;
 };
 
 type RecordingPreference = "record" | "skip" | null;
@@ -20,6 +29,7 @@ type TrainingPrepareClientProps = Readonly<{
   projectName: string;
   files: PrepareFile[];
   previewFile: PrepareFile | null;
+  previewNotice: PreviewNotice | null;
 }>;
 
 function getRecordingPreferenceKey(sessionId: string) {
@@ -32,6 +42,7 @@ export function TrainingPrepareClient({
   projectName,
   files,
   previewFile,
+  previewNotice,
 }: TrainingPrepareClientProps) {
   const router = useRouter();
   const isCompletingNormallyRef = useRef(false);
@@ -207,6 +218,11 @@ export function TrainingPrepareClient({
                 <p className="break-words text-sm font-medium text-slate-900">
                   {previewFile.originalName}
                 </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {previewFile.displaySource === "POWERPOINT_PREVIEW"
+                    ? "路演展示材料：PPT/PPTX 已生成展示 PDF"
+                    : "路演展示材料：PDF 原文件"}
+                </p>
                 <a
                   href={`/api/files/${previewFile.id}/preview`}
                   target="_blank"
@@ -216,10 +232,19 @@ export function TrainingPrepareClient({
                   打开材料预览
                 </a>
               </div>
+            ) : previewNotice ? (
+              <p
+                className={`mt-3 rounded-md border p-4 text-sm leading-6 ${
+                  previewNotice.type === "failed"
+                    ? "border-amber-200 bg-amber-50 text-amber-800"
+                    : "border-dashed border-slate-300 text-slate-600"
+                }`}
+              >
+                {previewNotice.message}
+              </p>
             ) : (
               <p className="mt-3 rounded-md border border-dashed border-slate-300 p-4 text-sm leading-6 text-slate-600">
-                当前没有可直接预览的 PDF 材料。
-                已纳入 AI 上下文的 PPT / 文档仍会用于问题生成和评分分析；如需在路演页翻页展示，请上传 PDF 版路演材料。
+                当前没有可直接预览的 PDF 材料。已纳入 AI 上下文的材料仍会用于问题生成和评分分析；如需在路演页翻页展示，请上传 PDF 版路演材料。
               </p>
             )}
           </section>
