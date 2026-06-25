@@ -271,6 +271,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
   const dirtyFieldsRef = useRef<Set<ProfileField>>(new Set());
   const recognitionRunRef = useRef(0);
   const userInteractedRef = useRef(false);
+  const isSubmittingRef = useRef(false);
   const [step, setStep] = useState(1);
   const [workflowStatus, setWorkflowStatus] =
     useState<WorkflowStatus>("not_uploaded");
@@ -304,6 +305,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
   const [projectContact, setProjectContact] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [stepError, setStepError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const recognitionActive =
@@ -867,21 +869,24 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
     );
   }
 
-  function validateSubmission(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (isSubmittingRef.current) {
+      return;
+    }
+
     if (cooperationDemands.length === 0) {
-      event.preventDefault();
       setStepError("请至少选择一项合作需求。");
       return;
     }
 
     if (cooperationDemands.includes("其他") && !otherDemandDetail.trim()) {
-      event.preventDefault();
       setStepError("请填写其他合作需求说明。");
       return;
     }
 
     if (!conversionSupport) {
-      event.preventDefault();
       setStepError("请选择是否需要成果转化机构协助对接。");
       return;
     }
@@ -890,8 +895,25 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
       conversionSupport === "需要" &&
       (!projectContact.trim() || !/^1[3-9]\d{9}$/.test(contactPhone))
     ) {
-      event.preventDefault();
       setStepError("请填写项目联系人和有效的 11 位手机号。");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    setStepError("");
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+
+    try {
+      await action(formData);
+    } catch (error) {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+      setStepError(
+        error instanceof Error && error.message
+          ? error.message
+          : "创建项目失败，请稍后重试。",
+      );
     }
   }
 
@@ -938,7 +960,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
   }
 
   return (
-    <form ref={formRef} action={action} onSubmit={validateSubmission}>
+    <form ref={formRef} onSubmit={handleSubmit}>
       <ol className="grid gap-3 border-b border-slate-200 pb-6 sm:grid-cols-2">
         {["上传材料并确认档案", "合作需求与转化对接"].map(
           (label, index) => {
@@ -1562,19 +1584,23 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
         <div className="mt-6 flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-between">
           <button
             type="button"
+            disabled={isSubmitting}
             onClick={() => {
+              if (isSubmitting) return;
+
               setStepError("");
               setStep(1);
             }}
-            className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             上一步
           </button>
           <button
             type="submit"
-            className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-5 text-sm font-medium text-white hover:bg-slate-800"
+            disabled={isSubmitting}
+            className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-5 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-500"
           >
-            完成建档并进入项目
+            {isSubmitting ? "正在创建项目..." : "完成建档并进入项目"}
           </button>
         </div>
       </section>
