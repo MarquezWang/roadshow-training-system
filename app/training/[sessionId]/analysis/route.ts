@@ -426,6 +426,7 @@ async function parseAnalysisJsonWithRepair(rawText: string) {
 
     try {
       const repairResult = await callAI({
+        task: "pitchAnalysis",
         systemPrompt:
           "你是严格的 JSON 修复器。只输出合法 JSON，不输出 Markdown 或解释。",
         userPrompt: buildRepairPrompt(rawText, error),
@@ -983,6 +984,7 @@ export async function POST(
       dynamicFollowupData,
     });
     const aiResult = await callAI({
+      task: "pitchAnalysis",
       systemPrompt:
         "你是严格遵守 JSON 输出约束的专业路演训练教练。只输出合法 JSON，不输出 Markdown 或额外解释。",
       userPrompt,

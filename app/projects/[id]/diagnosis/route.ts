@@ -253,6 +253,7 @@ async function parseDiagnosisJsonWithRepair(
     });
 
     const repairResult = await callAI({
+      task: "materialDiagnosis",
       systemPrompt:
         "你是严格的 JSON 修复器。只输出合法 JSON，不输出 Markdown、代码块或解释。",
       userPrompt: buildRepairPrompt(rawText, error, context),
@@ -293,6 +294,7 @@ async function buildDiagnosisResult(context: ProjectAIContext) {
   const template = await loadPromptTemplate("material-diagnosis");
   const userPrompt = buildDiagnosisPrompt(diagnosisContext, template);
   const aiResult = await callAI({
+    task: "materialDiagnosis",
     systemPrompt:
       "你是严格遵守 JSON 输出约束的路演材料诊断专家。只输出合法 JSON，不输出 Markdown、代码块或额外解释。所有字符串、数组和对象必须闭合。",
     userPrompt,

@@ -571,6 +571,7 @@ export async function POST(
     };
 
     const followupResult = await callAI({
+      task: "dynamicFollowup",
       systemPrompt: "你是一名专业路演答辩评委，只输出一个问题。",
       userPrompt: followupPrompt,
       temperature: 0.3,
@@ -860,6 +861,7 @@ export async function POST(
             pitchTranscript: transcriptText,
           });
           const mismatchResult = await callAI({
+            task: "dynamicFollowup",
             systemPrompt:
               "你是一名专业路演答辩评委，只输出一个问题或 NO_DYNAMIC_FOLLOWUP。",
             userPrompt: mismatchPrompt,
@@ -986,6 +988,7 @@ export async function POST(
             existingQuestions: otherQuestionsText,
           });
           const contentResult = await callAI({
+            task: "dynamicFollowup",
             systemPrompt:
               "你是一名专业路演答辩评委，只输出一个问题。",
             userPrompt: contentPrompt,
@@ -1074,6 +1077,7 @@ ${transcriptText.slice(0, 1200)}
 ${otherQuestionsText.slice(0, 800)}`;
 
             const retryResult = await callAI({
+              task: "dynamicFollowup",
               systemPrompt: "你是一名专业路演答辩评委，只输出一个问题。",
               userPrompt: retryContentPrompt,
               temperature: 0.1,

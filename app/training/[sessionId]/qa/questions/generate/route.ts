@@ -360,6 +360,7 @@ export async function POST(
         "你是严格遵守 JSON 输出约束的路演答辩教练。只输出合法 JSON，不输出 Markdown 或额外解释。";
 
       let aiResult = await callAI({
+        task: "judgeQuestionGeneration",
         systemPrompt: baseSystemPrompt,
         userPrompt,
         temperature: 0.2,
@@ -382,6 +383,7 @@ export async function POST(
         });
 
         aiResult = await callAI({
+          task: "judgeQuestionGeneration",
           systemPrompt: `${baseSystemPrompt}\n\n重要：确保所有字符串值中的双引号、换行符等特殊字符都已正确转义。输出必须是严格合法的 JSON，不要有任何 JSON 语法错误。`,
           userPrompt,
           temperature: 0,

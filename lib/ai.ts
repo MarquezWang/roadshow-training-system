@@ -1,8 +1,10 @@
 import OpenAI from "openai";
+import { getAiModel, type AiModelTask } from "@/lib/ai-models";
 
 type CallAIOptions = {
   systemPrompt: string;
   userPrompt: string;
+  task?: AiModelTask;
   temperature?: number;
   maxOutputTokens?: number;
   seed?: number;
@@ -26,7 +28,7 @@ function getRequiredEnv(name: string) {
   return value;
 }
 
-function getAIConfig() {
+function getAIConfig(task: AiModelTask) {
   const provider = process.env.AI_PROVIDER?.trim() || "openai";
 
   if (provider !== "openai") {
@@ -34,7 +36,7 @@ function getAIConfig() {
   }
 
   const apiKey = getRequiredEnv("AI_API_KEY");
-  const model = getRequiredEnv("AI_MODEL");
+  const model = getAiModel(task);
   const baseURL = process.env.AI_BASE_URL?.trim() || undefined;
   const timeoutMs = Number(process.env.AI_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
   const maxOutputTokens =
@@ -60,7 +62,7 @@ function sanitizeAIError(error: unknown) {
 }
 
 export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
-  const config = getAIConfig();
+  const config = getAIConfig(options.task ?? "reportGeneration");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   const client = new OpenAI({

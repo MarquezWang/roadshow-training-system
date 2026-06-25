@@ -198,6 +198,7 @@ export async function POST(
       latestScoreResult,
     );
     const aiResult = await callAI({
+      task: "judgeQuestionGeneration",
       systemPrompt:
         "你是严格遵守 JSON 输出约束的路演答辩训练专家。只输出合法 JSON，不输出 Markdown 或额外解释。",
       userPrompt,

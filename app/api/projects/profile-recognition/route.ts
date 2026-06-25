@@ -153,6 +153,7 @@ async function requestTrlEvidence({
 
   try {
     const result = await callAI({
+      task: "trlAssessment",
       systemPrompt,
       userPrompt,
       temperature: 0,
@@ -372,6 +373,7 @@ export async function POST(request: Request) {
   try {
     const basePrompt = await loadPromptTemplate("project-profile-recognition");
     const baseResult = await callAI({
+      task: "projectProfileRecognition",
       systemPrompt: basePrompt,
       userPrompt: buildBaseRecognitionInput(fileName, sourceText),
       temperature: 0,

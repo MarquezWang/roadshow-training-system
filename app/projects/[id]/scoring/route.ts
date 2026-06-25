@@ -102,6 +102,7 @@ export async function POST(
     const template = await loadPromptTemplate("scoring");
     const userPrompt = buildScoringPrompt(aiContext, template);
     const aiResult = await callAI({
+      task: "scoring",
       systemPrompt:
         "你是严格遵循 JSON 输出约束的路演大赛评分专家。只输出合法 JSON，不输出 Markdown 或额外解释。",
       userPrompt,

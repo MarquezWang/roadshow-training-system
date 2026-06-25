@@ -170,7 +170,7 @@ node scripts/exclude-test-files-from-context.mjs
 - `risks` 保存 `riskPoints` 的 JSON 字符串。
 - `suggestions` 保存 `slideSuggestions`、`pitchSuggestions`、`priorityActions` 的 JSON 字符串。
 
-如果未配置 `AI_API_KEY` 或 `AI_MODEL`，页面会显示明确错误，不会崩溃。AI 返回 JSON 解析失败时，不会写入错误诊断。
+如果未配置 `AI_API_KEY`，页面会显示明确错误，不会崩溃。AI 返回 JSON 解析失败时，不会写入错误诊断。
 
 AI 环境变量配置示例：
 
@@ -178,7 +178,8 @@ AI 环境变量配置示例：
 AI_PROVIDER=openai
 AI_API_KEY=your_api_key_here
 AI_BASE_URL=
-AI_MODEL=gpt-4.1-mini
+AI_MODEL_FAST=deepseek-v4-flash
+AI_MODEL_STRONG=deepseek-v4-pro
 AI_TIMEOUT_MS=60000
 AI_MAX_OUTPUT_TOKENS=3000
 DIAGNOSIS_MOCK_MODE=false
@@ -226,7 +227,7 @@ AI_MAX_OUTPUT_TOKENS=5000
 
 ### 材料诊断 Mock 模式
 
-开发验收时可以开启 Mock 模式，在不配置 `AI_API_KEY` 和 `AI_MODEL` 的情况下生成一条结构合法的模拟诊断结果：
+开发验收时可以开启 Mock 模式，在不配置 `AI_API_KEY` 的情况下生成一条结构合法的模拟诊断结果：
 
 ```bash
 DIAGNOSIS_MOCK_MODE=true
@@ -239,7 +240,7 @@ DIAGNOSIS_MOCK_MODE=true
 - Mock 诊断会按当前 `buildProjectAIContext` 返回的评分指标生成 `criterionAnalysis`，数量应等于真实评审规则的 12 条指标。
 - Mock 诊断仅用于开发验收，不代表真实 AI 诊断质量。
 - 页面会显示“Mock 诊断”标签。
-- 正式测试前应关闭 Mock 模式，并配置 `AI_API_KEY` 和 `AI_MODEL`。
+- 正式测试前应关闭 Mock 模式，并配置 `AI_API_KEY`。如需覆盖默认模型，可配置 `AI_MODEL_FAST` / `AI_MODEL_STRONG`，或继续使用旧的 `AI_MODEL` 作为 fallback。
 
 ## AI 评分
 
@@ -297,7 +298,7 @@ POST /projects/{projectId}/scoring
 点击“生成 AI 评分”
 ```
 
-如果未配置 `AI_API_KEY` 或 `AI_MODEL`，页面会显示明确错误，不会崩溃。
+如果未配置 `AI_API_KEY`，页面会显示明确错误，不会崩溃。
 
 AI 评分会把项目基础信息和已纳入上下文的解析文本发送给配置的大模型服务。不要上传涉密、未公开、敏感项目资料；如需处理真实项目资料，应确认模型服务的数据保留、训练、删除和私有化部署策略。
 
@@ -364,7 +365,7 @@ POST /projects/{projectId}/questions/generate
 点击“生成模拟评委问题”
 ```
 
-如果未配置 `AI_API_KEY` 或 `AI_MODEL`，页面会显示明确错误，不会崩溃。
+如果未配置 `AI_API_KEY`，页面会显示明确错误，不会崩溃。
 
 模拟评委问题生成会把项目基础信息、已纳入上下文的解析文本、诊断摘要和评分结果发送给配置的大模型服务。不要上传涉密、未公开、敏感项目资料；如需处理真实项目资料，应确认模型服务的数据保留、训练、删除和私有化部署策略。
 
@@ -403,6 +404,8 @@ AI_PROVIDER=openai
 AI_API_KEY=
 AI_BASE_URL=
 AI_MODEL=
+AI_MODEL_FAST=deepseek-v4-flash
+AI_MODEL_STRONG=deepseek-v4-pro
 AI_TIMEOUT_MS=60000
 AI_MAX_OUTPUT_TOKENS=3000
 ```
@@ -413,7 +416,8 @@ AI_MAX_OUTPUT_TOKENS=3000
 AI_PROVIDER=openai
 AI_API_KEY=your_api_key_here
 AI_BASE_URL=
-AI_MODEL=gpt-4.1-mini
+AI_MODEL_FAST=deepseek-v4-flash
+AI_MODEL_STRONG=deepseek-v4-pro
 AI_TIMEOUT_MS=60000
 AI_MAX_OUTPUT_TOKENS=3000
 ```
@@ -422,8 +426,10 @@ AI_MAX_OUTPUT_TOKENS=3000
 
 - `AI_API_KEY` 不得写死在代码中。
 - `AI_BASE_URL` 可为空；为空时使用 SDK 默认配置。
-- `AI_MODEL` 必须配置。
-- 缺少 `AI_API_KEY` 或 `AI_MODEL` 时会返回明确错误。
+- `AI_MODEL_FAST` 用于连通性测试等轻量任务，默认 `deepseek-v4-flash`。
+- `AI_MODEL_STRONG` 用于项目档案识别、TRL、评委问题、动态追问和分析报告等关键任务，默认 `deepseek-v4-pro`。
+- 旧的 `AI_MODEL` 可继续作为 `AI_MODEL_FAST` / `AI_MODEL_STRONG` 未配置时的 fallback。
+- 缺少 `AI_API_KEY` 时会返回明确错误。
 - 错误信息不会主动输出 API Key。
 
 ## Prompt 渲染
@@ -446,7 +452,7 @@ renderPrompt(template, variables)
 
 该接口会读取 `prompts/project-summary.md`，构造一段不包含真实上传文件的测试输入，并调用 `callAI()` 返回模型文本。
 
-如果未配置 `AI_API_KEY` 或 `AI_MODEL`，接口会返回明确错误 JSON。
+如果未配置 `AI_API_KEY`，接口会返回明确错误 JSON。
 
 ## 数据安全提醒
 

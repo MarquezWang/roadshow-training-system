@@ -31,6 +31,7 @@ export async function GET() {
     });
 
     const result = await callAI({
+      task: "aiConnectivityTest",
       systemPrompt:
         "你是路演培训系统的开发测试助手。请严格遵守用户 Prompt 的 JSON 输出要求。",
       userPrompt,
