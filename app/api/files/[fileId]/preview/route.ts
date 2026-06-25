@@ -79,7 +79,7 @@ function buildPreviewFileName(fileName: string) {
 function getBaseHeaders(fileName: string, contentLength: number) {
   return {
     "Accept-Ranges": "bytes",
-    "Cache-Control": "private, max-age=3600",
+    "Cache-Control": "private, max-age=600",
     "Content-Disposition": buildContentDisposition(fileName),
     "Content-Length": String(contentLength),
     "Content-Type": "application/pdf",
