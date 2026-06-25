@@ -11,6 +11,7 @@ import type {
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
 import { PREFERRED_DEVICE_KEY } from "@/lib/use-audio-input";
+import type { DisplayMaterialNotice } from "@/lib/display-material";
 
 type TrainingQaQuestion = {
   id: string;
@@ -43,6 +44,7 @@ type TrainingQaClientProps = Readonly<{
   initialRemainingSec: number;
   initialQuestions: TrainingQaQuestion[];
   previewFile: QaFile | null;
+  previewNotice: DisplayMaterialNotice | null;
   files: QaFile[];
   dynamicFollowupExperiment: boolean;
 }>;
@@ -286,6 +288,7 @@ export function TrainingQaClient({
   initialRemainingSec,
   initialQuestions,
   previewFile,
+  previewNotice,
   dynamicFollowupExperiment,
 }: TrainingQaClientProps) {
   const router = useRouter();
@@ -1987,6 +1990,15 @@ const beginJudgeQuestion = useCallback(
                   />
                 )}
               </div>
+            </div>
+          ) : previewNotice ? (
+            <div>
+              <p className="rounded-md border border-slate-700 bg-slate-900 px-4 py-3 text-sm leading-6 text-slate-300">
+                {previewNotice.message}
+              </p>
+              <p className="mt-3 text-sm text-slate-400">
+                仍可继续答辩。
+              </p>
             </div>
           ) : (
             <div>

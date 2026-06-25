@@ -1,6 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { devLog } from "@/lib/dev-log";
+import {
+  getDisplayMaterialNotice,
+  selectDisplayablePdf,
+} from "@/lib/display-material";
 import { TrainingQaClient } from "./training-qa-client";
 
 type TrainingQaPageProps = Readonly<{
@@ -23,13 +27,6 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
           id: true,
           name: true,
           fileAssets: {
-            where: {
-              parseStatus: "SUCCESS",
-              includeInAIContext: true,
-              extractedText: {
-                not: null,
-              },
-            },
             orderBy: {
               createdAt: "asc",
             },
@@ -37,6 +34,12 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
               id: true,
               originalName: true,
               fileType: true,
+              extractedText: true,
+              parseStatus: true,
+              includeInAIContext: true,
+              previewPdfPath: true,
+              previewStatus: true,
+              previewError: true,
             },
           },
         },
@@ -108,10 +111,16 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
         )
       : 0;
   const initialRemainingSec = Math.max(0, qaLimitSec - qaElapsedSec);
-  const previewFile =
-    session.project.fileAssets.find(
-      (file) => file.fileType.toLowerCase() === "pdf",
-    ) ?? null;
+  const aiContextFiles = session.project.fileAssets.filter(
+    (file) =>
+      file.parseStatus === "SUCCESS" &&
+      file.includeInAIContext &&
+      Boolean(file.extractedText),
+  );
+  const previewFile = selectDisplayablePdf(session.project.fileAssets);
+  const previewNotice = previewFile
+    ? null
+    : getDisplayMaterialNotice(session.project.fileAssets);
 
   return (
     <main className="w-full flex-1 bg-slate-950 p-3">
@@ -140,7 +149,8 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
             : null,
         }))}
         previewFile={previewFile}
-        files={session.project.fileAssets}
+        previewNotice={previewNotice}
+        files={aiContextFiles}
         dynamicFollowupExperiment={
           process.env.DYNAMIC_FOLLOWUP_EXPERIMENT === "true"
         }
