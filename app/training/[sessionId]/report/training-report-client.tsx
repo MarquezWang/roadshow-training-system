@@ -120,6 +120,71 @@ type TrainingReportClientProps = Readonly<{
   initialAnalysis: TrainingAnalysis | null;
 }>;
 
+const REPORT_GENERATION_FAILURE_MESSAGE =
+  "报告生成失败，请稍后重试或返回项目详情重新开始训练。";
+
+const REPORT_GENERATION_STAGES = [
+  "正在整理路演转写与答辩记录",
+  "正在分析路演表达、内容完整度与答辩表现",
+  "正在生成评分、评语与改进建议",
+];
+
+function getReportGenerationStageIndex(elapsedMs: number) {
+  return Math.floor(elapsedMs / 30_000) % REPORT_GENERATION_STAGES.length;
+}
+
+function ReportGenerationPanel({
+  message,
+  elapsedMs,
+}: Readonly<{
+  message: string;
+  elapsedMs: number;
+}>) {
+  const activeStageIndex = getReportGenerationStageIndex(elapsedMs);
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-950 p-5 text-left shadow-sm">
+      <div className="flex items-start gap-4">
+        <div className="mt-1 h-8 w-8 shrink-0 animate-spin rounded-full border-2 border-slate-700 border-t-blue-400" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-white">报告生成中</p>
+          <p className="mt-1 text-sm leading-6 text-slate-300">
+            {message || REPORT_GENERATION_STAGES[activeStageIndex]}
+          </p>
+          <div className="mt-4 space-y-2">
+            {REPORT_GENERATION_STAGES.map((stage, index) => (
+              <div
+                key={stage}
+                className="flex items-center gap-3 text-sm"
+              >
+                <span
+                  className={
+                    index === activeStageIndex
+                      ? "h-2.5 w-2.5 rounded-full bg-blue-400 shadow-[0_0_0_4px_rgba(96,165,250,0.16)]"
+                      : "h-2.5 w-2.5 rounded-full bg-slate-700"
+                  }
+                />
+                <span
+                  className={
+                    index === activeStageIndex
+                      ? "text-slate-100"
+                      : "text-slate-500"
+                  }
+                >
+                  {stage}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-4 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs leading-5 text-slate-400">
+            报告生成通常需要 1-3 分钟，请勿刷新页面。完成后页面会自动更新。
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RadarChart({ overallScore }: { readonly overallScore: number | null }) {
   const score = overallScore ?? 0;
   const ratio = Math.max(0.1, Math.min(1, score / 100));
@@ -275,6 +340,12 @@ export function TrainingReportClient({
       ? "正在整理路演与答辩表现，请稍候……"
       : "",
   );
+  const reportGenerationStartedAtRef = useRef(
+    initialAnalysis === null || initialAnalysis.status !== "COMPLETED"
+      ? Date.now()
+      : 0,
+  );
+  const [reportGenerationElapsedMs, setReportGenerationElapsedMs] = useState(0);
 
   // 单一 status polling 控制
   const statusPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -330,6 +401,24 @@ export function TrainingReportClient({
   const contentRef = useRef<HTMLDivElement>(null);
   // 展开/收起：内容覆盖
   const [showAllCoverage, setShowAllCoverage] = useState(false);
+
+  useEffect(() => {
+    if (!isAnalysisLoading || isAborted) {
+      return undefined;
+    }
+
+    const startedAt = reportGenerationStartedAtRef.current || Date.now();
+
+    if (reportGenerationStartedAtRef.current === 0) {
+      reportGenerationStartedAtRef.current = startedAt;
+    }
+
+    const timer = window.setInterval(() => {
+      setReportGenerationElapsedMs(Date.now() - startedAt);
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [isAnalysisLoading, isAborted]);
 
   // 切换 Tab 时回到内容顶部
   useEffect(() => {
@@ -429,7 +518,7 @@ export function TrainingReportClient({
             statusPollTimerRef.current = null;
           }
           setIsAnalysisLoading(false);
-          setAnalysisMessage(status.analysisError ?? "报告生成失败。");
+          setAnalysisMessage(REPORT_GENERATION_FAILURE_MESSAGE);
           return;
         }
 
@@ -635,6 +724,8 @@ export function TrainingReportClient({
       return;
     }
 
+    reportGenerationStartedAtRef.current = Date.now();
+    setReportGenerationElapsedMs(0);
     setIsAnalysisLoading(true);
     setAnalysisMessage("正在生成训练报告……");
 
@@ -670,14 +761,12 @@ export function TrainingReportClient({
         setAnalysisMessage("");
         setIsAnalysisLoading(false);
       } else if (body.analysis.status === "FAILED") {
-        setAnalysisMessage(body.analysis.errorMessage ?? "报告生成失败。");
+        setAnalysisMessage(REPORT_GENERATION_FAILURE_MESSAGE);
         setIsAnalysisLoading(false);
       }
       // PROCESSING 状态：保持 analysisLoading 和 analysisMessage，由 polling 接管
-    } catch (error) {
-      setAnalysisMessage(
-        error instanceof Error ? error.message : "报告生成失败，请稍后重试。",
-      );
+    } catch {
+      setAnalysisMessage(REPORT_GENERATION_FAILURE_MESSAGE);
       setIsAnalysisLoading(false);
     }
   }
@@ -1215,36 +1304,18 @@ export function TrainingReportClient({
             </section>
           ) : isAnalysisLoading ? (
             <section className="rounded-lg border border-slate-100 bg-white p-6">
-              <div className="py-8 text-center">
-                <div className="mb-4 flex items-center justify-center">
-                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-200 border-t-blue-500" />
-                </div>
-                <p className="text-sm font-medium text-slate-600">报告生成中</p>
-                <p className="mt-1 text-xs text-slate-400">
-                  {analysisMessage || "正在整理路演与答辩表现，请稍候……"}
-                </p>
-                <p className="mt-3 text-xs text-slate-300">
-                  通常需要几十秒，页面会自动更新。
-                </p>
-              </div>
+              <ReportGenerationPanel
+                message={analysisMessage}
+                elapsedMs={reportGenerationElapsedMs}
+              />
             </section>
           ) : analysis?.status === "FAILED" ? (
             <section className="rounded-lg border border-slate-100 bg-white p-6">
               <div className="py-8 text-center">
                 <p className="text-sm font-medium text-red-600">报告生成失败</p>
                 <p className="mt-1 text-xs text-red-400">
-                  报告生成失败，请稍后重试。
+                  {REPORT_GENERATION_FAILURE_MESSAGE}
                 </p>
-                {analysis.errorMessage ? (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer text-xs text-red-300">
-                      查看详情
-                    </summary>
-                    <p className="mt-1 text-xs text-red-300/80">
-                      {analysis.errorMessage}
-                    </p>
-                  </details>
-                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -1259,26 +1330,17 @@ export function TrainingReportClient({
             </section>
           ) : analysis ? (
             <section className="rounded-lg border border-slate-100 bg-white p-6">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                    训练状态
-                  </p>
-                  <p className="mt-1 text-sm font-semibold text-slate-800">报告生成中</p>
-                </div>
-              </div>
-              {analysisMessage ? (
-                <p className="mt-3 text-sm leading-6 text-slate-600">{analysisMessage}</p>
-              ) : null}
+              <ReportGenerationPanel
+                message={analysisMessage}
+                elapsedMs={reportGenerationElapsedMs}
+              />
             </section>
           ) : (
             <section className="rounded-lg border border-slate-100 bg-white p-6">
-              <div className="py-8 text-center">
-                <p className="text-sm font-medium text-slate-600">报告生成中</p>
-                <p className="mt-1 text-xs text-slate-400">
-                  {analysisMessage || "正在准备报告数据，请稍候……"}
-                </p>
-              </div>
+              <ReportGenerationPanel
+                message={analysisMessage || "正在准备报告数据，请稍候……"}
+                elapsedMs={reportGenerationElapsedMs}
+              />
             </section>
           )}
 
@@ -1356,18 +1418,8 @@ export function TrainingReportClient({
               <div className="mt-4 rounded-md border border-red-100 bg-red-50/50 p-4">
                 <p className="text-sm font-medium text-red-700">报告生成失败</p>
                 <p className="mt-1 text-sm text-red-600/80">
-                  报告生成失败，请稍后重试。
+                  {REPORT_GENERATION_FAILURE_MESSAGE}
                 </p>
-                {analysis.errorMessage ? (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer text-xs text-red-400">
-                      查看详情
-                    </summary>
-                    <p className="mt-1 text-xs text-red-400/80">
-                      {analysis.errorMessage}
-                    </p>
-                  </details>
-                ) : null}
               </div>
             ) : (
               <div className="mt-4 grid gap-4">
