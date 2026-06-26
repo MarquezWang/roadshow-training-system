@@ -7,6 +7,8 @@ import { prisma } from "@/lib/prisma";
 
 const execFileAsync = promisify(execFile);
 const CONVERSION_TIMEOUT_MS = 60_000;
+const DETECTION_TIMEOUT_MS = 5_000;
+const PPT_PREVIEW_LOG_PREFIX = "[PPT_PREVIEW]";
 
 type FileAssetForPreview = {
   id: string;
@@ -17,6 +19,33 @@ type FileAssetForPreview = {
 };
 
 export type PreviewStatus = "NONE" | "PENDING" | "READY" | "FAILED";
+
+type LibreOfficeCheckResult =
+  | {
+      available: true;
+      command: string;
+      version: string;
+    }
+  | {
+      available: false;
+      reason: string;
+      errors: string[];
+    };
+
+class PowerPointPreviewError extends Error {
+  constructor(
+    readonly reason:
+      | "libreoffice_unavailable"
+      | "libreoffice_execution_failed"
+      | "input_file_not_found"
+      | "output_pdf_not_generated"
+      | "unknown",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PowerPointPreviewError";
+  }
+}
 
 export function isPowerPointFile(file: { fileType: string; originalName?: string }) {
   const normalizedType = file.fileType.toLowerCase().replace(/^\./, "");
@@ -80,7 +109,99 @@ function getLibreOfficeCandidates() {
   ].filter((value): value is string => Boolean(value));
 }
 
+function isCommandNotFoundError(message: string) {
+  return /ENOENT|not recognized|找不到|无法将|not found/i.test(message);
+}
+
+function sanitizeLogValue(value: string, maxLength = 200) {
+  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function quoteLogValue(value: string) {
+  return `"${sanitizeLogValue(value).replaceAll('"', "'")}"`;
+}
+
+function getShortPath(filePath: string) {
+  const relativePath = path.relative(process.cwd(), filePath);
+
+  if (!relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
+    return relativePath.replaceAll(path.sep, "/");
+  }
+
+  return path.basename(filePath);
+}
+
+function logPptPreview(message: string) {
+  console.log(`${PPT_PREVIEW_LOG_PREFIX} ${message}`);
+}
+
+function warnPptPreview(message: string) {
+  console.warn(`${PPT_PREVIEW_LOG_PREFIX} ${message}`);
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getPreviewErrorReason(error: unknown) {
+  if (error instanceof PowerPointPreviewError) {
+    return error.reason;
+  }
+
+  return "unknown";
+}
+
+export async function checkLibreOfficeAvailability(): Promise<LibreOfficeCheckResult> {
+  const errors: string[] = [];
+
+  for (const command of getLibreOfficeCandidates()) {
+    try {
+      const result = await execFileAsync(command, ["--version"], {
+        timeout: DETECTION_TIMEOUT_MS,
+        windowsHide: true,
+      });
+      const version = sanitizeLogValue(
+        result.stdout || result.stderr || "version unavailable",
+      );
+
+      logPptPreview(
+        `libreoffice found command=${command} version=${quoteLogValue(
+          version,
+        )}`,
+      );
+
+      return {
+        available: true,
+        command,
+        version,
+      };
+    } catch (error) {
+      errors.push(`${command}: ${sanitizeLogValue(getErrorMessage(error))}`);
+    }
+  }
+
+  const reason = errors.every(isCommandNotFoundError)
+    ? "command not found"
+    : sanitizeLogValue(errors.join("; "));
+  warnPptPreview(`libreoffice unavailable reason=${quoteLogValue(reason)}`);
+
+  return {
+    available: false,
+    reason,
+    errors,
+  };
+}
+
 async function runLibreOfficeConvert(inputPath: string, outputDir: string) {
+  const libreOffice = await checkLibreOfficeAvailability();
+
+  if (!libreOffice.available) {
+    throw new PowerPointPreviewError(
+      "libreoffice_unavailable",
+      "当前环境未配置 PPT 转换组件（LibreOffice）。",
+    );
+  }
+
   const args = [
     "--headless",
     "--nologo",
@@ -91,30 +212,18 @@ async function runLibreOfficeConvert(inputPath: string, outputDir: string) {
     outputDir,
     inputPath,
   ];
-  const errors: string[] = [];
 
-  for (const command of getLibreOfficeCandidates()) {
-    try {
-      await execFileAsync(command, args, {
-        timeout: CONVERSION_TIMEOUT_MS,
-        windowsHide: true,
-      });
-      return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push(`${command}: ${message}`);
-    }
+  try {
+    await execFileAsync(libreOffice.command, args, {
+      timeout: CONVERSION_TIMEOUT_MS,
+      windowsHide: true,
+    });
+  } catch (error) {
+    throw new PowerPointPreviewError(
+      "libreoffice_execution_failed",
+      `PPT 展示预览生成失败：${sanitizeLogValue(getErrorMessage(error))}`,
+    );
   }
-
-  const noExecutable = errors.every((message) =>
-    /ENOENT|not recognized|找不到|无法将/.test(message),
-  );
-
-  if (noExecutable) {
-    throw new Error("当前环境未配置 PPT 转换组件（LibreOffice）。");
-  }
-
-  throw new Error(`PPT 展示预览生成失败：${errors.join("；")}`);
 }
 
 export async function convertPowerPointToPdf(
@@ -122,6 +231,27 @@ export async function convertPowerPointToPdf(
   outputDir: string,
 ) {
   await mkdir(outputDir, { recursive: true });
+
+  try {
+    const inputStat = await stat(inputPath);
+
+    if (!inputStat.isFile()) {
+      throw new PowerPointPreviewError(
+        "input_file_not_found",
+        "PPT 展示预览生成失败：输入文件不存在。",
+      );
+    }
+  } catch (error) {
+    if (error instanceof PowerPointPreviewError) {
+      throw error;
+    }
+
+    throw new PowerPointPreviewError(
+      "input_file_not_found",
+      "PPT 展示预览生成失败：输入文件不存在。",
+    );
+  }
+
   await runLibreOfficeConvert(inputPath, outputDir);
 
   const inputExtension = path.extname(inputPath);
@@ -130,9 +260,23 @@ export async function convertPowerPointToPdf(
     `${path.basename(inputPath, inputExtension)}.pdf`,
   );
 
-  const convertedStat = await stat(convertedPath);
-  if (!convertedStat.isFile() || convertedStat.size === 0) {
-    throw new Error("PPT 展示预览生成失败：未找到转换后的 PDF 文件。");
+  try {
+    const convertedStat = await stat(convertedPath);
+    if (!convertedStat.isFile() || convertedStat.size === 0) {
+      throw new PowerPointPreviewError(
+        "output_pdf_not_generated",
+        "PPT 展示预览生成失败：未找到转换后的 PDF 文件。",
+      );
+    }
+  } catch (error) {
+    if (error instanceof PowerPointPreviewError) {
+      throw error;
+    }
+
+    throw new PowerPointPreviewError(
+      "output_pdf_not_generated",
+      "PPT 展示预览生成失败：未找到转换后的 PDF 文件。",
+    );
   }
 
   return convertedPath;
@@ -203,6 +347,11 @@ export async function generatePowerPointPreviewPdf(file: FileAssetForPreview) {
   } catch (error) {
     const previewError =
       error instanceof Error ? error.message : "PPT 展示预览生成失败。";
+    warnPptPreview(
+      `convert failed reason=${quoteLogValue(
+        getPreviewErrorReason(error),
+      )} file=${quoteLogValue(getShortPath(file.filePath))}`,
+    );
 
     await prisma.fileAsset.update({
       where: {
