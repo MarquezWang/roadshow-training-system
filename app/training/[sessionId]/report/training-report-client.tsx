@@ -1303,7 +1303,7 @@ export function TrainingReportClient({
               </div>
             </section>
           ) : isAnalysisLoading ? (
-            <section className="rounded-lg border border-slate-100 bg-white p-6">
+            <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
               <ReportGenerationPanel
                 message={analysisMessage}
                 elapsedMs={reportGenerationElapsedMs}
@@ -1329,14 +1329,14 @@ export function TrainingReportClient({
               </div>
             </section>
           ) : analysis ? (
-            <section className="rounded-lg border border-slate-100 bg-white p-6">
+            <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
               <ReportGenerationPanel
                 message={analysisMessage}
                 elapsedMs={reportGenerationElapsedMs}
               />
             </section>
           ) : (
-            <section className="rounded-lg border border-slate-100 bg-white p-6">
+            <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
               <ReportGenerationPanel
                 message={analysisMessage || "正在准备报告数据，请稍候……"}
                 elapsedMs={reportGenerationElapsedMs}
