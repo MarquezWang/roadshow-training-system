@@ -61,14 +61,62 @@ function sanitizeAIError(error: unknown) {
   return "AI 调用失败。";
 }
 
+function summarizeAILogError(error: unknown) {
+  return sanitizeAIError(error).replace(/\s+/g, " ").slice(0, 120);
+}
+
+function logAICall({
+  task,
+  model,
+  startedAt,
+  ok,
+  error,
+}: {
+  task: AiModelTask;
+  model: string;
+  startedAt: number;
+  ok: boolean;
+  error?: string;
+}) {
+  const elapsedMs = Date.now() - startedAt;
+  const message = `[AI] task=${task} model=${model} elapsedMs=${elapsedMs} ok=${ok}${
+    error ? ` error=${error}` : ""
+  }`;
+
+  if (ok) {
+    console.log(message);
+  } else {
+    console.warn(message);
+  }
+}
+
 export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
-  const config = getAIConfig(options.task ?? "reportGeneration");
+  const task = options.task ?? "reportGeneration";
+  const startedAt = Date.now();
+  let model = getAiModel(task);
+  let config: ReturnType<typeof getAIConfig>;
+
+  try {
+    config = getAIConfig(task);
+    model = config.model;
+  } catch (error) {
+    logAICall({
+      task,
+      model,
+      startedAt,
+      ok: false,
+      error: summarizeAILogError(error),
+    });
+    throw error;
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   const client = new OpenAI({
     apiKey: config.apiKey,
     baseURL: config.baseURL,
   });
+  let completed = false;
 
   try {
     const completion = await client.chat.completions.create(
@@ -98,17 +146,35 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
       throw new Error("AI 返回内容为空。");
     }
 
+    completed = true;
     return {
       text,
       raw: completion,
     };
   } catch (error) {
-    if (controller.signal.aborted) {
+    const isTimeout = controller.signal.aborted;
+    logAICall({
+      task,
+      model: config.model,
+      startedAt,
+      ok: false,
+      error: isTimeout ? "timeout" : summarizeAILogError(error),
+    });
+
+    if (isTimeout) {
       throw new Error(`AI 调用超时，已超过 ${config.timeoutMs}ms。`);
     }
 
     throw new Error(`AI 调用失败：${sanitizeAIError(error)}`);
   } finally {
+    if (completed) {
+      logAICall({
+        task,
+        model: config.model,
+        startedAt,
+        ok: true,
+      });
+    }
     clearTimeout(timeout);
   }
 }
