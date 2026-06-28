@@ -405,6 +405,12 @@ export function TrainingQaClient({
   const pageLabel = totalPages
     ? `${currentPageNumber} / ${totalPages}`
     : String(currentPageNumber);
+  const shouldShowMessageToast =
+    Boolean(message) &&
+    !questionTextDialog &&
+    message !== "答辩问题已生成。开始前不会展示完整题目。" &&
+    message !== "评委问题生成时间较长，请稍候……" &&
+    message !== speechUnavailableMessage;
 
   useTrainingAbortGuard({
     sessionId,
@@ -1975,7 +1981,7 @@ const beginJudgeQuestion = useCallback(
           </p>
         </div>
       ) : null}
-      {message && !questionTextDialog ? (
+      {shouldShowMessageToast ? (
         <div className="fixed bottom-20 left-1/2 z-40 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-950/90 p-3 text-center text-sm leading-6 text-slate-200 shadow-2xl shadow-black/40">
           <p>{message}</p>
         </div>
