@@ -1,5 +1,18 @@
 const changelogItems = [
   {
+    version: "v0.6.0",
+    date: "2026-06-28",
+    title: "多用户登录与管理员能力",
+    items: [
+      "新增登录与退出登录能力，启用后项目页、训练页和文件预览需要登录访问。",
+      "新增用户归属隔离：普通用户只能查看和训练自己的项目。",
+      "新增管理员全局视角：ADMIN 可查看所有项目、训练记录，并在项目列表和详情中看到所属用户。",
+      "新增管理员用户管理页，可创建内测账号、修改显示名和角色、重置密码。",
+      "新增用户创建命令行工具，便于服务器或本地快速创建测试账号。",
+      "用户管理页增加账号状态展示，可区分可登录账号、不可登录历史账号，并标记 team@roadshow.local 为历史项目账号。",
+    ],
+  },
+  {
     version: "v0.5.0",
     date: "2026-06-28",
     title: "转写与答辩体验优化",
@@ -53,8 +66,12 @@ export default function ChangelogPage() {
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <section className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-12">
         <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-8 shadow-2xl shadow-slate-950/40">
-          <p className="text-sm font-medium text-cyan-300">ROADSHOW TRAINING SYSTEM</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">更新日志</h1>
+          <p className="text-sm font-medium text-cyan-300">
+            ROADSHOW TRAINING SYSTEM
+          </p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">
+            更新日志
+          </h1>
           <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-300">
             这里记录内部测试阶段的关键版本变化。后续开发建议先在本地完成一组较完整的改动与验收，再统一提交、推送并同步服务器。
           </p>
@@ -72,7 +89,9 @@ export default function ChangelogPage() {
                 </span>
                 <span className="text-sm text-slate-400">{item.date}</span>
               </div>
-              <h2 className="mt-4 text-xl font-semibold text-white">{item.title}</h2>
+              <h2 className="mt-4 text-xl font-semibold text-white">
+                {item.title}
+              </h2>
               <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-300">
                 {item.items.map((change) => (
                   <li key={change} className="flex gap-3">
