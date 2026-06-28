@@ -1,0 +1,86 @@
+const changelogItems = [
+  {
+    version: "v0.5.0",
+    date: "2026-06-28",
+    title: "转写与答辩体验优化",
+    items: [
+      "新增腾讯云 ASR 转写接入，可通过环境变量在讯飞云与腾讯云之间切换。",
+      "优化动态追问展示时机：追问生成动画完成后，再展示题目文本并进入准备倒计时。",
+      "新增更新日志页，用于集中记录阶段版本内容，减少频繁服务器同步。",
+    ],
+  },
+  {
+    version: "v0.4.0",
+    date: "2026-06",
+    title: "路演材料展示能力",
+    items: [
+      "支持 PPT/PPTX 在服务端转换为展示用 PDF，并复用现有 PDF 预览与翻页链路。",
+      "增加 LibreOffice 部署自检与 PPT 预览诊断日志，便于服务器环境排查。",
+      "为 PDF 预览接口增加短期私有缓存，降低 pitch 进入 QA 时的重复加载成本。",
+      "简化路演与答辩页面右侧信息栏，让材料展示区域更接近全屏训练体验。",
+    ],
+  },
+  {
+    version: "v0.3.0",
+    date: "2026-06",
+    title: "稳定性与可观测性",
+    items: [
+      "新增 AI 调用耗时日志，记录 task、model、elapsedMs 与失败摘要。",
+      "报告生成等待态增加阶段提示，明确报告通常需要 1-3 分钟。",
+      "新增内部测试关键路径验收清单，覆盖新建项目、训练、答辩、报告等主流程。",
+      "增加双模型配置：轻量任务使用 fast 模型，关键任务使用 strong 模型。",
+    ],
+  },
+  {
+    version: "v0.2.0",
+    date: "2026-06",
+    title: "新建项目与 TRL 档案",
+    items: [
+      "新建项目流程调整为上传材料并确认档案、合作需求与转化对接两步。",
+      "TRL 判断改为结构化证据提取与后端规则约束，降低随机误判。",
+      "增加项目创建前端提交中状态与后端防重复创建保护。",
+      "优化 AI 识别失败分级提示，基础档案与 TRL 判断解耦。",
+    ],
+  },
+];
+
+export default function ChangelogPage() {
+  return (
+    <main className="min-h-screen bg-slate-950 text-slate-100">
+      <section className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-12">
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-8 shadow-2xl shadow-slate-950/40">
+          <p className="text-sm font-medium text-cyan-300">ROADSHOW TRAINING SYSTEM</p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">更新日志</h1>
+          <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-300">
+            这里记录内部测试阶段的关键版本变化。后续开发建议先在本地完成一组较完整的改动与验收，再统一提交、推送并同步服务器。
+          </p>
+        </div>
+
+        <div className="space-y-5">
+          {changelogItems.map((item) => (
+            <article
+              key={item.version}
+              className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6"
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-sm font-semibold text-cyan-200">
+                  {item.version}
+                </span>
+                <span className="text-sm text-slate-400">{item.date}</span>
+              </div>
+              <h2 className="mt-4 text-xl font-semibold text-white">{item.title}</h2>
+              <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-300">
+                {item.items.map((change) => (
+                  <li key={change} className="flex gap-3">
+                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300" />
+                    <span>{change}</span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}

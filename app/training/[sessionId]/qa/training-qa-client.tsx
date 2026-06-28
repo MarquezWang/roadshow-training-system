@@ -1191,15 +1191,8 @@ const beginJudgeQuestion = useCallback(
       clearDynamicFollowupIntroTimer();
       clearSpeechTimer();
       clearCountdownTimer();
-      const speechRunId = speechRunIdRef.current + 1;
-      speechRunIdRef.current = speechRunId;
       window.speechSynthesis?.cancel();
       hasMoveOnRef.current = false;
-      setQuestionTextDialog({
-        question,
-        mode: "reading",
-      });
-      setCurrentQuestionIndex(questionIndex);
       setMessage("");
       setQaRecordingMessage("");
 
@@ -1209,6 +1202,7 @@ const beginJudgeQuestion = useCallback(
       ) {
         dynamicFollowupIntroShownQuestionIdsRef.current.add(question.id);
         setQaPhase("ASKING");
+        setQuestionTextDialog(null);
         setDynamicFollowupIntroQuestion(question);
         dynamicFollowupIntroTimerRef.current = window.setTimeout(() => {
           dynamicFollowupIntroTimerRef.current = null;
@@ -1218,6 +1212,13 @@ const beginJudgeQuestion = useCallback(
         return;
       }
 
+      const speechRunId = speechRunIdRef.current + 1;
+      speechRunIdRef.current = speechRunId;
+      setQuestionTextDialog({
+        question,
+        mode: "reading",
+      });
+      setCurrentQuestionIndex(questionIndex);
       setDynamicFollowupIntroQuestion(null);
       setQaPhase("ASKING");
 
