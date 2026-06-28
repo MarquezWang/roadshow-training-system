@@ -648,7 +648,7 @@ export function TrainingSessionClient({
   }, [previewFile, previewUrl]);
 
   useEffect(() => {
-    if (!pdfDocument || !canvasRef.current || previewMode !== "standard") {
+    if (!pdfDocument || !canvasRef.current) {
       return;
     }
 
@@ -733,7 +733,6 @@ export function TrainingSessionClient({
     currentPageNumber,
     isBigScreenMode,
     pdfDocument,
-    previewMode,
     renderTick,
   ]);
 
@@ -765,7 +764,7 @@ export function TrainingSessionClient({
     observer.observe(previewContainer);
 
     return () => observer.disconnect();
-  }, [previewFile, previewMode]);
+  }, [previewFile]);
 
   useEffect(() => {
     setIsFullscreenSupported(
@@ -1676,7 +1675,7 @@ export function TrainingSessionClient({
   }, [endPitch, isPitching, remainingSec]);
 
   const shellClassName = isBigScreenMode
-    ? "fixed inset-0 z-50 grid h-screen w-screen gap-3 overflow-hidden bg-slate-950 p-3 text-white lg:grid-cols-[minmax(0,1fr)_280px]"
+    ? "fixed inset-0 z-50 grid h-screen w-screen gap-3 overflow-hidden bg-slate-950 p-3 text-white"
     : "grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]";
   const mainPanelClassName = isBigScreenMode
     ? "flex min-h-0 flex-col rounded-lg border border-slate-700 bg-slate-900/95 p-3 shadow-2xl"
@@ -1696,12 +1695,8 @@ export function TrainingSessionClient({
     ? "mt-3 grid min-h-0 flex-1 place-items-center rounded-lg border border-slate-700 bg-slate-950 p-2 text-center"
     : "mt-5 grid min-h-[calc(100vh-310px)] place-items-center rounded-lg border border-slate-200 bg-slate-100 p-4 text-center";
   const previewScrollerClassName = isBigScreenMode
-    ? previewMode === "standard"
-      ? "grid h-full min-h-0 place-items-center overflow-hidden rounded-md border border-slate-700 bg-slate-950 p-2"
-      : "grid h-full min-h-0 overflow-hidden rounded-md border border-slate-700 bg-slate-950"
-    : previewMode === "standard"
-      ? "grid h-[calc(100vh-390px)] min-h-96 place-items-center overflow-hidden rounded-md border border-slate-200 bg-slate-200 p-4"
-      : "grid h-[calc(100vh-390px)] min-h-96 overflow-hidden rounded-md border border-slate-200 bg-slate-200";
+    ? "grid h-full min-h-0 place-items-center overflow-hidden rounded-md border border-slate-700 bg-slate-950 p-2"
+    : "grid h-[calc(100vh-390px)] min-h-96 place-items-center overflow-hidden rounded-md border border-slate-200 bg-slate-200 p-4";
   const secondaryPanelClassName = isBigScreenMode
     ? "rounded-lg border border-slate-700 bg-slate-900/90 p-4 shadow-sm"
     : "rounded-lg border border-slate-200 bg-white p-5 shadow-sm";
@@ -1750,7 +1745,13 @@ export function TrainingSessionClient({
                 {projectName}
               </p>
             ) : null}
-            <p className={`text-xs font-medium ${mutedTextClassName}`}>
+            <p
+              className={
+                isBigScreenMode
+                  ? "hidden"
+                  : `text-xs font-medium ${mutedTextClassName}`
+              }
+            >
               训练状态
             </p>
             <h2
@@ -1765,7 +1766,7 @@ export function TrainingSessionClient({
             <p
               className={
                 isBigScreenMode
-                  ? "mt-1 text-sm text-slate-300"
+                  ? "hidden"
                   : "mt-2 text-sm text-slate-600"
               }
             >
@@ -1774,7 +1775,7 @@ export function TrainingSessionClient({
             <div
               className={
                 isBigScreenMode
-                  ? "mt-2 inline-flex rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs font-medium text-slate-200"
+                  ? "hidden"
                   : "mt-3 inline-flex rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700"
               }
             >
@@ -1856,7 +1857,7 @@ export function TrainingSessionClient({
                     如预览仍异常，可使用原始 PDF 打开检查。
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="hidden">
                   <div
                     className={
                       isBigScreenMode
@@ -2027,6 +2028,7 @@ export function TrainingSessionClient({
         </div>
       </section>
 
+      {!isBigScreenMode ? (
       <aside
         className={
           isBigScreenMode
@@ -2481,6 +2483,7 @@ export function TrainingSessionClient({
         ) : null}
 
       </aside>
+      ) : null}
 
       {showRecordingPrepDialog && status === "CREATED" ? (
         <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/70 px-4">

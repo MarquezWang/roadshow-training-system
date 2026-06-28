@@ -1,10 +1,15 @@
 import { createReadStream } from "fs";
-import { stat } from "fs/promises";
+import { open, stat } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { isPdfFile, isPowerPointFile } from "@/lib/powerpoint-preview";
+import {
+  generatePowerPointPreviewPdf,
+  getPreviewPdfRelativePath,
+  isPdfFile,
+  isPowerPointFile,
+} from "@/lib/powerpoint-preview";
 
 type FilePreviewRouteContext = Readonly<{
   params: Promise<{
@@ -59,6 +64,35 @@ async function resolveUploadFilePath(filePath: string) {
     absolutePath,
     size: fileStat.size,
   };
+}
+
+async function isValidPdfFile(absolutePath: string, size: number) {
+  if (size < 100) {
+    return false;
+  }
+
+  const file = await open(absolutePath, "r");
+
+  try {
+    const header = Buffer.alloc(5);
+    await file.read(header, 0, header.length, 0);
+
+    return header.toString("ascii") === "%PDF-";
+  } finally {
+    await file.close();
+  }
+}
+
+async function regeneratePowerPointPreview(fileAsset: {
+  id: string;
+  projectId: string;
+  originalName: string;
+  fileType: string;
+  filePath: string;
+}) {
+  const result = await generatePowerPointPreviewPdf(fileAsset);
+
+  return result.previewStatus === "READY" ? result.previewPdfPath : null;
 }
 
 function buildContentDisposition(fileName: string) {
@@ -149,6 +183,7 @@ async function buildPreviewResponse(
   request: Request,
   context: FilePreviewRouteContext,
   includeBody: boolean,
+  allowRegenerate = true,
 ) {
   const { fileId } = await context.params;
   const fileAsset = await prisma.fileAsset.findUnique({
@@ -156,6 +191,8 @@ async function buildPreviewResponse(
       id: fileId,
     },
     select: {
+      id: true,
+      projectId: true,
       originalName: true,
       fileType: true,
       filePath: true,
@@ -174,6 +211,9 @@ async function buildPreviewResponse(
     isPowerPointFile(fileAsset) &&
     fileAsset.previewStatus === "READY" &&
     Boolean(fileAsset.previewPdfPath);
+  const expectedPreviewPdfPath = isConvertedPowerPoint
+    ? getPreviewPdfRelativePath(fileAsset.projectId, fileAsset.id)
+    : null;
 
   if (!isOriginalPdf && !isConvertedPowerPoint) {
     const isPowerPoint = isPowerPointFile(fileAsset);
@@ -193,9 +233,31 @@ async function buildPreviewResponse(
     );
   }
 
-  const previewPath = isOriginalPdf
+  let previewPath = isOriginalPdf
     ? fileAsset.filePath
     : fileAsset.previewPdfPath;
+
+  if (
+    isConvertedPowerPoint &&
+    expectedPreviewPdfPath &&
+    previewPath !== expectedPreviewPdfPath
+  ) {
+    previewPath = allowRegenerate
+      ? await regeneratePowerPointPreview(fileAsset)
+      : null;
+
+    if (previewPath === expectedPreviewPdfPath) {
+      return buildPreviewResponse(request, context, includeBody, false);
+    }
+
+    return NextResponse.json(
+      {
+        error:
+          "PPT 展示预览生成失败，但该材料仍可用于 AI 分析。建议重新上传或重新生成预览。",
+      },
+      { status: 409 },
+    );
+  }
 
   if (!previewPath) {
     return NextResponse.json(
@@ -206,6 +268,23 @@ async function buildPreviewResponse(
 
   try {
     const { absolutePath, size } = await resolveUploadFilePath(previewPath);
+    const isValidPdf = await isValidPdfFile(absolutePath, size);
+
+    if (!isValidPdf) {
+      if (isConvertedPowerPoint && allowRegenerate) {
+        previewPath = await regeneratePowerPointPreview(fileAsset);
+
+        if (previewPath) {
+          return buildPreviewResponse(request, context, includeBody, false);
+        }
+      }
+
+      return NextResponse.json(
+        { error: "当前文件的 PDF 预览无效。" },
+        { status: 415 },
+      );
+    }
+
     const range = parseRangeHeader(request.headers.get("range"), size);
     const previewFileName = buildPreviewFileName(fileAsset.originalName);
 

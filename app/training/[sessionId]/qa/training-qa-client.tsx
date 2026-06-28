@@ -50,8 +50,13 @@ type TrainingQaClientProps = Readonly<{
 }>;
 
 type QaPhase = "READY" | "ASKING" | "COUNTDOWN" | "ANSWERING" | "SAVING" | "DONE";
-type QaRecordingStatus = "idle" | "recording" | "saving" | "saved" | "disabled";
 type PreviewMode = "standard" | "compatible";
+type QuestionTextDialog =
+  | {
+      question: TrainingQaQuestion;
+      mode: "reading" | "fallback" | "review";
+    }
+  | null;
 
 const qaLimitSec = 3 * 60;
 const dynamicFollowupAnswerLimitSec = 60;
@@ -72,7 +77,7 @@ const recordingMimeTypeCandidates = [
 ];
 const dynamicFollowupRetryDelayMs = 3_000;
 const speechUnavailableMessage =
-  "题目语音播报暂不可用，请点击“查看问题文字”确认题目。你的回答录音不受影响。";
+  "题目语音播报暂不可用，已切换为文字提问。你的回答录音不受影响。";
 const recoverableSpeechErrorCodes = new Set(["canceled", "interrupted"]);
 
 function formatDuration(totalSec: number) {
@@ -192,30 +197,31 @@ function chooseJudgeVoice(voices: SpeechSynthesisVoice[]) {
     lang: voice.lang.toLowerCase(),
   }));
 
-  const isHuihui = ({ name }: { name: string }) => name.includes("huihui");
+  const isHuihui = ({ name }: { name: string }) =>
+    name.includes("huihui") || name.includes("慧慧");
+  const preferredNameKeywords = [
+    "xiaoyi",
+    "晓伊",
+    "yunyang",
+    "云扬",
+    "xiaoxiao",
+    "晓晓",
+    "yunxi",
+    "云希",
+    "natural",
+    "自然",
+  ];
 
-  const findByName = (keyword: string) => {
-    const normalizedKeyword = keyword.toLowerCase();
-
-    return normalizedVoices.find(({ name }) =>
-      name.includes(normalizedKeyword),
-    )?.voice;
-  };
-
-  const findZhCNByName = (keyword: string) => {
-    const normalizedKeyword = keyword.toLowerCase();
-
-    return normalizedVoices.find(
-      ({ name, lang }) => lang === "zh-cn" && name.includes(normalizedKeyword),
-    )?.voice;
-  };
-
-  const findZhByName = (keyword: string) => {
-    const normalizedKeyword = keyword.toLowerCase();
+  const findByName = (
+    keywords: string[],
+    predicate?: (voice: { lang: string; name: string }) => boolean,
+  ) => {
+    const normalizedKeywords = keywords.map((keyword) => keyword.toLowerCase());
 
     return normalizedVoices.find(
       ({ name, lang }) =>
-        lang.startsWith("zh-") && name.includes(normalizedKeyword),
+        (!predicate || predicate({ lang, name })) &&
+        normalizedKeywords.some((keyword) => name.includes(keyword)),
     )?.voice;
   };
 
@@ -225,20 +231,14 @@ function chooseJudgeVoice(voices: SpeechSynthesisVoice[]) {
   const nonHuihuiZhVoices = zhVoices.filter((voice) => !isHuihui(voice));
 
   return (
-    findZhCNByName("xiaoyi") ??
-    findZhCNByName("yunyang") ??
-    findZhCNByName("natural") ??
+    findByName(preferredNameKeywords, ({ lang }) => lang === "zh-cn") ??
     nonHuihuiZhCNVoices.find(({ voice }) => voice.default)?.voice ??
     nonHuihuiZhCNVoices[0]?.voice ??
-    findZhByName("xiaoyi") ??
-    findZhByName("yunyang") ??
-    findZhByName("natural") ??
+    findByName(preferredNameKeywords, ({ lang }) => lang.startsWith("zh-")) ??
     nonHuihuiZhVoices.find(({ voice }) => voice.default)?.voice ??
     nonHuihuiZhVoices[0]?.voice ??
-    findByName("xiaoyi") ??
-    findByName("yunyang") ??
-    findByName("natural") ??
-    findByName("huihui") ??
+    findByName(preferredNameKeywords) ??
+    findByName(["huihui", "慧慧"]) ??
     voices.find((voice) => voice.default) ??
     voices[0] ??
     null
@@ -315,24 +315,22 @@ export function TrainingQaClient({
   const [dynamicFollowupUsedSec, setDynamicFollowupUsedSec] = useState(0);
   const [message, setMessage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState<string | null>(null);
   const autoGenerateRef = useRef(false);
-  const generateTimeoutRef = useRef<number | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [preAnswerOverlay, setPreAnswerOverlay] = useState<number | null>(null);
   const [dynamicFollowupIntroQuestion, setDynamicFollowupIntroQuestion] =
     useState<TrainingQaQuestion | null>(null);
+  const [questionTextDialog, setQuestionTextDialog] =
+    useState<QuestionTextDialog>(null);
   const [isGuardResolved, setIsGuardResolved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [qaRecordingStatus, setQaRecordingStatus] =
-    useState<QaRecordingStatus>("idle");
-  const [qaRecordingMessage, setQaRecordingMessage] = useState("");
+  const [, setQaRecordingMessage] = useState("");
   const [pageIndex, setPageIndex] = useState(0);
   const [totalPages, setTotalPages] = useState<number | null>(null);
   const [isPdfLoading, setIsPdfLoading] = useState(Boolean(previewFile));
   const [pdfError, setPdfError] = useState("");
-  const [previewMode, setPreviewMode] = useState<PreviewMode>("standard");
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+  const [previewMode, setPreviewMode] = useState<PreviewMode>("standard");
   const currentAnswerStartedAtRef = useRef<Date | null>(
     initialStatus === "QAING" ? new Date() : null,
   );
@@ -359,6 +357,7 @@ export function TrainingQaClient({
   const isCompletingNormallyRef = useRef(false);
   const hasMoveOnRef = useRef(false);
   const speechRunIdRef = useRef(0);
+  const preferredJudgeVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const qaPhaseRef = useRef<QaPhase>(qaPhase);
   const dynamicFollowupRetryCountRef = useRef(0);
   const dynamicFollowupInFlightRef = useRef(false);
@@ -701,6 +700,51 @@ export function TrainingQaClient({
     }
   }, []);
 
+  const markQuestionTextRevealed = useCallback((questionId: string) => {
+    setRevealedQuestionIds((current) => {
+      const next = new Set(current);
+
+      next.add(questionId);
+
+      return next;
+    });
+  }, []);
+
+  const prepareJudgeVoice = useCallback(async () => {
+    if (
+      typeof window === "undefined" ||
+      !("speechSynthesis" in window) ||
+      typeof SpeechSynthesisUtterance === "undefined"
+    ) {
+      preferredJudgeVoiceRef.current = null;
+      return null;
+    }
+
+    const voices = await getVoicesWithRetry(3000);
+    const selectedVoice = chooseJudgeVoice(voices);
+
+    preferredJudgeVoiceRef.current = selectedVoice;
+    if (selectedVoice) {
+      devLog(
+        `[QA TTS] 预选语音：${selectedVoice.name} (${selectedVoice.lang})`,
+      );
+    } else {
+      devLog("[QA TTS] 未找到可预选语音，将尝试浏览器默认语音", {
+        sessionId,
+      });
+    }
+
+    return selectedVoice;
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (status !== "QA_READY" && status !== "QAING") {
+      return;
+    }
+
+    void prepareJudgeVoice();
+  }, [prepareJudgeVoice, status]);
+
   const changeMaterialPage = useCallback(
     (direction: "PREV" | "NEXT") => {
       if (!previewFile) {
@@ -812,7 +856,7 @@ export function TrainingQaClient({
   }, [previewFile, previewUrl]);
 
   useEffect(() => {
-    if (!pdfDocument || !canvasRef.current || previewMode !== "standard") {
+    if (!pdfDocument || !canvasRef.current) {
       return;
     }
 
@@ -872,12 +916,12 @@ export function TrainingQaClient({
       isCancelled = true;
       renderTask?.cancel();
     };
-  }, [currentPageNumber, pdfDocument, previewMode]);
+  }, [currentPageNumber, pdfDocument]);
 
   useEffect(() => {
     const container = previewContainerRef.current;
 
-    if (!container || !previewFile || previewMode !== "standard") {
+    if (!container || !previewFile) {
       return;
     }
 
@@ -888,7 +932,7 @@ export function TrainingQaClient({
     observer.observe(container);
 
     return () => observer.disconnect();
-  }, [previewFile, previewMode]);
+  }, [previewFile]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -919,7 +963,6 @@ export function TrainingQaClient({
       !navigator.mediaDevices?.getUserMedia ||
       typeof MediaRecorder === "undefined"
     ) {
-      setQaRecordingStatus("disabled");
       setQaRecordingMessage("本题未启用录音。");
       return;
     }
@@ -927,7 +970,6 @@ export function TrainingQaClient({
     const mimeType = getSupportedRecordingMimeType();
 
     if (!mimeType) {
-      setQaRecordingStatus("disabled");
       setQaRecordingMessage("当前浏览器不支持答辩录音，本题未启用录音。");
       return;
     }
@@ -947,10 +989,8 @@ export function TrainingQaClient({
         }
       };
       recorder.start();
-      setQaRecordingStatus("recording");
       setQaRecordingMessage("本题录音中。");
     } catch {
-      setQaRecordingStatus("disabled");
       setQaRecordingMessage("本题未启用录音。");
     }
   }, []);
@@ -966,8 +1006,6 @@ export function TrainingQaClient({
       return null;
     }
 
-    setQaRecordingStatus("saving");
-
     const stoppedAt = new Date();
     const startedAt = recordingStartedAtRef.current;
     const mimeType = recordingMimeTypeRef.current || recorder.mimeType;
@@ -982,7 +1020,6 @@ export function TrainingQaClient({
     mediaStreamRef.current = null;
 
     if (recordingChunksRef.current.length === 0 || !mimeType) {
-      setQaRecordingStatus("disabled");
       setQaRecordingMessage("本题未保存录音。");
       return null;
     }
@@ -1020,7 +1057,6 @@ export function TrainingQaClient({
         throw new Error(body?.error ?? "本题录音保存失败。");
       }
 
-      setQaRecordingStatus("saved");
       setQaRecordingMessage("本题录音已保存。");
 
       // 后台触发转写，不阻塞 UI
@@ -1033,7 +1069,6 @@ export function TrainingQaClient({
 
       return body.recording.id;
     } catch (error) {
-      setQaRecordingStatus("disabled");
       setQaRecordingMessage(
         error instanceof Error ? error.message : "本题录音保存失败。",
       );
@@ -1087,6 +1122,45 @@ export function TrainingQaClient({
     }, 1000);
   }, [beginAnswering]);
 
+  const showQuestionTextFallback = useCallback(
+    (question: TrainingQaQuestion, speechRunId: number, reason: string) => {
+      if (speechRunIdRef.current !== speechRunId || hasAutoEndedRef.current) {
+        return;
+      }
+
+      clearSpeechTimer();
+      hasMoveOnRef.current = true;
+      markQuestionTextRevealed(question.id);
+      setQuestionTextDialog({
+        question,
+        mode: "fallback",
+      });
+      setMessage(speechUnavailableMessage);
+      devLog("[QA TTS] 切换为文字提问", {
+        sessionId,
+        questionId: question.id,
+        reason,
+      });
+    },
+    [markQuestionTextRevealed, sessionId],
+  );
+
+  const confirmFallbackQuestionRead = useCallback(() => {
+    if (!questionTextDialog || hasAutoEndedRef.current) {
+      setQuestionTextDialog(null);
+      return;
+    }
+
+    if (questionTextDialog.mode === "review") {
+      setQuestionTextDialog(null);
+      return;
+    }
+
+    setQuestionTextDialog(null);
+    setMessage("");
+    beginPreAnswerCountdown();
+  }, [beginPreAnswerCountdown, questionTextDialog]);
+
 function buildMoveOn(
   hasMovedOnRef: { current: boolean },
   beginPreAnswerCountdown: () => void,
@@ -1115,9 +1189,12 @@ const beginJudgeQuestion = useCallback(
       speechRunIdRef.current = speechRunId;
       window.speechSynthesis?.cancel();
       hasMoveOnRef.current = false;
+      setQuestionTextDialog({
+        question,
+        mode: "reading",
+      });
       setCurrentQuestionIndex(questionIndex);
       setMessage("");
-      setQaRecordingStatus("idle");
       setQaRecordingMessage("");
 
       if (
@@ -1143,14 +1220,17 @@ const beginJudgeQuestion = useCallback(
         !("speechSynthesis" in window) ||
         typeof SpeechSynthesisUtterance === "undefined"
       ) {
-        setMessage(speechUnavailableMessage);
-        beginPreAnswerCountdown();
+        showQuestionTextFallback(question, speechRunId, "unsupported");
         return;
       }
 
-      const moveOn = buildMoveOn(hasMoveOnRef, beginPreAnswerCountdown);
+      const moveOn = buildMoveOn(hasMoveOnRef, () => {
+        setQuestionTextDialog(null);
+        beginPreAnswerCountdown();
+      });
       const isCurrentSpeechRun = () =>
         speechRunIdRef.current === speechRunId && !hasAutoEndedRef.current;
+      const speechStartedRef = { current: false };
 
       const speakQuestion = async (retryCount = 0) => {
         const utterance = new SpeechSynthesisUtterance(question.questionText);
@@ -1158,6 +1238,9 @@ const beginJudgeQuestion = useCallback(
         utterance.lang = "zh-CN";
         utterance.rate = 1.15;
         utterance.pitch = 0.92;
+        utterance.onstart = () => {
+          speechStartedRef.current = true;
+        };
         utterance.onend = () => {
           if (!isCurrentSpeechRun()) {
             return;
@@ -1191,22 +1274,25 @@ const beginJudgeQuestion = useCallback(
           }
 
           if (errorCode === "not-allowed") {
-            setMessage(speechUnavailableMessage);
-            moveOn();
+            showQuestionTextFallback(question, speechRunId, errorCode);
             return;
           }
 
-          setMessage(speechUnavailableMessage);
-          moveOn();
+          showQuestionTextFallback(question, speechRunId, errorCode);
         };
 
-        const voices = await getVoicesWithRetry(3000);
+        let selectedVoice = preferredJudgeVoiceRef.current;
+        if (!selectedVoice) {
+          const voices = await getVoicesWithRetry(3000);
+
+          selectedVoice = chooseJudgeVoice(voices);
+          preferredJudgeVoiceRef.current = selectedVoice;
+        }
 
         if (!isCurrentSpeechRun()) {
           return;
         }
 
-        const selectedVoice = chooseJudgeVoice(voices);
         if (selectedVoice) {
           utterance.voice = selectedVoice;
           utterance.lang = selectedVoice.lang;
@@ -1236,8 +1322,7 @@ const beginJudgeQuestion = useCallback(
             questionId: question.id,
             error: error instanceof Error ? error.message : String(error),
           });
-          setMessage(speechUnavailableMessage);
-          moveOn();
+          showQuestionTextFallback(question, speechRunId, "speak_failed");
         }
       };
 
@@ -1254,13 +1339,23 @@ const beginJudgeQuestion = useCallback(
             scheduleFallback();
             return;
           }
+          if (!speechStartedRef.current) {
+            showQuestionTextFallback(question, speechRunId, "speech_not_started");
+            return;
+          }
           moveOn();
         }, estimateQuestionSpeechMs(question.questionText));
       }
 
       scheduleFallback();
     },
-    [beginPreAnswerCountdown, clearDynamicFollowupIntroTimer, questions, sessionId],
+    [
+      beginPreAnswerCountdown,
+      clearDynamicFollowupIntroTimer,
+      questions,
+      sessionId,
+      showQuestionTextFallback,
+    ],
   );
 
   useEffect(() => {
@@ -1404,66 +1499,6 @@ const beginJudgeQuestion = useCallback(
     };
   }, [clearDynamicFollowupIntroTimer]);
 
-  const generateQuestions = useCallback(async () => {
-    devLog("[qa:client] manual retry generate", { sessionId });
-    setIsGenerating(true);
-    setGenerateError(null);
-    setMessage("");
-
-    try {
-      const response = await fetch(
-        `/training/${sessionId}/qa/questions/generate`,
-        {
-          method: "POST",
-        },
-      );
-      const body = (await response.json().catch(() => null)) as {
-        questions?: TrainingQaQuestion[];
-        error?: string;
-        generating?: boolean;
-        lockAgeMs?: number;
-        message?: string;
-      } | null;
-
-      devLog("[qa:client] manual retry POST response", {
-        sessionId,
-        status: response.status,
-        ok: response.ok,
-        questionsCount: body?.questions?.length ?? 0,
-        generating: body?.generating ?? false,
-        error: body?.error ?? null,
-      });
-
-      if (!response.ok) {
-        // 409: 正在生成中（有锁），提示用户等待
-        if (response.status === 409 && body?.generating) {
-          setMessage(
-            body?.message ?? "评委问题准备中，请稍候……",
-          );
-          // 保持 isGenerating = true，让轮询 effect 继续等待
-          // 注意：不手动设置 isGenerating = false，让 effect 自然处理
-          return;
-        }
-        throw new Error(body?.error ?? "答辩问题生成失败。");
-      }
-
-      setQuestions(body?.questions ?? []);
-      setCurrentQuestionIndex(0);
-      setMessage("答辩问题已生成。开始前不会展示完整题目。");
-      if (generateTimeoutRef.current !== null) {
-        window.clearTimeout(generateTimeoutRef.current);
-        generateTimeoutRef.current = null;
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "答辩问题生成失败。";
-      setGenerateError(errorMessage);
-      setMessage(errorMessage);
-    } finally {
-      setIsGenerating(false);
-    }
-  }, [sessionId]);
-
   // 自动生成 QA 问题：轮询 GET → POST 一次 → 等待 → 超时
   useEffect(() => {
     if (!isGuardResolved) return;
@@ -1497,7 +1532,7 @@ const beginJudgeQuestion = useCallback(
         pollTimer = null;
       }
       if (errorMsg) {
-        setGenerateError(errorMsg);
+        setMessage(errorMsg);
       }
       setIsGenerating(false);
     };
@@ -1730,12 +1765,10 @@ const beginJudgeQuestion = useCallback(
       return;
     }
 
-    setRevealedQuestionIds((current) => {
-      const next = new Set(current);
-
-      next.add(currentQuestion.id);
-
-      return next;
+    markQuestionTextRevealed(currentQuestion.id);
+    setQuestionTextDialog({
+      question: currentQuestion,
+      mode: "review",
     });
   }
 
@@ -1751,13 +1784,6 @@ const beginJudgeQuestion = useCallback(
               : qaPhase === "DONE"
                 ? "答辩已完成"
                 : "答辩准备";
-  const recordingLabel: Record<QaRecordingStatus, string> = {
-    idle: "录音未开始",
-    recording: "本题录音中",
-    saving: "本题录音保存中",
-    saved: "本题录音已保存",
-    disabled: "本题未启用录音",
-  };
   const mainButtonLabel = shouldFinishAfterCurrent
     ? "完成答辩"
     : "回答完毕，进入下一题";
@@ -1852,6 +1878,71 @@ const beginJudgeQuestion = useCallback(
           `}</style>
         </div>
       ) : null}
+      {questionTextDialog ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 px-5 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-950 p-6 shadow-2xl shadow-black/40">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold tracking-[0.18em] text-cyan-200">
+                  QUESTION TEXT
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  评委提问
+                </h2>
+              </div>
+              <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-medium text-cyan-100">
+                {questionTextDialog.mode === "fallback"
+                  ? "已切换为文字"
+                  : questionTextDialog.mode === "review"
+                    ? "题目文字"
+                    : "语音提问中"}
+              </span>
+            </div>
+
+            <p className="mt-5 rounded-lg border border-slate-700 bg-slate-900/70 p-4 text-sm leading-6 text-slate-200">
+              {questionTextDialog.mode === "fallback"
+                ? "当前浏览器未能播放语音，已自动显示本题文字。请阅读题目后再开始回答。"
+                : questionTextDialog.mode === "review"
+                  ? "这是当前评委问题文字。关闭后可以继续答辩。"
+                  : "评委正在语音提问，题目文字同步展示。语音结束后将自动进入“请准备、3、2、1”。"}
+            </p>
+
+            <div className="mt-4 rounded-xl border border-slate-700 bg-slate-900 p-5">
+              <p className="text-xs font-medium uppercase text-slate-400">
+                Q{questionTextDialog.question.orderIndex} /{" "}
+                {questionTextDialog.question.questionType ?? "QUESTION"}
+              </p>
+              {questionTextDialog.question.source === "DYNAMIC_FOLLOWUP" ? (
+                <span className="mt-3 inline-block rounded bg-blue-900/60 px-2 py-0.5 text-xs font-medium text-blue-200">
+                  基于本轮路演追问
+                </span>
+              ) : null}
+              <p className="mt-3 text-lg font-semibold leading-8 text-white">
+                {questionTextDialog.question.questionText}
+              </p>
+              {questionTextDialog.question.basis ? (
+                <p className="mt-3 text-xs leading-5 text-slate-400">
+                  依据：{questionTextDialog.question.basis}
+                </p>
+              ) : null}
+            </div>
+
+            {questionTextDialog.mode !== "reading" ? (
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={confirmFallbackQuestionRead}
+                className="inline-flex h-11 items-center justify-center rounded-md bg-cyan-300 px-5 text-sm font-semibold text-slate-950 transition-colors hover:bg-cyan-200"
+              >
+                {questionTextDialog.mode === "fallback"
+                  ? "我已阅读，开始回答"
+                  : "关闭"}
+              </button>
+            </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {preAnswerOverlay !== null && isCurrentDynamicFollowup ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 bg-[radial-gradient(circle_at_center,rgba(79,70,229,0.10),transparent_42%)] backdrop-blur-sm">
           <div className="relative flex h-64 w-64 items-center justify-center rounded-full border border-cyan-300/15 bg-slate-950/45 shadow-[0_0_24px_rgba(34,211,238,0.14)]">
@@ -1884,7 +1975,12 @@ const beginJudgeQuestion = useCallback(
           </p>
         </div>
       ) : null}
-      <div className="grid h-screen w-full gap-3 overflow-hidden bg-slate-950 text-white lg:grid-cols-[minmax(0,1fr)_300px]">
+      {message && !questionTextDialog ? (
+        <div className="fixed bottom-20 left-1/2 z-40 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-950/90 p-3 text-center text-sm leading-6 text-slate-200 shadow-2xl shadow-black/40">
+          <p>{message}</p>
+        </div>
+      ) : null}
+      <div className="grid h-[calc(100vh-1.5rem)] w-full gap-3 overflow-hidden bg-slate-950 text-white">
       <section className="flex min-h-0 flex-col rounded-lg border border-slate-700 bg-slate-900/95 p-3 shadow-2xl">
         <div className="flex flex-col gap-3 border-b border-slate-700 pb-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -1930,7 +2026,7 @@ const beginJudgeQuestion = useCallback(
                     PDF 单页预览，当前 {pageLabel}
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="hidden">
                   <div className="inline-flex rounded-md border border-slate-700 bg-slate-900 p-1">
                     <button
                       type="button"
@@ -2041,6 +2137,15 @@ const beginJudgeQuestion = useCallback(
                 {isSaving ? "保存中..." : mainButtonLabel}
               </button>
             ) : null}
+            {isQaing && currentQuestion ? (
+              <button
+                type="button"
+                onClick={revealQuestionText}
+                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+              >
+                查看问题文字
+              </button>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <MicrophoneStatusBar />
@@ -2048,7 +2153,7 @@ const beginJudgeQuestion = useCallback(
               type="button"
               onClick={() => changeMaterialPage("PREV")}
               disabled={!canGoPrev}
-              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             >
               上一页
             </button>
@@ -2056,7 +2161,7 @@ const beginJudgeQuestion = useCallback(
               type="button"
               onClick={() => changeMaterialPage("NEXT")}
               disabled={!canGoNext}
-              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             >
               下一页
             </button>
@@ -2064,218 +2169,6 @@ const beginJudgeQuestion = useCallback(
         </div>
       </section>
 
-      <aside className="grid min-h-0 gap-3 overflow-hidden lg:grid-rows-[auto_minmax(0,1fr)]">
-        <section className="rounded-lg border border-slate-700 bg-slate-900/90 p-4 shadow-sm">
-          <h3 className="text-sm font-semibold text-white">答辩信息</h3>
-          <dl className="mt-4 grid gap-3 text-sm">
-            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
-              <dt className="text-slate-300">当前题号</dt>
-              <dd className="font-medium text-white">
-                {questions.length > 0 && currentQuestion
-                  ? `${currentQuestion.orderIndex} / ${questions.length}`
-                  : `0 / ${questions.length}`}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
-              <dt className="text-slate-300">剩余答题时间</dt>
-              <dd
-                className={
-                  remainingSec <= 30
-                    ? "font-semibold text-red-300"
-                    : "font-medium text-white"
-                }
-              >
-                {formatDuration(remainingSec)}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
-              <dt className="text-slate-300">答辩状态</dt>
-              <dd className="font-medium text-white">{status}</dd>
-            </div>
-            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
-              <dt className="text-slate-300">录音状态</dt>
-              <dd className="font-medium text-white">
-                {recordingLabel[qaRecordingStatus]}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between">
-              <dt className="text-slate-300">查看问题文字</dt>
-              <dd className="font-medium text-white">
-                {currentQuestion && revealedQuestionIds.has(currentQuestion.id)
-                  ? "是"
-                  : "否"}
-              </dd>
-            </div>
-          </dl>
-        </section>
-
-        <section className="min-h-0 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900/90 p-4 shadow-sm">
-          <p className="text-sm font-medium text-slate-400">语音评委答辩舱</p>
-          <h3 className="mt-2 text-xl font-semibold text-white">
-            {phaseLabel}
-          </h3>
-
-          {!isQaing ? (
-            <div className="mt-5 grid gap-4">
-              <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4">
-                <h4 className="text-sm font-semibold text-white">答辩规则</h4>
-                <ul className="mt-3 grid gap-2 text-sm leading-6 text-slate-300">
-                  <li>总答题时间 3 分钟，评委提问和 3、2、1 期间不扣时。</li>
-                  <li>系统一次只进入一道题。</li>
-                  <li>问题默认语音播报，可按需查看文字。</li>
-                  <li>回答完毕后点击进入下一题，最后一题点击完成答辩。</li>
-                </ul>
-              </div>
-
-              {isGenerating ? (
-                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-6 text-center">
-                  {dynamicFollowupExperiment ? (
-                    <>
-                      <p className="text-base font-semibold text-white">
-                        评委正在生成本轮路演追问
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-slate-400">
-                        系统正在根据你的路演内容生成第一道追问。如果转写或生成超时，将自动使用常规答辩问题。
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-base font-semibold text-white">
-                        评委问题准备中，请稍候……
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-slate-400">
-                        正在阅读项目材料与评分标准，生成答辩问题
-                      </p>
-                    </>
-                  )}
-                </div>
-              ) : questions.length > 0 ? (
-                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-6 text-center">
-                  <p className="text-base font-semibold text-white">
-                    AI评委已准备好提问
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">
-                    已生成 {questions.length} 道问题。开始前不展示完整题目正文。
-                  </p>
-                </div>
-              ) : generateError ? (
-                <div className="rounded-md border border-red-700/50 bg-red-950/30 p-6 text-center">
-                  <p className="text-base font-semibold text-red-200">
-                    问题生成失败
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-red-300">
-                    {generateError}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => void generateQuestions()}
-                    disabled={isGenerating}
-                    className="mt-4 inline-flex h-8 items-center justify-center rounded border border-red-700/50 bg-transparent px-3 text-xs font-medium text-red-300 transition-colors hover:bg-red-950/50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    重试生成问题
-                  </button>
-                </div>
-              ) : null}
-
-              {isGenerating ? (
-                <p className="text-center text-sm text-slate-500">
-                  评委问题准备中，请稍候...
-                </p>
-              ) : null}
-            </div>
-          ) : currentQuestion ? (
-            <div className="mt-5 grid gap-4">
-              {qaPhase === "ASKING" ? (
-                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4 text-center">
-                  <p className="text-base font-semibold text-white">
-                    评委正在提问，请认真听题
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">
-                    第 {currentQuestion.orderIndex} 题语音播报中。提问结束后将进入
-                    3、2、1，期间不扣答题时间。
-                  </p>
-                </div>
-              ) : null}
-
-              {qaPhase === "ANSWERING" ? (
-                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4">
-                  <p className="text-base font-semibold text-white">
-                    {isCurrentDynamicFollowup
-                      ? "请回答动态追问"
-                      : "请开始口头回答"}
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">
-                    {isCurrentDynamicFollowup
-                      ? "本题限时 1 分钟"
-                      : "仅回答期间扣减答题时间。答完后点击下方按钮保存本题用时和录音。"}
-                  </p>
-                  {remainingSec < 30 && hasNextBaseQuestion ? (
-                    <p className="mt-3 rounded-md border border-amber-400/40 bg-amber-500/10 p-3 text-sm leading-6 text-amber-100">
-                      剩余答题时间较少，建议保存本题并完成答辩。
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {qaPhase === "SAVING" ? (
-                <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4 text-sm leading-6 text-slate-300">
-                  正在保存当前题用时和录音...
-                </div>
-              ) : null}
-
-              <div className="rounded-md border border-slate-700 bg-slate-950/60 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs font-medium uppercase text-slate-400">
-                    Q{currentQuestion.orderIndex} /{" "}
-                    {currentQuestion.questionType ?? "QUESTION"}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={revealQuestionText}
-                    className="inline-flex h-8 items-center justify-center rounded-md border border-slate-600 bg-slate-900 px-3 text-xs font-medium text-white transition-colors hover:bg-slate-800"
-                  >
-                    查看问题文字
-                  </button>
-                </div>
-
-                {revealedQuestionIds.has(currentQuestion.id) ? (
-                  <div className="mt-3 rounded-md border border-slate-700 bg-slate-900 p-3">
-                    {currentQuestion.source === "DYNAMIC_FOLLOWUP" ? (
-                      <span className="mb-1 inline-block rounded bg-blue-900/60 px-2 py-0.5 text-xs font-medium text-blue-200">
-                        基于本轮路演追问
-                      </span>
-                    ) : null}
-                    <p className="text-sm font-semibold leading-6 text-white">
-                      {currentQuestion.questionText}
-                    </p>
-                    {currentQuestion.basis ? (
-                      <p className="mt-2 text-xs leading-5 text-slate-400">
-                        依据：{currentQuestion.basis}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm leading-6 text-slate-300">
-                    问题文字默认隐藏。若没听清，可点击“查看问题文字”。
-                  </p>
-                )}
-              </div>
-
-            </div>) : null}
-
-          {message ? (
-            <p className="mt-4 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm leading-6 text-slate-300">
-              {message}
-            </p>
-          ) : null}
-          {qaRecordingMessage ? (
-            <p className="mt-3 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm leading-6 text-slate-300">
-              {qaRecordingMessage}
-            </p>
-          ) : null}
-
-        </section>
-      </aside>
     </div>
     </>
   );
