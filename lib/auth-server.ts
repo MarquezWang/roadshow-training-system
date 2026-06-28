@@ -46,6 +46,16 @@ export async function requireCurrentAuthUser() {
   return user;
 }
 
+export async function requireAdminUser() {
+  const user = await requireCurrentAuthUser();
+
+  if (!user || user.role !== "ADMIN") {
+    notFound();
+  }
+
+  return user;
+}
+
 export async function getCurrentAuthUserId() {
   const user = await requireCurrentAuthUser();
   return user?.id ?? null;
