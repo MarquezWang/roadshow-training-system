@@ -1,20 +1,21 @@
 import { createReadStream, existsSync } from "fs";
 import OpenAI from "openai";
 import path from "path";
+import { transcribeWithTencent } from "@/lib/transcription/tencent";
 import { transcribeWithXfyun } from "@/lib/transcription/xfyun";
 
 const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
 
-type TranscriptionProvider = "openai" | "xfyun";
+type TranscriptionProvider = "openai" | "xfyun" | "tencent";
 
 function getProvider(): TranscriptionProvider {
   const provider = (process.env.TRANSCRIPTION_PROVIDER ?? "openai")
     .trim()
     .toLowerCase();
 
-  if (provider !== "openai" && provider !== "xfyun") {
+  if (provider !== "openai" && provider !== "xfyun" && provider !== "tencent") {
     throw new Error(
-      `不支持的转写服务商：${provider}，可选值为 openai 或 xfyun`,
+      `不支持的转写服务商：${provider}，可选值为 openai、xfyun 或 tencent`,
     );
   }
 
@@ -90,6 +91,8 @@ export async function transcribeAudio(
   const provider = getProvider();
 
   switch (provider) {
+    case "tencent":
+      return transcribeWithTencent(filePath);
     case "xfyun":
       return transcribeWithXfyun(filePath, mimeType);
     case "openai":
