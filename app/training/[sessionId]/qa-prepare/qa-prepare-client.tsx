@@ -26,8 +26,8 @@ type QaPrepareClientProps = Readonly<{
   recordingId: string | null;
 }>;
 
-const pollIntervalMs = 3_000;
-const prepareDurationMs = 13_000;
+const pollIntervalMs = 1_500;
+const prepareDurationMs = 7_000;
 
 function isTranscriptNotReadyReason(reason: string | undefined) {
   return reason === "pitch_transcript_not_ready";

@@ -76,6 +76,7 @@ const recordingMimeTypeCandidates = [
   "audio/wav",
 ];
 const dynamicFollowupRetryDelayMs = 3_000;
+const dynamicFollowupMaxRetryCount = 10;
 const speechUnavailableMessage =
   "题目语音播报暂不可用，已切换为文字提问。你的回答录音不受影响。";
 const recoverableSpeechErrorCodes = new Set(["canceled", "interrupted"]);
@@ -460,6 +461,18 @@ export function TrainingQaClient({
   const scheduleDynamicFollowupRetry = useCallback(
     (reason: string) => {
       if (!canAttemptDynamicFollowupPhase(qaPhaseRef.current)) {
+        return;
+      }
+
+      if (dynamicFollowupRetryCountRef.current >= dynamicFollowupMaxRetryCount) {
+        dynamicFollowupCompletedRef.current = true;
+        clearDynamicFollowupRetryTimer();
+        devLog("[dynamic-followup:client] retry stopped", {
+          sessionId,
+          reason,
+          retryCount: dynamicFollowupRetryCountRef.current,
+          maxRetryCount: dynamicFollowupMaxRetryCount,
+        });
         return;
       }
 
