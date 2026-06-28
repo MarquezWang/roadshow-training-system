@@ -64,6 +64,33 @@ function getStatusBadgeClass(status: string) {
   return statusBadgeClass[status] ?? "border-slate-200 bg-slate-50 text-slate-700";
 }
 
+function parseJsonArray(value: string) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatScoreDelta(delta: number | null) {
+  if (delta === null) {
+    return "暂无对比";
+  }
+
+  if (delta > 0) {
+    return `较上次 +${delta}`;
+  }
+
+  if (delta < 0) {
+    return `较上次 ${delta}`;
+  }
+
+  return "较上次持平";
+}
+
 export default async function ProjectDetailPage({
   params,
 }: ProjectDetailPageProps) {
@@ -93,6 +120,27 @@ export default async function ProjectDetailPage({
           pitchDurationSec: true,
           currentPageIndex: true,
           createdAt: true,
+          analyses: {
+            where: {
+              status: "SUCCESS",
+              analysisType: "PITCH",
+              overallScore: {
+                not: null,
+              },
+            },
+            orderBy: {
+              createdAt: "desc",
+            },
+            take: 1,
+            select: {
+              overallScore: true,
+              summary: true,
+              strengthsJson: true,
+              weaknessesJson: true,
+              suggestionsJson: true,
+              createdAt: true,
+            },
+          },
         },
       },
     },
@@ -101,6 +149,48 @@ export default async function ProjectDetailPage({
   if (!project) {
     notFound();
   }
+
+  const recentAnalyses = project.trainingSessions
+    .flatMap((session) =>
+      session.analyses.map((analysis) => ({
+        sessionId: session.id,
+        sessionCreatedAt: session.createdAt,
+        score: analysis.overallScore ?? 0,
+        summary: analysis.summary,
+        strengths: parseJsonArray(analysis.strengthsJson),
+        weaknesses: parseJsonArray(analysis.weaknessesJson),
+        suggestions: parseJsonArray(analysis.suggestionsJson),
+      })),
+    )
+    .sort(
+      (first, second) =>
+        first.sessionCreatedAt.getTime() - second.sessionCreatedAt.getTime(),
+    );
+  const latestAnalysis = recentAnalyses.at(-1) ?? null;
+  const previousAnalysis =
+    recentAnalyses.length >= 2 ? recentAnalyses.at(-2) ?? null : null;
+  const scoreDelta =
+    latestAnalysis && previousAnalysis
+      ? latestAnalysis.score - previousAnalysis.score
+      : null;
+  const completedTrainingCount = project.trainingSessions.filter((session) =>
+    ["QA_ENDED", "REPORT_READY", "FINISHED"].includes(session.status),
+  ).length;
+  const abortedTrainingCount = project.trainingSessions.filter(
+    (session) => session.status === "ABORTED",
+  ).length;
+  const sessionsWithDuration = project.trainingSessions.filter(
+    (session) => session.pitchDurationSec !== null,
+  );
+  const averagePitchDurationSec =
+    sessionsWithDuration.length > 0
+      ? Math.round(
+          sessionsWithDuration.reduce(
+            (total, session) => total + (session.pitchDurationSec ?? 0),
+            0,
+          ) / sessionsWithDuration.length,
+        )
+      : null;
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
@@ -144,6 +234,182 @@ export default async function ProjectDetailPage({
             </button>
           </form>
         </div>
+      </section>
+
+      <section className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-1 border-b border-slate-100 pb-4">
+          <h2 className="text-base font-semibold text-slate-950">
+            训练进步趋势
+          </h2>
+          <p className="text-sm text-slate-600">
+            基于最近 5 次已完成的路演分析，快速判断训练是否在进步。
+          </p>
+        </div>
+
+        {latestAnalysis ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5">
+              <p className="text-sm font-medium text-slate-500">最近一次评分</p>
+              <div className="mt-3 flex items-end gap-3">
+                <span className="text-4xl font-semibold text-slate-950">
+                  {latestAnalysis.score}
+                </span>
+                <span className="pb-1 text-sm text-slate-500">/ 100</span>
+              </div>
+              <p
+                className={`mt-3 text-sm font-medium ${
+                  scoreDelta !== null && scoreDelta > 0
+                    ? "text-emerald-700"
+                    : scoreDelta !== null && scoreDelta < 0
+                      ? "text-rose-700"
+                      : "text-slate-600"
+                }`}
+              >
+                {formatScoreDelta(scoreDelta)}
+              </p>
+              <p className="mt-4 text-sm leading-6 text-slate-600">
+                {latestAnalysis.summary}
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium text-slate-700">
+                  最近得分走势
+                </p>
+              </div>
+              <div className="mt-5 flex h-32 items-end gap-3">
+                {recentAnalyses.map((analysis, index) => (
+                  <div
+                    key={analysis.sessionId}
+                    className="flex flex-1 flex-col items-center gap-2"
+                  >
+                    <div className="flex h-24 w-full items-end rounded-md bg-slate-100">
+                      <div
+                        className="w-full rounded-md bg-teal-500"
+                        style={{
+                          height: `${Math.max(8, analysis.score)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="text-center text-xs text-slate-500">
+                      <div>{analysis.score}</div>
+                      <div>第 {index + 1} 次</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:col-span-2 lg:grid-cols-3">
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
+                <h3 className="text-sm font-semibold text-emerald-900">
+                  保持优势
+                </h3>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-emerald-900/80">
+                  {(latestAnalysis.strengths.length > 0
+                    ? latestAnalysis.strengths
+                    : ["暂无明确优势记录"]
+                  )
+                    .slice(0, 3)
+                    .map((item) => (
+                      <li key={item}>· {item}</li>
+                    ))}
+                </ul>
+              </div>
+              <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-4">
+                <h3 className="text-sm font-semibold text-amber-900">
+                  当前短板
+                </h3>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-amber-900/80">
+                  {(latestAnalysis.weaknesses.length > 0
+                    ? latestAnalysis.weaknesses
+                    : ["暂无明确短板记录"]
+                  )
+                    .slice(0, 3)
+                    .map((item) => (
+                      <li key={item}>· {item}</li>
+                    ))}
+                </ul>
+              </div>
+              <div className="rounded-xl border border-sky-100 bg-sky-50/70 p-4">
+                <h3 className="text-sm font-semibold text-sky-900">
+                  下一轮建议
+                </h3>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-sky-900/80">
+                  {(latestAnalysis.suggestions.length > 0
+                    ? latestAnalysis.suggestions
+                    : ["完成一次训练报告后，系统会给出下一轮建议"]
+                  )
+                    .slice(0, 3)
+                    .map((item) => (
+                      <li key={item}>· {item}</li>
+                    ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6">
+            {project.trainingSessions.length > 0 ? (
+              <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-950">
+                    已有训练记录，尚未生成评分趋势
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    当前项目已有训练记录，但还没有可用于统计的评分分析。训练报告生成后，这里会自动汇总最近评分趋势、优势、短板和下一轮建议。
+                  </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-slate-200 bg-white p-4">
+                    <p className="text-xs font-medium text-slate-500">
+                      最近训练数
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-slate-950">
+                      {project.trainingSessions.length}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-4">
+                    <p className="text-xs font-medium text-slate-500">
+                      已完成答辩
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-teal-700">
+                      {completedTrainingCount}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-4">
+                    <p className="text-xs font-medium text-slate-500">
+                      平均路演用时
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-slate-950">
+                      {averagePitchDurationSec !== null
+                        ? formatDurationSec(averagePitchDurationSec)
+                        : "-"}
+                    </p>
+                  </div>
+                  {abortedTrainingCount > 0 ? (
+                    <div className="rounded-lg border border-rose-100 bg-rose-50 p-4 sm:col-span-3">
+                      <p className="text-sm text-rose-700">
+                        最近记录中有 {abortedTrainingCount} 次训练中止，不会计入评分趋势。
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="text-center">
+                <h3 className="text-sm font-semibold text-slate-950">
+                  暂无可分析的训练趋势
+                </h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  完成一次路演训练并生成分析后，这里会展示最近评分、变化趋势和下一轮训练建议。
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
