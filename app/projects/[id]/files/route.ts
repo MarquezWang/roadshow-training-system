@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCurrentAuthUserId, withOwnerFilter } from "@/lib/auth-server";
 import { saveProjectUpload } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
 import {
@@ -28,10 +29,9 @@ function redirectToProject(
 
 export async function POST(request: NextRequest, context: UploadRouteContext) {
   const { id } = await context.params;
-  const project = await prisma.project.findUnique({
-    where: {
-      id,
-    },
+  const userId = await getCurrentAuthUserId();
+  const project = await prisma.project.findFirst({
+    where: withOwnerFilter({ id }, userId),
     select: {
       id: true,
     },

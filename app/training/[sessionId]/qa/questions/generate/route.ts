@@ -10,6 +10,7 @@ import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
 import { validateGeneratedTrainingQuestions } from "@/lib/training-qa-validator";
 import { devLog, devWarn, devError } from "@/lib/dev-log";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 
 type GenerateTrainingQuestionsContext = Readonly<{
   params: Promise<{
@@ -194,6 +195,9 @@ export async function GET(
   context: GenerateTrainingQuestionsContext,
 ) {
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
 
   try {
     const session = await prisma.trainingSession.findUnique({
@@ -246,6 +250,9 @@ export async function POST(
   context: GenerateTrainingQuestionsContext,
 ) {
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
 
   try {
     const session = await prisma.trainingSession.findUnique({

@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
+import { getCurrentAuthUserId, withSessionOwnerFilter } from "@/lib/auth-server";
 import {
   getDisplayMaterialNotice,
   selectDisplayablePdf,
@@ -34,10 +35,9 @@ export default async function TrainingSessionPage({
   params,
 }: TrainingSessionPageProps) {
   const { sessionId } = await params;
-  const session = await prisma.trainingSession.findUnique({
-    where: {
-      id: sessionId,
-    },
+  const userId = await getCurrentAuthUserId();
+  const session = await prisma.trainingSession.findFirst({
+    where: withSessionOwnerFilter({ id: sessionId }, userId),
     include: {
       project: {
         select: {

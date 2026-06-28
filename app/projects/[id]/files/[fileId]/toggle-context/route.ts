@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCurrentAuthUserId } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 
 type ToggleContextRouteContext = Readonly<{
@@ -27,11 +28,20 @@ export async function POST(
   context: ToggleContextRouteContext,
 ) {
   const { id, fileId } = await context.params;
+  const userId = await getCurrentAuthUserId();
   const fileAsset = await prisma.fileAsset.findFirst({
-    where: {
-      id: fileId,
-      projectId: id,
-    },
+    where: userId
+      ? {
+          id: fileId,
+          projectId: id,
+          project: {
+            ownerId: userId,
+          },
+        }
+      : {
+          id: fileId,
+          projectId: id,
+        },
     select: {
       id: true,
       parseStatus: true,

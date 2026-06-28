@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { getCurrentAuthUserId, withSessionOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { getTranscriptionProvider } from "@/lib/transcription";
 import { QaPrepareClient } from "./qa-prepare-client";
@@ -22,10 +23,9 @@ export default async function QaPreparePage({
     ? query.recordingId[0]
     : query.recordingId;
 
-  const session = await prisma.trainingSession.findUnique({
-    where: {
-      id: sessionId,
-    },
+  const userId = await getCurrentAuthUserId();
+  const session = await prisma.trainingSession.findFirst({
+    where: withSessionOwnerFilter({ id: sessionId }, userId),
     select: {
       id: true,
       status: true,
@@ -70,6 +70,7 @@ export default async function QaPreparePage({
         where: {
           id: requestedRecordingId,
           sessionId: session.id,
+          ...(userId ? { project: { ownerId: userId } } : {}),
           phase: "PITCH",
           status: "RECORDED",
         },
@@ -86,6 +87,7 @@ export default async function QaPreparePage({
     recording = await prisma.trainingRecording.findFirst({
       where: {
         sessionId: session.id,
+        ...(userId ? { project: { ownerId: userId } } : {}),
         phase: "PITCH",
         status: "RECORDED",
       },

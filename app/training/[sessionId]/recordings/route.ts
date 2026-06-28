@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 
 type RecordingRouteContext = Readonly<{
   params: Promise<{
@@ -113,6 +114,9 @@ export async function POST(
 ) {
   const requestReceivedAt = new Date();
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
   const session = await prisma.trainingSession.findUnique({
     where: {
       id: sessionId,

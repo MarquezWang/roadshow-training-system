@@ -5,6 +5,7 @@ import { buildProjectAIContext } from "@/lib/project-context";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { devLog, devWarn } from "@/lib/dev-log";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 
 type DynamicFollowupContext = Readonly<{
   params: Promise<{
@@ -132,6 +133,9 @@ export async function POST(
   context: DynamicFollowupContext,
 ) {
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
   const debugInfo: DebugInfo = {};
   let debug = false;
   let hasGenerationLock = false;

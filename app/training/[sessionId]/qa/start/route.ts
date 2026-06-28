@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 
 type StartQaContext = Readonly<{
   params: Promise<{
@@ -11,6 +12,9 @@ const allowedStatuses = new Set(["PITCH_ENDED", "QA_READY", "QAING"]);
 
 export async function POST(_request: Request, context: StartQaContext) {
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
   const session = await prisma.trainingSession.findUnique({
     where: {
       id: sessionId,

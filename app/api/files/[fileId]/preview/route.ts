@@ -3,6 +3,7 @@ import { open, stat } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { NextResponse } from "next/server";
+import { getCurrentAuthUserId } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import {
   generatePowerPointPreviewPdf,
@@ -186,10 +187,18 @@ async function buildPreviewResponse(
   allowRegenerate = true,
 ) {
   const { fileId } = await context.params;
-  const fileAsset = await prisma.fileAsset.findUnique({
-    where: {
-      id: fileId,
-    },
+  const userId = await getCurrentAuthUserId();
+  const fileAsset = await prisma.fileAsset.findFirst({
+    where: userId
+      ? {
+          id: fileId,
+          project: {
+            ownerId: userId,
+          },
+        }
+      : {
+          id: fileId,
+        },
     select: {
       id: true,
       projectId: true,

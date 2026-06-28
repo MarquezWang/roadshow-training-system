@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 
 type EndQaContext = Readonly<{
   params: Promise<{
@@ -51,6 +52,9 @@ function getDurationSec(startedAt: Date | null, endedAt: Date) {
 
 export async function POST(request: NextRequest, context: EndQaContext) {
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
   const body = (await request.json().catch(() => ({}))) as {
     questionId?: unknown;
     answerText?: unknown;

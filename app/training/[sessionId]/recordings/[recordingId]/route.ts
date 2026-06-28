@@ -1,6 +1,7 @@
 import { readFile, stat } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 
 type RecordingPlaybackRouteContext = Readonly<{
@@ -94,6 +95,10 @@ export async function GET(
   context: RecordingPlaybackRouteContext,
 ) {
   const { sessionId, recordingId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
   const recording = await prisma.trainingRecording.findFirst({
     where: {
       id: recordingId,

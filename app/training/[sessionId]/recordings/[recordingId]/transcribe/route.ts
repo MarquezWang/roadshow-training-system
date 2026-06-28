@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
   runTranscriptionWithLock,
   TranscribeHttpError,
@@ -16,6 +17,9 @@ export async function POST(
   context: TranscribeRouteContext,
 ) {
   const { sessionId, recordingId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
 
   try {
     const result = await runTranscriptionWithLock(sessionId, recordingId);

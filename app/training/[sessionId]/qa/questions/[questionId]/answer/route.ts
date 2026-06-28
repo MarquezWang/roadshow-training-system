@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 
 type SaveTrainingAnswerContext = Readonly<{
@@ -96,6 +97,10 @@ export async function POST(
   context: SaveTrainingAnswerContext,
 ) {
   const { sessionId, questionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
   const body = (await request.json().catch(() => ({}))) as {
     answerText?: unknown;
     finish?: unknown;

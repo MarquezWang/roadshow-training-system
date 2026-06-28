@@ -1,11 +1,14 @@
 import { PageHeader } from "@/components/page-header";
 import { ProjectCard } from "@/components/project-card";
+import { getCurrentAuthUserId, withOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProjectsPage() {
+  const userId = await getCurrentAuthUserId();
   const projects = await prisma.project.findMany({
+    where: withOwnerFilter({}, userId),
     orderBy: {
       createdAt: "desc",
     },

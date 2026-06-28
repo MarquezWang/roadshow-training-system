@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCurrentAuthUserId, withOwnerFilter } from "@/lib/auth-server";
 import { callAI } from "@/lib/ai";
 import {
   buildProjectAIContext,
@@ -54,10 +55,9 @@ export async function POST(
   const { id } = await context.params;
 
   try {
-    const project = await prisma.project.findUnique({
-      where: {
-        id,
-      },
+    const userId = await getCurrentAuthUserId();
+    const project = await prisma.project.findFirst({
+      where: withOwnerFilter({ id }, userId),
       select: {
         id: true,
       },
@@ -68,14 +68,26 @@ export async function POST(
     }
 
     const analysableFileCount = await prisma.fileAsset.count({
-      where: {
-        projectId: id,
-        parseStatus: "SUCCESS",
-        includeInAIContext: true,
-        extractedText: {
-          not: null,
-        },
-      },
+      where: userId
+        ? {
+            projectId: id,
+            project: {
+              ownerId: userId,
+            },
+            parseStatus: "SUCCESS",
+            includeInAIContext: true,
+            extractedText: {
+              not: null,
+            },
+          }
+        : {
+            projectId: id,
+            parseStatus: "SUCCESS",
+            includeInAIContext: true,
+            extractedText: {
+              not: null,
+            },
+          },
     });
 
     if (analysableFileCount === 0) {

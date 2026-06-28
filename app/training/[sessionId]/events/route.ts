@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 
 type TrainingEventRouteContext = Readonly<{
   params: Promise<{
@@ -30,6 +31,9 @@ export async function POST(
   context: TrainingEventRouteContext,
 ) {
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
 
   try {
     const body = (await request.json()) as {

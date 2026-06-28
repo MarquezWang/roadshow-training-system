@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { getCurrentAuthUserId, withSessionOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { getTrainingFlowPath } from "@/lib/training-status";
 
@@ -12,10 +13,9 @@ export default async function TrainingSessionPage({
   params,
 }: TrainingSessionPageProps) {
   const { sessionId } = await params;
-  const session = await prisma.trainingSession.findUnique({
-    where: {
-      id: sessionId,
-    },
+  const userId = await getCurrentAuthUserId();
+  const session = await prisma.trainingSession.findFirst({
+    where: withSessionOwnerFilter({ id: sessionId }, userId),
     select: {
       id: true,
       status: true,

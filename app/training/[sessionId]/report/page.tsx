@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { getCurrentAuthUserId, withSessionOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { TrainingReportClient } from "./training-report-client";
 
@@ -13,10 +14,9 @@ export default async function TrainingReportPage({
   params,
 }: TrainingReportPageProps) {
   const { sessionId } = await params;
-  const session = await prisma.trainingSession.findUnique({
-    where: {
-      id: sessionId,
-    },
+  const userId = await getCurrentAuthUserId();
+  const session = await prisma.trainingSession.findFirst({
+    where: withSessionOwnerFilter({ id: sessionId }, userId),
     include: {
       project: {
         select: {

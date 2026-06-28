@@ -10,6 +10,7 @@ import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { devLog, devError } from "@/lib/dev-log";
 import { prisma } from "@/lib/prisma";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
   validateTrainingAnalysisResult,
   type TrainingAnalysisResult,
@@ -547,6 +548,9 @@ export async function GET(
   context: TrainingAnalysisRouteContext,
 ) {
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
   const analysis = await findLatestAnalysis(sessionId);
 
   // 获取 QA transcript 状态计数，供前端轮询使用
@@ -582,6 +586,10 @@ export async function POST(
   context: TrainingAnalysisRouteContext,
 ) {
   const { sessionId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
   let processingAnalysisId: string | null = null;
   let hasGenerationLock = false;
 

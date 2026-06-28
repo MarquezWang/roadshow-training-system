@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { NewProjectWizard } from "@/components/new-project-wizard";
 import { PageHeader } from "@/components/page-header";
+import { getCurrentAuthUserId } from "@/lib/auth-server";
 import { parseFileToText } from "@/lib/file-parser";
 import {
   saveProjectUpload,
@@ -20,6 +21,12 @@ const getValue = (formData: FormData, key: string) =>
   String(formData.get(key) ?? "").trim();
 
 async function findProjectOwnerId() {
+  const currentUserId = await getCurrentAuthUserId();
+
+  if (currentUserId) {
+    return currentUserId;
+  }
+
   const seedTeamUser = await prisma.user.findUnique({
     where: {
       email: "team@example.com",

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 
 type TranscriptRouteContext = Readonly<{
@@ -47,6 +48,10 @@ export async function GET(
   context: TranscriptRouteContext,
 ) {
   const { sessionId, recordingId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
   const recording = await findRecording(sessionId, recordingId);
 
   if (!recording) {
@@ -82,6 +87,10 @@ export async function POST(
   context: TranscriptRouteContext,
 ) {
   const { sessionId, recordingId } = await context.params;
+  if (!(await isSessionOwnedByCurrentUser(sessionId))) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
   const recording = await findRecording(sessionId, recordingId);
 
   if (!recording) {

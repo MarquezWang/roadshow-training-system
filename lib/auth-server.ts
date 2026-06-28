@@ -1,0 +1,183 @@
+import { cookies } from "next/headers";
+import { notFound, redirect } from "next/navigation";
+import {
+  authCookieName,
+  isAuthEnabled,
+  parseAuthCookieValue,
+} from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+
+export async function getCurrentAuthUser() {
+  if (!isAuthEnabled()) {
+    return null;
+  }
+
+  const cookieStore = await cookies();
+  const session = await parseAuthCookieValue(
+    cookieStore.get(authCookieName)?.value,
+  );
+
+  if (!session) {
+    return null;
+  }
+
+  return prisma.user.findUnique({
+    where: { id: session.userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+    },
+  });
+}
+
+export async function requireCurrentAuthUser() {
+  const user = await getCurrentAuthUser();
+
+  if (!isAuthEnabled()) {
+    return null;
+  }
+
+  if (!user) {
+    redirect("/login");
+  }
+
+  return user;
+}
+
+export async function getCurrentAuthUserId() {
+  const user = await requireCurrentAuthUser();
+  return user?.id ?? null;
+}
+
+export function withOwnerFilter<T extends object>(
+  where: T,
+  userId: string | null,
+) {
+  if (!userId) {
+    return where;
+  }
+
+  return {
+    ...where,
+    ownerId: userId,
+  };
+}
+
+export function withSessionOwnerFilter<T extends object>(
+  where: T,
+  userId: string | null,
+) {
+  if (!userId) {
+    return where;
+  }
+
+  return {
+    ...where,
+    project: {
+      ownerId: userId,
+    },
+  };
+}
+
+export async function requireProjectOwner(projectId: string) {
+  const userId = await getCurrentAuthUserId();
+
+  const project = await prisma.project.findFirst({
+    where: withOwnerFilter({ id: projectId }, userId),
+    select: { id: true, ownerId: true },
+  });
+
+  if (!project) {
+    notFound();
+  }
+
+  return project;
+}
+
+export async function requireSessionOwner(sessionId: string) {
+  const userId = await getCurrentAuthUserId();
+
+  const session = await prisma.trainingSession.findFirst({
+    where: userId
+      ? {
+          id: sessionId,
+          project: {
+            ownerId: userId,
+          },
+        }
+      : { id: sessionId },
+    select: {
+      id: true,
+      projectId: true,
+    },
+  });
+
+  if (!session) {
+    notFound();
+  }
+
+  return session;
+}
+
+export async function requireFileOwner(fileId: string) {
+  const userId = await getCurrentAuthUserId();
+
+  const file = await prisma.fileAsset.findFirst({
+    where: userId
+      ? {
+          id: fileId,
+          project: {
+            ownerId: userId,
+          },
+        }
+      : { id: fileId },
+    select: {
+      id: true,
+      projectId: true,
+    },
+  });
+
+  if (!file) {
+    notFound();
+  }
+
+  return file;
+}
+
+export async function isProjectOwnedByCurrentUser(projectId: string) {
+  const userId = await getCurrentAuthUserId();
+
+  if (!userId) {
+    return true;
+  }
+
+  const count = await prisma.project.count({
+    where: {
+      id: projectId,
+      ownerId: userId,
+    },
+  });
+
+  return count > 0;
+}
+
+export async function isSessionOwnedByCurrentUser(sessionId: string) {
+  const userId = await getCurrentAuthUserId();
+
+  if (!userId) {
+    return true;
+  }
+
+  const count = await prisma.trainingSession.count({
+    where: {
+      id: sessionId,
+      project: {
+        ownerId: userId,
+      },
+    },
+  });
+
+  return count > 0;
+}

@@ -11,7 +11,7 @@ function isTrainingFlowPath(pathname: string) {
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
 
-  if (pathname === "/" || isTrainingFlowPath(pathname)) {
+  if (pathname === "/" || pathname === "/login" || isTrainingFlowPath(pathname)) {
     return children;
   }
 
