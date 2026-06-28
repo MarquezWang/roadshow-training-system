@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
+import {
+  getCurrentAccessUserId,
+  getCurrentAuthUser,
+  withOwnerFilter,
+} from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { trainingStatusLabel } from "@/lib/training-status";
 
@@ -64,10 +68,20 @@ export default async function ProjectDetailPage({
   params,
 }: ProjectDetailPageProps) {
   const { id } = await params;
+  const currentUser = await getCurrentAuthUser();
+  const isAdmin = currentUser?.role === "ADMIN";
   const userId = await getCurrentAccessUserId();
   const project = await prisma.project.findFirst({
     where: withOwnerFilter({ id }, userId),
     include: {
+      owner: isAdmin
+        ? {
+            select: {
+              name: true,
+              email: true,
+            },
+          }
+        : false,
       trainingSessions: {
         orderBy: {
           createdAt: "desc",
@@ -98,6 +112,11 @@ export default async function ProjectDetailPage({
           <p className="mt-2 text-sm leading-6 text-slate-600">
             查看项目基础信息和最近几次路演训练记录。
           </p>
+          {isAdmin && project.owner ? (
+            <p className="mt-3 inline-flex rounded-md border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600">
+              ?????{project.owner.name || project.owner.email}
+            </p>
+          ) : null}
         </div>
 
         <div className="mt-5 flex flex-wrap gap-3">

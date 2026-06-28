@@ -1,11 +1,17 @@
 import { PageHeader } from "@/components/page-header";
 import { ProjectCard } from "@/components/project-card";
-import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
+import {
+  getCurrentAccessUserId,
+  getCurrentAuthUser,
+  withOwnerFilter,
+} from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProjectsPage() {
+  const currentUser = await getCurrentAuthUser();
+  const isAdmin = currentUser?.role === "ADMIN";
   const userId = await getCurrentAccessUserId();
   const projects = await prisma.project.findMany({
     where: withOwnerFilter({}, userId),
@@ -20,6 +26,14 @@ export default async function ProjectsPage() {
       summary: true,
       cooperationDemand: true,
       createdAt: true,
+      owner: isAdmin
+        ? {
+            select: {
+              name: true,
+              email: true,
+            },
+          }
+        : false,
       _count: {
         select: {
           fileAssets: true,

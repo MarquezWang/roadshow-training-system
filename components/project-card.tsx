@@ -9,6 +9,10 @@ type ProjectCardProps = Readonly<{
     summary: string;
     cooperationDemand: string;
     createdAt: Date;
+    owner?: {
+      name: string | null;
+      email: string;
+    } | null;
     _count: {
       fileAssets: number;
     };
@@ -38,6 +42,11 @@ export function ProjectCard({ project }: ProjectCardProps) {
           <h2 className="text-lg font-semibold text-slate-950">
             {project.name}
           </h2>
+          {project.owner ? (
+            <p className="mt-1 text-xs text-slate-500">
+              所属用户：{project.owner.name || project.owner.email}
+            </p>
+          ) : null}
           <div className="mt-2 flex flex-wrap gap-2 text-xs font-medium">
             <span className="rounded-md bg-teal-50 px-2.5 py-1 text-teal-800">
               {project.field || "未填写赛道"}
