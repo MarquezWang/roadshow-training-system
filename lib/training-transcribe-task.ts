@@ -2,7 +2,10 @@ import { existsSync } from "fs";
 import path from "path";
 import { prisma } from "@/lib/prisma";
 import { transcribeAudio } from "@/lib/transcription";
-import { TranscribeBusinessError } from "@/lib/transcribe-error";
+import {
+  TranscribeBusinessError,
+  TranscribeEmptyResultError,
+} from "@/lib/transcribe-error";
 import { devError, devLog, devWarn } from "@/lib/dev-log";
 
 const MAX_TRANSCRIBE_ATTEMPTS = 3;
@@ -91,6 +94,10 @@ export function getErrorSummary(error: unknown) {
 export function isRetryableTranscribeError(error: unknown) {
   const summary = getErrorSummary(error).toLowerCase();
   const isBusinessError = error instanceof TranscribeBusinessError;
+
+  if (error instanceof TranscribeEmptyResultError) {
+    return false;
+  }
 
   const nonRetryableIndicators = [
     "api key",

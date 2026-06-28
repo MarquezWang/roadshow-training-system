@@ -179,6 +179,7 @@ function isTranscriptNotReadyReason(reason: string | undefined) {
   const normalizedReason = reason.trim().toLowerCase();
 
   return (
+    normalizedReason === "dynamic_followup_in_progress" ||
     normalizedReason === "pitch_transcript_not_ready" ||
     normalizedReason === "transcript_not_ready" ||
     normalizedReason === "no_pitch_transcript" ||
@@ -362,7 +363,9 @@ export function TrainingQaClient({
   const qaPhaseRef = useRef<QaPhase>(qaPhase);
   const dynamicFollowupRetryCountRef = useRef(0);
   const dynamicFollowupInFlightRef = useRef(false);
-  const dynamicFollowupCompletedRef = useRef(false);
+  const dynamicFollowupCompletedRef = useRef(
+    initialQuestions.some(isDynamicFollowupQuestion),
+  );
   const dynamicFollowupRetryTimerRef = useRef<number | null>(null);
   const [dynamicFollowupRetryTick, setDynamicFollowupRetryTick] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -510,6 +513,12 @@ export function TrainingQaClient({
   // Dynamic followup: retry while pitch transcript is not ready.
   useEffect(() => {
     if (!canAttemptDynamicFollowupPhase(qaPhase)) {
+      clearDynamicFollowupRetryTimer();
+      return;
+    }
+
+    if (questions.some(isDynamicFollowupQuestion)) {
+      dynamicFollowupCompletedRef.current = true;
       clearDynamicFollowupRetryTimer();
       return;
     }

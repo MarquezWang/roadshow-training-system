@@ -24,21 +24,35 @@ type QaPrepareClientProps = Readonly<{
   sessionId: string;
   projectName: string;
   recordingId: string | null;
+  transcriptionProvider: string;
 }>;
 
-const pollIntervalMs = 1_500;
-const prepareDurationMs = 7_000;
+const defaultPollIntervalMs = 3_000;
+const defaultPrepareDurationMs = 13_000;
+const flashPollIntervalMs = 1_500;
+const flashPrepareDurationMs = 7_000;
 
 function isTranscriptNotReadyReason(reason: string | undefined) {
-  return reason === "pitch_transcript_not_ready";
+  return (
+    reason === "pitch_transcript_not_ready" ||
+    reason === "dynamic_followup_in_progress"
+  );
 }
 
 export function QaPrepareClient({
   sessionId,
   projectName,
   recordingId,
+  transcriptionProvider,
 }: QaPrepareClientProps) {
   const router = useRouter();
+  const isFastTranscriptionProvider = transcriptionProvider === "tencent_flash";
+  const pollIntervalMs = isFastTranscriptionProvider
+    ? flashPollIntervalMs
+    : defaultPollIntervalMs;
+  const prepareDurationMs = isFastTranscriptionProvider
+    ? flashPrepareDurationMs
+    : defaultPrepareDurationMs;
   const [message, setMessage] = useState(
     "正在整理评委问题。",
   );
@@ -210,7 +224,7 @@ export function QaPrepareClient({
         navigationTimerRef.current = null;
       }
     };
-  }, [enterQa, recordingId, sessionId]);
+  }, [enterQa, pollIntervalMs, prepareDurationMs, recordingId, sessionId]);
 
   return (
     <div className="grid min-h-screen place-items-center px-6 py-10">

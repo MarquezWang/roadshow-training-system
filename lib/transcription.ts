@@ -7,9 +7,9 @@ import { transcribeWithXfyun } from "@/lib/transcription/xfyun";
 
 const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
 
-type TranscriptionProvider = "openai" | "xfyun" | "tencent" | "tencent_flash";
+export type TranscriptionProvider = "openai" | "xfyun" | "tencent" | "tencent_flash";
 
-function getProvider(): TranscriptionProvider {
+export function getTranscriptionProvider(): TranscriptionProvider {
   const provider = (process.env.TRANSCRIPTION_PROVIDER ?? "openai")
     .trim()
     .toLowerCase();
@@ -26,6 +26,17 @@ function getProvider(): TranscriptionProvider {
   }
 
   return provider;
+}
+
+function getAsrErrorSummary(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : String(error ?? "unknown");
+
+  return message
+    .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [redacted]")
+    .replace(/TENCENT_SECRET_KEY\s*=\s*\S+/gi, "TENCENT_SECRET_KEY=[redacted]")
+    .slice(0, 180);
 }
 
 function getOpenAIConfig() {
@@ -94,17 +105,37 @@ export async function transcribeAudio(
   filePath: string,
   mimeType?: string | null,
 ): Promise<string> {
-  const provider = getProvider();
+  const provider = getTranscriptionProvider();
+  const startedAt = Date.now();
 
-  switch (provider) {
-    case "tencent_flash":
-      return transcribeWithTencentFlash(filePath);
-    case "tencent":
-      return transcribeWithTencent(filePath);
-    case "xfyun":
-      return transcribeWithXfyun(filePath, mimeType);
-    case "openai":
-    default:
-      return transcribeWithOpenAI(filePath);
+  try {
+    let text: string;
+
+    switch (provider) {
+      case "tencent_flash":
+        text = await transcribeWithTencentFlash(filePath);
+        break;
+      case "tencent":
+        text = await transcribeWithTencent(filePath);
+        break;
+      case "xfyun":
+        text = await transcribeWithXfyun(filePath, mimeType);
+        break;
+      case "openai":
+      default:
+        text = await transcribeWithOpenAI(filePath);
+        break;
+    }
+
+    console.log(
+      `[ASR] provider=${provider} elapsedMs=${Date.now() - startedAt} ok=true textLength=${text.trim().length}`,
+    );
+
+    return text;
+  } catch (error) {
+    console.warn(
+      `[ASR] provider=${provider} elapsedMs=${Date.now() - startedAt} ok=false error=${getAsrErrorSummary(error)}`,
+    );
+    throw error;
   }
 }

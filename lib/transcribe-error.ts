@@ -13,3 +13,10 @@ export class TranscribeBusinessError extends Error {
     this.rawMessage = rawMessage;
   }
 }
+
+export class TranscribeEmptyResultError extends TranscribeBusinessError {
+  constructor(userMessage: string, rawMessage: string) {
+    super(userMessage, rawMessage);
+    this.name = "TranscribeEmptyResultError";
+  }
+}

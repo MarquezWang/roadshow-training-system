@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getTranscriptionProvider } from "@/lib/transcription";
 import { QaPrepareClient } from "./qa-prepare-client";
 
 type QaPreparePageProps = Readonly<{
@@ -103,6 +104,7 @@ export default async function QaPreparePage({
         sessionId={session.id}
         projectName={session.project.name}
         recordingId={recording?.id ?? null}
+        transcriptionProvider={getTranscriptionProvider()}
       />
     </main>
   );

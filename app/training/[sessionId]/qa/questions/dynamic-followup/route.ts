@@ -67,6 +67,7 @@ interface DebugInfo {
 const DYNAMIC_FOLLOWUP_ORDER_INDEX = 4;
 const DYNAMIC_FOLLOWUP_SOURCE = "DYNAMIC_FOLLOWUP";
 const DYNAMIC_FOLLOWUP_TYPE = "FOLLOWUP";
+const dynamicFollowupInFlightSessionIds = new Set<string>();
 const DYNAMIC_FOLLOWUP_BASIS = "基于本轮 Pitch 转写生成的动态追问";
 
 const dynamicQuestionSelect = {
@@ -133,6 +134,7 @@ export async function POST(
   const { sessionId } = await context.params;
   const debugInfo: DebugInfo = {};
   let debug = false;
+  let hasGenerationLock = false;
 
   try {
     // 实验开关
@@ -270,6 +272,18 @@ export async function POST(
     }
 
     // 查询 Pitch 转写
+    if (dynamicFollowupInFlightSessionIds.has(sessionId)) {
+      devLog("[dynamic-followup:POST] dynamic followup already in progress", {
+        sessionId,
+      });
+      return NextResponse.json(
+        buildDebugResponse({ reason: "dynamic_followup_in_progress" }),
+      );
+    }
+
+    dynamicFollowupInFlightSessionIds.add(sessionId);
+    hasGenerationLock = true;
+
     const pitchTranscript = await prisma.trainingTranscript.findFirst({
       where: {
         sessionId,
@@ -1212,5 +1226,9 @@ ${otherQuestionsText.slice(0, 800)}`;
     return NextResponse.json(
       debug ? { ...base, debug: debugInfo } : base,
     );
+  } finally {
+    if (hasGenerationLock) {
+      dynamicFollowupInFlightSessionIds.delete(sessionId);
+    }
   }
 }

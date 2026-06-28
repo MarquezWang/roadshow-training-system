@@ -3,7 +3,10 @@ import { execFile } from "child_process";
 import { mkdir, readFile, rm, stat } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
-import { TranscribeBusinessError } from "@/lib/transcribe-error";
+import {
+  TranscribeBusinessError,
+  TranscribeEmptyResultError,
+} from "@/lib/transcribe-error";
 
 const execFileAsync = promisify(execFile);
 
@@ -260,9 +263,9 @@ export async function transcribeWithTencentFlash(
     const text = extractTencentFlashText(result);
 
     if (!text) {
-      throw new TranscribeBusinessError(
-        "转写结果为空，可能是录音声音过小或没有有效语音内容。",
-        `腾讯云极速版 ASR 成功但结果为空 requestId=${result.request_id ?? "unknown"}`,
+      throw new TranscribeEmptyResultError(
+        "未识别到有效语音内容，请确认录音时已正常发声。",
+        `ASR_EMPTY_RESULT provider=tencent_flash requestId=${result.request_id ?? "unknown"}`,
       );
     }
 
