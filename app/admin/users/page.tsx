@@ -42,6 +42,7 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
       email: true,
       name: true,
       role: true,
+      passwordHash: true,
       createdAt: true,
       _count: {
         select: {
@@ -147,6 +148,7 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
               <tr>
                 <th className="px-5 py-3">登录名</th>
                 <th className="px-5 py-3">显示名 / 角色</th>
+                <th className="px-5 py-3">账号状态</th>
                 <th className="px-5 py-3">项目数</th>
                 <th className="px-5 py-3">创建时间</th>
                 <th className="px-5 py-3">重置密码</th>
@@ -158,6 +160,11 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
                   <td className="px-5 py-4">
                     <div className="font-medium text-slate-950">{user.email}</div>
                     <div className="mt-1 text-xs text-slate-400">{user.id}</div>
+                    {user.email === "team@roadshow.local" ? (
+                      <div className="mt-2 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                        历史项目账号
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-5 py-4">
                     <form action={updateUserAction} className="grid gap-2">
@@ -189,6 +196,17 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
                         </p>
                       ) : null}
                     </form>
+                  </td>
+                  <td className="px-5 py-4 text-slate-700">
+                    <div
+                      className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${
+                        user.passwordHash
+                          ? "border-teal-200 bg-teal-50 text-teal-700"
+                          : "border-slate-200 bg-slate-50 text-slate-500"
+                      }`}
+                    >
+                      {user.passwordHash ? "可登录" : "不可登录"}
+                    </div>
                   </td>
                   <td className="px-5 py-4 text-slate-700">
                     {user._count.projects}
