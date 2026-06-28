@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { getCurrentAuthUserId, withSessionOwnerFilter } from "@/lib/auth-server";
+import { getCurrentAccessUserId, withSessionOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { getTrainingFlowPath } from "@/lib/training-status";
 
@@ -13,7 +13,7 @@ export default async function TrainingSessionPage({
   params,
 }: TrainingSessionPageProps) {
   const { sessionId } = await params;
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
   const session = await prisma.trainingSession.findFirst({
     where: withSessionOwnerFilter({ id: sessionId }, userId),
     select: {

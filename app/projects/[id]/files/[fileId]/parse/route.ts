@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAuthUserId } from "@/lib/auth-server";
+import { getCurrentAccessUserId } from "@/lib/auth-server";
 import { parseFileToText } from "@/lib/file-parser";
 import { prisma } from "@/lib/prisma";
 
@@ -26,7 +26,7 @@ function redirectToProject(
 
 export async function POST(request: NextRequest, context: ParseRouteContext) {
   const { id, fileId } = await context.params;
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
   const fileAsset = await prisma.fileAsset.findFirst({
     where: userId
       ? {

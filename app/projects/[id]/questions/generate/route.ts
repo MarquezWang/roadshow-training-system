@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAuthUserId, withOwnerFilter } from "@/lib/auth-server";
+import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { callAI } from "@/lib/ai";
 import {
   buildProjectAIContext,
@@ -142,7 +142,7 @@ export async function POST(
   const { id } = await context.params;
 
   try {
-    const userId = await getCurrentAuthUserId();
+    const userId = await getCurrentAccessUserId();
     const project = await prisma.project.findFirst({
       where: withOwnerFilter({ id }, userId),
       select: {

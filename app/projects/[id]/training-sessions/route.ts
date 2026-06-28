@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAuthUserId, withOwnerFilter } from "@/lib/auth-server";
+import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { abortableTrainingStatuses } from "@/lib/training-status";
 
@@ -14,7 +14,7 @@ export async function POST(
   context: TrainingSessionRouteContext,
 ) {
   const { id } = await context.params;
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
   const project = await prisma.project.findFirst({
     where: withOwnerFilter({ id }, userId),
     select: {

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCurrentAuthUserId, withOwnerFilter } from "@/lib/auth-server";
+import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { trainingStatusLabel } from "@/lib/training-status";
 
@@ -64,7 +64,7 @@ export default async function ProjectDetailPage({
   params,
 }: ProjectDetailPageProps) {
   const { id } = await params;
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
   const project = await prisma.project.findFirst({
     where: withOwnerFilter({ id }, userId),
     include: {

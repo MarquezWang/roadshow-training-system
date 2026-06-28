@@ -15,7 +15,8 @@
     "test:stability:dynamic-followup": "node --test tests/stability/dynamic-followup-preflight.test.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "prisma db seed"
+    "prisma:seed": "prisma db seed",
+    "user:create": "node scripts/create-user.mjs"
   },
   "prisma": {
     "seed": "node prisma/seed.mjs"

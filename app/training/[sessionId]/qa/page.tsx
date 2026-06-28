@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { getCurrentAuthUserId, withSessionOwnerFilter } from "@/lib/auth-server";
+import { getCurrentAccessUserId, withSessionOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { devLog } from "@/lib/dev-log";
 import {
@@ -18,7 +18,7 @@ const qaLimitSec = 3 * 60;
 
 export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
   const { sessionId } = await params;
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
   const session = await prisma.trainingSession.findFirst({
     where: withSessionOwnerFilter({ id: sessionId }, userId),
     include: {

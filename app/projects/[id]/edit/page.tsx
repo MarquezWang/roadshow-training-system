@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { ProjectForm } from "@/components/project-form";
-import { getCurrentAuthUserId, withOwnerFilter } from "@/lib/auth-server";
+import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import {
   isCooperationDemand,
@@ -58,7 +58,7 @@ async function updateProject(id: string, formData: FormData) {
     throw new Error("请完整填写合作需求。");
   }
 
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
   const updated = await prisma.project.updateMany({
     where: withOwnerFilter({ id }, userId),
     data: {
@@ -83,7 +83,7 @@ async function updateProject(id: string, formData: FormData) {
 
 export default async function EditProjectPage({ params }: EditProjectPageProps) {
   const { id } = await params;
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
   const project = await prisma.project.findFirst({
     where: withOwnerFilter({ id }, userId),
     select: {

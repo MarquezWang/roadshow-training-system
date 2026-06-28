@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { getCurrentAuthUserId, withSessionOwnerFilter } from "@/lib/auth-server";
+import { getCurrentAccessUserId, withSessionOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { getTranscriptionProvider } from "@/lib/transcription";
 import { QaPrepareClient } from "./qa-prepare-client";
@@ -23,7 +23,7 @@ export default async function QaPreparePage({
     ? query.recordingId[0]
     : query.recordingId;
 
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
   const session = await prisma.trainingSession.findFirst({
     where: withSessionOwnerFilter({ id: sessionId }, userId),
     select: {

@@ -51,6 +51,16 @@ export async function getCurrentAuthUserId() {
   return user?.id ?? null;
 }
 
+export async function getCurrentAccessUserId() {
+  const user = await requireCurrentAuthUser();
+
+  if (!user || user.role === "ADMIN") {
+    return null;
+  }
+
+  return user.id;
+}
+
 export function withOwnerFilter<T extends object>(
   where: T,
   userId: string | null,
@@ -82,7 +92,7 @@ export function withSessionOwnerFilter<T extends object>(
 }
 
 export async function requireProjectOwner(projectId: string) {
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
 
   const project = await prisma.project.findFirst({
     where: withOwnerFilter({ id: projectId }, userId),
@@ -97,7 +107,7 @@ export async function requireProjectOwner(projectId: string) {
 }
 
 export async function requireSessionOwner(sessionId: string) {
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
 
   const session = await prisma.trainingSession.findFirst({
     where: userId
@@ -122,7 +132,7 @@ export async function requireSessionOwner(sessionId: string) {
 }
 
 export async function requireFileOwner(fileId: string) {
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
 
   const file = await prisma.fileAsset.findFirst({
     where: userId
@@ -147,7 +157,7 @@ export async function requireFileOwner(fileId: string) {
 }
 
 export async function isProjectOwnedByCurrentUser(projectId: string) {
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
 
   if (!userId) {
     return true;
@@ -164,7 +174,7 @@ export async function isProjectOwnedByCurrentUser(projectId: string) {
 }
 
 export async function isSessionOwnedByCurrentUser(sessionId: string) {
-  const userId = await getCurrentAuthUserId();
+  const userId = await getCurrentAccessUserId();
 
   if (!userId) {
     return true;
