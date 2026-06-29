@@ -56,6 +56,27 @@ JSON 结构必须为：
   "strengths": [],
   "weaknesses": [],
   "suggestions": [],
+  "onePageSummary": {
+    "conclusion": "",
+    "strongestPoint": "",
+    "biggestWeakness": "",
+    "nextTrainingFocus": "",
+    "readinessAdvice": ""
+  },
+  "diagnostics": {
+    "content": [],
+    "delivery": [],
+    "qa": []
+  },
+  "actionItems": [
+    {
+      "issue": "",
+      "whyItMatters": "",
+      "howToFix": "",
+      "sampleWording": ""
+    }
+  ],
+  "nextTrainingTasks": [],
   "contentCoverage": [
     {
       "item": "",
@@ -107,6 +128,23 @@ JSON 结构必须为：
 - strengths 输出 0 到 5 条。只写真实存在的优势，如果路演表现很差或空泛表达较多，优势不足不用硬凑。
 - weaknesses 输出 3 到 5 条。优先指出缺少证据支撑的内容，例如"团队介绍停留在'能力强'，缺少成员背景、分工和过往成果"，例如"技术优势缺少指标、测试数据和竞品对比"。
 - suggestions 输出 5 条以内。给出可直接修改路演话术的建议，不要只写"建议补充数据"，要说明补充什么数据，例如"将'技术领先'改为'识别准确率达到 xx%，较传统方案提升 xx%，已在 xx 场景试点'"。
+- onePageSummary 是给用户快速转发和复盘的一页式结论：
+  - conclusion：一句话说明本轮训练总体判断，必须具体指出最大问题或最大价值。
+  - strongestPoint：本轮最值得保留的一个优势。
+  - biggestWeakness：本轮最影响评分的一个短板。
+  - nextTrainingFocus：下一轮训练最优先练的一件事。
+  - readinessAdvice：是否适合进入正式路演/答辩，以及还需要补什么。
+- diagnostics 用于区分问题类型：
+  - content：项目内容诊断，关注项目定位、技术亮点、应用场景、商业价值、落地证据。
+  - delivery：表达与节奏诊断，关注开场、逻辑、时间分配、重点强化和语言清晰度。
+  - qa：答辩表现诊断，关注是否正面回答、证据支撑、答非所问和追问暴露的问题。
+  - 每类最多 4 条，必须具体。
+- actionItems 输出 3 到 5 条可执行修改建议，每条必须包含：
+  - issue：当前具体问题。
+  - whyItMatters：为什么会影响评委判断或评分。
+  - howToFix：如何修改材料、路演稿或答辩准备。
+  - sampleWording：可直接替换或参考的话术。不要编造具体数据；缺数据时用"补充 xx 指标/客户/案例"形式。
+- nextTrainingTasks 输出 3 到 5 条下一轮训练任务，必须是用户可以照着做的动作，例如"重练 60 秒技术亮点表达，加入 1 个测试指标和 1 个应用场景"。
 - contentCoverage 必须包含上述 9 个覆盖项。
 - covered 只能是 "true"、"false"、"partial"。
   - "true"：既提到了该维度，又提供了可验证事实。

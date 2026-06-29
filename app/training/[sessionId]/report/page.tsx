@@ -200,6 +200,65 @@ function parseDynamicFollowupReview(value: unknown) {
   };
 }
 
+function parseOnePageSummary(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const readString = (key: string) =>
+    typeof record[key] === "string" ? record[key] : "";
+
+  return {
+    conclusion: readString("conclusion"),
+    strongestPoint: readString("strongestPoint"),
+    biggestWeakness: readString("biggestWeakness"),
+    nextTrainingFocus: readString("nextTrainingFocus"),
+    readinessAdvice: readString("readinessAdvice"),
+  };
+}
+
+function parseDiagnostics(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const readStringArray = (key: string) =>
+    Array.isArray(record[key])
+      ? (record[key] as unknown[]).filter(
+          (item): item is string => typeof item === "string" && item.trim().length > 0,
+        )
+      : [];
+
+  return {
+    content: readStringArray("content"),
+    delivery: readStringArray("delivery"),
+    qa: readStringArray("qa"),
+  };
+}
+
+function parseActionItems(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item && typeof item === "object" && !Array.isArray(item)),
+    )
+    .map((record) => {
+      const readString = (key: string) =>
+        typeof record[key] === "string" ? record[key] : "";
+
+      return {
+        issue: readString("issue"),
+        whyItMatters: readString("whyItMatters"),
+        howToFix: readString("howToFix"),
+        sampleWording: readString("sampleWording"),
+      };
+    });
+}
+
   const analysis = session.analyses[0]
     ? (() => {
         const rawResult = parseJsonObject(session.analyses[0].rawResultJson);
@@ -214,6 +273,15 @@ function parseDynamicFollowupReview(value: unknown) {
           strengths: parseJsonArray<string>(session.analyses[0].strengthsJson),
           weaknesses: parseJsonArray<string>(session.analyses[0].weaknessesJson),
           suggestions: parseJsonArray<string>(session.analyses[0].suggestionsJson),
+          onePageSummary: parseOnePageSummary(rawResult.onePageSummary),
+          diagnostics: parseDiagnostics(rawResult.diagnostics),
+          actionItems: parseActionItems(rawResult.actionItems),
+          nextTrainingTasks: Array.isArray(rawResult.nextTrainingTasks)
+            ? rawResult.nextTrainingTasks.filter(
+                (item): item is string =>
+                  typeof item === "string" && item.trim().length > 0,
+              )
+            : [],
           contentCoverage: parseJsonArray<{ item: string; covered: string; evidence: string; suggestion: string }>(session.analyses[0].coverageJson),
           timing: parseJsonObject(session.analyses[0].timingJson),
           slideSync: parseJsonObject(session.analyses[0].slideSyncJson),

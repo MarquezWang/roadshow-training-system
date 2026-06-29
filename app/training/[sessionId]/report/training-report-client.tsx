@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatTranscriptErrorMessage, canRetryTranscript } from "@/lib/transcript-error-message";
 
@@ -40,6 +40,25 @@ type TrainingAnalysis = {
   strengths: string[];
   weaknesses: string[];
   suggestions: string[];
+  onePageSummary: {
+    conclusion: string;
+    strongestPoint: string;
+    biggestWeakness: string;
+    nextTrainingFocus: string;
+    readinessAdvice: string;
+  } | null;
+  diagnostics: {
+    content: string[];
+    delivery: string[];
+    qa: string[];
+  } | null;
+  actionItems: Array<{
+    issue: string;
+    whyItMatters: string;
+    howToFix: string;
+    sampleWording: string;
+  }>;
+  nextTrainingTasks: string[];
   contentCoverage: Array<{
     item: string;
     covered: string;
@@ -185,123 +204,6 @@ function ReportGenerationPanel({
   );
 }
 
-function RadarChart({ overallScore }: { readonly overallScore: number | null }) {
-  const score = overallScore ?? 0;
-  const ratio = Math.max(0.1, Math.min(1, score / 100));
-  const dimensions = [
-    { label: "内容完整度", angle: -90 },
-    { label: "表达清晰度", angle: -30 },
-    { label: "技术可信度", angle: 30 },
-    { label: "市场与商业化", angle: 90 },
-    { label: "数据支撑", angle: 150 },
-    { label: "答辩应变", angle: 210 },
-  ];
-
-  const center = 130;
-  const maxRadius = 95;
-  const levels = 3;
-
-  function hexPoint(angleDeg: number, radius: number) {
-    const rad = (angleDeg * Math.PI) / 180;
-    const x = center + radius * Math.cos(rad);
-    const y = center + radius * Math.sin(rad);
-    return `${x},${y}`;
-  }
-
-  const bgPolygons = Array.from({ length: levels }, (_, i) => {
-    const r = (maxRadius / levels) * (i + 1);
-    return dimensions
-      .map((d) => hexPoint(d.angle, r))
-      .join(" ");
-  });
-
-  const dataPoints = dimensions
-    .map((d) => hexPoint(d.angle, maxRadius * ratio))
-    .join(" ");
-
-  // Label positions: push slightly further out than maxRadius
-  const labelRadius = maxRadius + 28;
-
-  return (
-    <div className="rounded-lg border border-slate-100 bg-white p-6">
-      <h3 className="text-sm font-semibold text-slate-800">能力维度雷达图</h3>
-      <p className="mt-1 text-xs text-slate-400">
-        维度图基于当前报告数据生成，后续将结合逐页与逐题数据完善。
-      </p>
-      <div className="relative mx-auto mt-4 flex items-center justify-center" style={{ minHeight: 300, width: "100%", maxWidth: 420 }}>
-        <svg
-          viewBox="0 0 260 260"
-          style={{ width: "100%", height: "100%", maxHeight: 380 }}
-          aria-label="能力维度雷达图"
-        >
-          {/* 背景六边形 */}
-          {bgPolygons.map((points, i) => (
-            <polygon
-              key={i}
-              points={points}
-              fill="none"
-              stroke="#e2e8f0"
-              strokeWidth="1"
-            />
-          ))}
-          {/* 轴线 */}
-          {dimensions.map((d, i) => (
-            <line
-              key={i}
-              x1={center}
-              y1={center}
-              x2={hexPoint(d.angle, maxRadius).split(",")[0]}
-              y2={hexPoint(d.angle, maxRadius).split(",")[1]}
-              stroke="#e2e8f0"
-              strokeWidth="1"
-            />
-          ))}
-          {/* 数据多边形 */}
-          <polygon
-            points={dataPoints}
-            fill="rgba(59,130,246,0.12)"
-            stroke="#3b82f6"
-            strokeWidth="1.5"
-          />
-          {/* 数据点 */}
-          {dimensions.map((d, i) => (
-            <circle
-              key={i}
-              cx={hexPoint(d.angle, maxRadius * ratio).split(",")[0]}
-              cy={hexPoint(d.angle, maxRadius * ratio).split(",")[1]}
-              r="3"
-              fill="#3b82f6"
-            />
-          ))}
-        </svg>
-        {/* 标签用 HTML 定位，避免 SVG 裁切 */}
-        {dimensions.map((d, i) => {
-          const rad = (d.angle * Math.PI) / 180;
-          const lx = center + labelRadius * Math.cos(rad);
-          const ly = center + labelRadius * Math.sin(rad);
-          const pctX = (lx / 260) * 100;
-          const pctY = (ly / 260) * 100;
-
-          return (
-            <span
-              key={i}
-              className="absolute text-xs font-medium text-slate-600"
-              style={{
-                left: `${pctX}%`,
-                top: `${pctY}%`,
-                transform: "translate(-50%, -50%)",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {d.label}
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 export function TrainingReportClient({
   sessionId,
   sessionStatus,
@@ -395,6 +297,7 @@ export function TrainingReportClient({
     new Set(),
   );
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  const [copySummaryMessage, setCopySummaryMessage] = useState("");
   const [activeTab, setActiveTab] = useState<
     "overview" | "pitch" | "qa" | "abort-overview" | "abort-pitch" | "abort-qa"
   >(isAborted ? "abort-overview" : "overview");
@@ -650,10 +553,104 @@ export function TrainingReportClient({
     });
   }, []);
 
-  const strengths = Array.isArray(analysis?.strengths) ? analysis.strengths : [];
-  const weaknesses = Array.isArray(analysis?.weaknesses) ? analysis.weaknesses : [];
-  const suggestions = Array.isArray(analysis?.suggestions) ? analysis.suggestions : [];
-  const contentCoverage = Array.isArray(analysis?.contentCoverage) ? analysis.contentCoverage : [];
+  const strengths = useMemo(
+    () => (Array.isArray(analysis?.strengths) ? analysis.strengths : []),
+    [analysis?.strengths],
+  );
+  const weaknesses = useMemo(
+    () => (Array.isArray(analysis?.weaknesses) ? analysis.weaknesses : []),
+    [analysis?.weaknesses],
+  );
+  const suggestions = useMemo(
+    () => (Array.isArray(analysis?.suggestions) ? analysis.suggestions : []),
+    [analysis?.suggestions],
+  );
+  const contentCoverage = useMemo(
+    () =>
+      Array.isArray(analysis?.contentCoverage)
+        ? analysis.contentCoverage
+        : [],
+    [analysis?.contentCoverage],
+  );
+  const onePageSummary = useMemo(
+    () =>
+      analysis?.onePageSummary ?? {
+        conclusion: analysis?.summary ?? "",
+        strongestPoint: strengths[0] ?? "本轮暂未形成明确优势结论。",
+        biggestWeakness: weaknesses[0] ?? "本轮暂未形成明确短板结论。",
+        nextTrainingFocus:
+          suggestions[0] ?? "下一轮建议先补齐路演中的关键证据。",
+        readinessAdvice: "建议完成下一轮针对性训练后再进入正式展示。",
+      },
+    [analysis?.onePageSummary, analysis?.summary, strengths, suggestions, weaknesses],
+  );
+  const diagnostics = analysis?.diagnostics ?? {
+    content: weaknesses.slice(0, 2),
+    delivery: suggestions.slice(0, 2),
+    qa: [],
+  };
+  const actionItems =
+    Array.isArray(analysis?.actionItems) && analysis.actionItems.length > 0
+      ? analysis.actionItems
+      : suggestions.slice(0, 3).map((item) => ({
+          issue: item,
+          whyItMatters: "该问题会影响评委对项目价值、表达清晰度或证据可信度的判断。",
+          howToFix: item,
+          sampleWording: "可结合项目真实数据、客户案例或测试结果重写这一段表达。",
+        }));
+  const nextTrainingTasks =
+    Array.isArray(analysis?.nextTrainingTasks) &&
+    analysis.nextTrainingTasks.length > 0
+      ? analysis.nextTrainingTasks
+      : suggestions.slice(0, 3);
+
+  const buildOnePageSummaryText = useCallback(() => {
+    const score =
+      analysis?.overallScore !== null && analysis?.overallScore !== undefined
+        ? `${analysis.overallScore}/100`
+        : "暂无评分";
+    const taskLines =
+      nextTrainingTasks.length > 0
+        ? nextTrainingTasks
+            .slice(0, 3)
+            .map((task, index) => `${index + 1}. ${task}`)
+            .join("\n")
+        : "暂无明确任务";
+
+    return [
+      "训练报告摘要",
+      "",
+      `综合评分：${score}`,
+      "",
+      "本次训练结论：",
+      onePageSummary.conclusion || analysis?.summary || "暂无结论",
+      "",
+      "最大优势：",
+      onePageSummary.strongestPoint,
+      "",
+      "最大短板：",
+      onePageSummary.biggestWeakness,
+      "",
+      "下一轮重点：",
+      onePageSummary.nextTrainingFocus,
+      "",
+      "正式展示建议：",
+      onePageSummary.readinessAdvice,
+      "",
+      "下一轮训练任务：",
+      taskLines,
+    ].join("\n");
+  }, [analysis?.overallScore, analysis?.summary, nextTrainingTasks, onePageSummary]);
+
+  const copyOnePageSummary = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(buildOnePageSummaryText());
+      setCopySummaryMessage("已复制");
+      window.setTimeout(() => setCopySummaryMessage(""), 1800);
+    } catch {
+      setCopySummaryMessage("复制失败，请手动选择文本");
+    }
+  }, [buildOnePageSummaryText]);
 
   async function saveTranscript() {
     if (isAborted) {
@@ -1237,63 +1234,195 @@ export function TrainingReportClient({
         {/* === 总览 Tab === */}
         {activeTab === "overview" && (
         <div className="grid gap-6">
-          {/* 第一行：主结论卡 + 雷达图 */}
           {analysis?.status === "COMPLETED" ? (
-            <div className="grid gap-6 lg:grid-cols-2">
-              {/* 主结论卡 */}
-              <section className="rounded-lg border border-slate-100 bg-white p-6">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                      训练状态
-                    </p>
-                    <p className="mt-1 text-sm font-semibold text-slate-800">
-                      报告已生成
-                    </p>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-4xl font-bold text-slate-900">
-                      {analysis.overallScore ?? "-"}
-                    </span>
-                    <span className="text-sm text-slate-400">/ 100</span>
-                  </div>
+            <section className="rounded-lg border border-slate-100 bg-white p-6">
+              <div className="flex flex-col gap-4 border-b border-slate-100 pb-5 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                    一页式复盘
+                  </p>
+                  <h2 className="mt-2 text-lg font-semibold text-slate-950">
+                    本次训练结论
+                  </h2>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                    {onePageSummary.conclusion || analysis.summary}
+                  </p>
                 </div>
-
-                {/* 主结论 */}
-                {analysis.summary ? (
-                  <div className="mt-4 rounded-md bg-slate-50/70 p-4">
-                    <p className="text-xs font-medium text-slate-400">主结论</p>
-                    <p className="mt-1.5 text-sm leading-6 text-slate-700">
-                      {analysis.summary}
+                <div className="flex shrink-0 flex-col items-start gap-3 sm:flex-row lg:flex-col lg:items-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void copyOnePageSummary();
+                    }}
+                    className="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                  >
+                    复制复盘摘要
+                  </button>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4 text-center">
+                    <p className="text-xs font-medium text-slate-500">
+                      综合评分
                     </p>
-                  </div>
-                ) : null}
-
-                {/* 下一轮优先动作 */}
-                {suggestions.length > 0 ? (
-                  <div className="mt-4">
-                    <p className="text-xs font-medium text-slate-400">
-                      下一轮优先改进
+                    <p className="mt-1 text-4xl font-semibold text-slate-950">
+                      {analysis.overallScore ?? "-"}
                     </p>
-                    <ul className="mt-2 space-y-1.5">
-                      {suggestions.slice(0, 3).map((item, index) => (
-                        <li
-                          key={index}
-                          className="flex gap-2 text-sm leading-6 text-slate-600"
-                        >
-                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400" />
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <p className="text-xs text-slate-400">/ 100</p>
                   </div>
-                ) : null}
-              </section>
+                  {copySummaryMessage ? (
+                    <p className="text-xs text-teal-700">
+                      {copySummaryMessage}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
 
-              {/* 能力维度雷达图 */}
-              <RadarChart overallScore={analysis.overallScore} />
-            </div>
-          ) : isAborted ? (
+              <div className="mt-5 grid gap-4 lg:grid-cols-4">
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-4">
+                  <p className="text-xs font-semibold text-emerald-700">
+                    最大优势
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-emerald-950/80">
+                    {onePageSummary.strongestPoint}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-amber-100 bg-amber-50/80 p-4">
+                  <p className="text-xs font-semibold text-amber-700">
+                    最大短板
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-amber-950/80">
+                    {onePageSummary.biggestWeakness}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-blue-100 bg-blue-50/80 p-4">
+                  <p className="text-xs font-semibold text-blue-700">
+                    下一轮重点
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-blue-950/80">
+                    {onePageSummary.nextTrainingFocus}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold text-slate-500">
+                    正式展示建议
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">
+                    {onePageSummary.readinessAdvice}
+                  </p>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {analysis?.status === "COMPLETED" ? (
+            <section className="grid gap-4 lg:grid-cols-3">
+              <div className="rounded-lg border border-slate-100 bg-white p-5">
+                <h3 className="text-sm font-semibold text-slate-800">
+                  路演内容诊断
+                </h3>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
+                  {(diagnostics.content.length > 0
+                    ? diagnostics.content
+                    : ["暂无更细的内容诊断，建议查看内容覆盖与证据充分性。"]
+                  ).map((item, index) => (
+                    <li key={index}>· {item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="rounded-lg border border-slate-100 bg-white p-5">
+                <h3 className="text-sm font-semibold text-slate-800">
+                  表达与节奏诊断
+                </h3>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
+                  {(diagnostics.delivery.length > 0
+                    ? diagnostics.delivery
+                    : ["暂无更细的表达诊断，建议查看路演表现分析。"]
+                  ).map((item, index) => (
+                    <li key={index}>· {item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="rounded-lg border border-slate-100 bg-white p-5">
+                <h3 className="text-sm font-semibold text-slate-800">
+                  答辩表现诊断
+                </h3>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
+                  {(diagnostics.qa.length > 0
+                    ? diagnostics.qa
+                    : ["如本轮已完成答辩，可在答辩表现页查看逐题复盘。"]
+                  ).map((item, index) => (
+                    <li key={index}>· {item}</li>
+                  ))}
+                </ul>
+              </div>
+            </section>
+          ) : null}
+
+          {analysis?.status === "COMPLETED" && actionItems.length > 0 ? (
+            <section className="rounded-lg border border-slate-100 bg-white p-6">
+              <div className="flex flex-col gap-1 border-b border-slate-100 pb-4">
+                <h2 className="text-sm font-semibold text-slate-800">
+                  可直接执行的修改建议
+                </h2>
+                <p className="text-xs text-slate-400">
+                  按“问题—影响—改法—参考话术”拆解，便于下一轮直接改稿。
+                </p>
+              </div>
+              <div className="mt-4 grid gap-4">
+                {actionItems.slice(0, 4).map((item, index) => (
+                  <div
+                    key={index}
+                    className="rounded-xl border border-slate-100 bg-slate-50/60 p-4"
+                  >
+                    <p className="text-sm font-semibold text-slate-900">
+                      {index + 1}. {item.issue}
+                    </p>
+                    <div className="mt-3 grid gap-3 text-sm leading-6 text-slate-600 lg:grid-cols-3">
+                      <p>
+                        <span className="font-medium text-slate-800">
+                          影响：
+                        </span>
+                        {item.whyItMatters}
+                      </p>
+                      <p>
+                        <span className="font-medium text-slate-800">
+                          改法：
+                        </span>
+                        {item.howToFix}
+                      </p>
+                      <p>
+                        <span className="font-medium text-slate-800">
+                          参考话术：
+                        </span>
+                        {item.sampleWording}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {analysis?.status === "COMPLETED" && nextTrainingTasks.length > 0 ? (
+            <section className="rounded-lg border border-blue-100 bg-blue-50/60 p-6">
+              <h2 className="text-sm font-semibold text-blue-900">
+                下一轮训练任务
+              </h2>
+              <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                {nextTrainingTasks.slice(0, 3).map((task, index) => (
+                  <div
+                    key={index}
+                    className="rounded-lg border border-blue-100 bg-white/80 p-4 text-sm leading-6 text-blue-950/80"
+                  >
+                    <p className="text-xs font-semibold text-blue-600">
+                      任务 {index + 1}
+                    </p>
+                    <p className="mt-2">{task}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {analysis?.status === "COMPLETED" ? null : isAborted ? (
             <section className="rounded-lg border border-slate-100 bg-white p-6">
               <div className="rounded-md border border-red-100 bg-red-50/50 p-5">
                 <p className="text-sm font-medium text-red-700">本轮训练已中止</p>
@@ -1339,55 +1468,10 @@ export function TrainingReportClient({
             <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
               <ReportGenerationPanel
                 message={analysisMessage || "正在准备报告数据，请稍候……"}
-                elapsedMs={reportGenerationElapsedMs}
-              />
-            </section>
+              elapsedMs={reportGenerationElapsedMs}
+            />
+          </section>
           )}
-
-          {/* 第二行：关键优势 + 主要短板 */}
-          {analysis?.status === "COMPLETED" ? (
-            <div className="grid gap-6 lg:grid-cols-2">
-              {/* 关键优势 */}
-              <div className="rounded-lg border border-slate-100 bg-white p-6">
-                <h3 className="text-sm font-semibold text-slate-800">关键优势</h3>
-                {strengths.length > 0 ? (
-                  <ul className="mt-3 space-y-2.5">
-                    {strengths.slice(0, 5).map((item, index) => (
-                      <li
-                        key={index}
-                        className="flex gap-2 text-sm leading-6 text-slate-600"
-                      >
-                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-3 text-xs text-slate-400">暂无优势数据。</p>
-                )}
-              </div>
-
-              {/* 主要短板 */}
-              <div className="rounded-lg border border-slate-100 bg-white p-6">
-                <h3 className="text-sm font-semibold text-slate-800">主要短板</h3>
-                {weaknesses.length > 0 ? (
-                  <ul className="mt-3 space-y-2.5">
-                    {weaknesses.slice(0, 5).map((item, index) => (
-                      <li
-                        key={index}
-                        className="flex gap-2 text-sm leading-6 text-slate-600"
-                      >
-                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-3 text-xs text-slate-400">暂无短板数据。</p>
-                )}
-              </div>
-            </div>
-          ) : null}
         </div>
       )}
 

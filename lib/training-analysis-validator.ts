@@ -36,12 +36,37 @@ export type DynamicFollowupReview = {
   improvementAdvice: string;
 };
 
+export type ReportOnePageSummary = {
+  conclusion: string;
+  strongestPoint: string;
+  biggestWeakness: string;
+  nextTrainingFocus: string;
+  readinessAdvice: string;
+};
+
+export type ReportDiagnostics = {
+  content: string[];
+  delivery: string[];
+  qa: string[];
+};
+
+export type ReportActionItem = {
+  issue: string;
+  whyItMatters: string;
+  howToFix: string;
+  sampleWording: string;
+};
+
 export type TrainingAnalysisResult = {
   overallScore: number;
   summary: string;
   strengths: string[];
   weaknesses: string[];
   suggestions: string[];
+  onePageSummary?: ReportOnePageSummary;
+  diagnostics?: ReportDiagnostics;
+  actionItems?: ReportActionItem[];
+  nextTrainingTasks?: string[];
   contentCoverage: Array<{
     item: string;
     covered: "true" | "false" | "partial" | "INSUFFICIENT";
@@ -317,6 +342,68 @@ function validateDynamicFollowupReview(
   };
 }
 
+function validateOnePageSummary(
+  value: unknown,
+  fallback: {
+    summary: string;
+    strengths: string[];
+    weaknesses: string[];
+    suggestions: string[];
+  },
+): ReportOnePageSummary {
+  const record = isRecord(value) ? value : {};
+
+  return {
+    conclusion: safeString(record.conclusion, fallback.summary),
+    strongestPoint: safeString(
+      record.strongestPoint,
+      fallback.strengths[0] ?? "本轮暂未形成明确优势结论。",
+    ),
+    biggestWeakness: safeString(
+      record.biggestWeakness,
+      fallback.weaknesses[0] ?? "本轮暂未形成明确短板结论。",
+    ),
+    nextTrainingFocus: safeString(
+      record.nextTrainingFocus,
+      fallback.suggestions[0] ?? "下一轮建议先补齐路演中的关键证据。",
+    ),
+    readinessAdvice: safeString(
+      record.readinessAdvice,
+      "建议完成下一轮针对性训练后再进入正式展示。",
+    ),
+  };
+}
+
+function validateDiagnostics(value: unknown): ReportDiagnostics {
+  const record = isRecord(value) ? value : {};
+
+  return {
+    content: safeStringArray(record.content).slice(0, 4),
+    delivery: safeStringArray(record.delivery).slice(0, 4),
+    qa: safeStringArray(record.qa).slice(0, 4),
+  };
+}
+
+function validateActionItems(value: unknown): ReportActionItem[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((record): ReportActionItem => ({
+      issue: safeString(record.issue, "待优化问题暂未明确。"),
+      whyItMatters: safeString(
+        record.whyItMatters,
+        "该问题会影响评委对项目价值和可信度的判断。",
+      ),
+      howToFix: safeString(record.howToFix, "建议补充具体证据并重写相关表达。"),
+      sampleWording: safeString(
+        record.sampleWording,
+        "可替换话术需结合项目实际数据补充。",
+      ),
+    }))
+    .slice(0, 5);
+}
+
 export function validateTrainingAnalysisResult(
   analysisJson: unknown,
 ): TrainingAnalysisResult {
@@ -331,19 +418,39 @@ export function validateTrainingAnalysisResult(
     throw new Error("overallScore 必须是 0 到 100 的整数。");
   }
 
+  const summary = readString(analysis.summary, "summary");
+  const strengths = readStringArray(analysis.strengths, "strengths", {
+    max: 5,
+  });
+  const weaknesses = readStringArray(analysis.weaknesses, "weaknesses", {
+    min: 3,
+    max: 5,
+  });
+  const suggestions = readStringArray(analysis.suggestions, "suggestions", {
+    max: 5,
+  });
+
   return {
     overallScore,
-    summary: readString(analysis.summary, "summary"),
-    strengths: readStringArray(analysis.strengths, "strengths", {
-      max: 5,
+    summary,
+    strengths,
+    weaknesses,
+    suggestions,
+    onePageSummary: validateOnePageSummary(analysis.onePageSummary, {
+      summary,
+      strengths,
+      weaknesses,
+      suggestions,
     }),
-    weaknesses: readStringArray(analysis.weaknesses, "weaknesses", {
-      min: 3,
-      max: 5,
-    }),
-    suggestions: readStringArray(analysis.suggestions, "suggestions", {
-      max: 5,
-    }),
+    diagnostics: validateDiagnostics(analysis.diagnostics),
+    actionItems: validateActionItems(analysis.actionItems),
+    nextTrainingTasks: readStringArray(
+      analysis.nextTrainingTasks ?? suggestions,
+      "nextTrainingTasks",
+      {
+        max: 5,
+      },
+    ),
     contentCoverage: validateCoverage(analysis.contentCoverage),
     timing: readObject(analysis.timing, "timing"),
     slideSync: readObject(analysis.slideSync, "slideSync"),
