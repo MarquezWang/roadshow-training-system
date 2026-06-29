@@ -418,8 +418,8 @@ function parseActionItems(value: unknown) {
   }));
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-5xl flex-1 px-6 py-4 text-[var(--foreground)] sm:px-8 lg:px-10">
-      <div className="flex flex-col gap-3 border-b border-[var(--border)] pb-4 sm:flex-row sm:items-end sm:justify-between">
+    <main className="mx-auto min-h-screen w-full max-w-[1600px] flex-1 px-6 py-4 text-[var(--foreground)] sm:px-8 lg:px-10">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 border-b border-[var(--border)] pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-[var(--foreground)]">
             训练报告

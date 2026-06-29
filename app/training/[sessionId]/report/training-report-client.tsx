@@ -1,5 +1,10 @@
 "use client";
 
+import type {
+  PDFDocumentLoadingTask,
+  PDFDocumentProxy,
+  RenderTask,
+} from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatTranscriptErrorMessage, canRetryTranscript } from "@/lib/transcript-error-message";
@@ -438,6 +443,14 @@ const REPORT_GENERATION_STAGES = [
   "正在分析路演表达、内容完整度与答辩表现",
   "正在生成评分、评语与改进建议",
 ];
+const pdfWorkerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.mjs",
+  import.meta.url,
+).toString();
+const pdfCMapUrl = "/pdfjs/cmaps/";
+const pdfStandardFontDataUrl = "/pdfjs/standard_fonts/";
+const pdfWasmUrl = "/pdfjs/wasm/";
+const pdfIccUrl = "/pdfjs/iccs/";
 
 function getReportGenerationStageIndex(elapsedMs: number) {
   return Math.floor(elapsedMs / 30_000) % REPORT_GENERATION_STAGES.length;
@@ -602,20 +615,28 @@ export function TrainingReportClient({
     | "abort-pitch"
     | "abort-qa"
   >(isAborted ? "abort-overview" : "overview");
-  const contentRef = useRef<HTMLDivElement>(null);
   // 展开/收起：内容覆盖
   const [showAllCoverage, setShowAllCoverage] = useState(false);
   const [replayPageIndex, setReplayPageIndex] = useState(0);
   const [isReplayPlaying, setIsReplayPlaying] = useState(false);
   const [pageNotes, setPageNotes] = useState<Record<string, string>>({});
   const [isPageNotesLoaded, setIsPageNotesLoaded] = useState(false);
+  const [noteSavedMessage, setNoteSavedMessage] = useState("");
+  const [replayPdfDocument, setReplayPdfDocument] =
+    useState<PDFDocumentProxy | null>(null);
+  const [replayTotalPages, setReplayTotalPages] = useState<number | null>(null);
+  const [replayPdfError, setReplayPdfError] = useState("");
+  const [isReplayPdfLoading, setIsReplayPdfLoading] = useState(Boolean(previewFile));
+  const [replayRenderTick, setReplayRenderTick] = useState(0);
   const pitchReplayAudioRef = useRef<HTMLAudioElement | null>(null);
+  const replayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const replayPreviewContainerRef = useRef<HTMLDivElement | null>(null);
+  const replayRenderTaskRef = useRef<RenderTask | null>(null);
 
   useEffect(() => {
     if (!isAnalysisLoading || isAborted) {
       return undefined;
     }
-
     const startedAt = reportGenerationStartedAtRef.current || Date.now();
 
     if (reportGenerationStartedAtRef.current === 0) {
@@ -628,15 +649,6 @@ export function TrainingReportClient({
 
     return () => window.clearInterval(timer);
   }, [isAnalysisLoading, isAborted]);
-
-  // 切换 Tab 时回到内容顶部
-  useEffect(() => {
-    const el = contentRef.current;
-
-    if (el) {
-      el.scrollIntoView({ block: "start" });
-    }
-  }, [activeTab]);
 
   // 单一 status polling：定期检查 report/status，驱动整个自动生成流程
   useEffect(() => {
@@ -880,6 +892,186 @@ export function TrainingReportClient({
     ? `/api/files/${previewFile.id}/preview`
     : "";
   const replayPreviewPage = currentReplaySegment?.pageIndex ?? 1;
+
+  useEffect(() => {
+    if (!previewFile || !replayPreviewUrl) {
+      const timer = window.setTimeout(() => {
+        setReplayPdfDocument(null);
+        setReplayTotalPages(null);
+        setReplayPdfError("");
+        setIsReplayPdfLoading(false);
+      }, 0);
+
+      return () => window.clearTimeout(timer);
+    }
+
+    let cancelled = false;
+    let loadingTask: PDFDocumentLoadingTask | null = null;
+
+    const loadReplayPdf = async () => {
+      setReplayPdfError("");
+      setIsReplayPdfLoading(true);
+
+      try {
+        const pdfjs = await import("pdfjs-dist");
+        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+        loadingTask = pdfjs.getDocument({
+          url: replayPreviewUrl,
+          cMapUrl: pdfCMapUrl,
+          cMapPacked: true,
+          standardFontDataUrl: pdfStandardFontDataUrl,
+          wasmUrl: pdfWasmUrl,
+          useWasm: true,
+          iccUrl: pdfIccUrl,
+          useSystemFonts: false,
+          disableFontFace: true,
+          isEvalSupported: true,
+          fontExtraProperties: true,
+        });
+        const pdfDocument = await loadingTask.promise;
+
+        if (cancelled) {
+          pdfDocument.destroy();
+          return;
+        }
+
+        setReplayPdfDocument(pdfDocument);
+        setReplayTotalPages(pdfDocument.numPages);
+      } catch {
+        if (!cancelled) {
+          setReplayPdfDocument(null);
+          setReplayTotalPages(null);
+          setReplayPdfError("材料预览加载失败，请返回训练页检查展示材料。");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsReplayPdfLoading(false);
+        }
+      }
+    };
+
+    void loadReplayPdf();
+
+    return () => {
+      cancelled = true;
+      loadingTask?.destroy();
+    };
+  }, [previewFile, replayPreviewUrl]);
+
+  useEffect(() => {
+    if (activeTab !== "replay" || !replayPdfDocument || !currentReplaySegment) {
+      return undefined;
+    }
+
+    const canvas = replayCanvasRef.current;
+    const container = replayPreviewContainerRef.current;
+
+    if (!canvas || !container) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const renderReplayPage = async () => {
+      try {
+        replayRenderTaskRef.current?.cancel();
+        const pageNumber = Math.min(
+          Math.max(1, replayPreviewPage),
+          replayPdfDocument.numPages,
+        );
+        const page = await replayPdfDocument.getPage(pageNumber);
+
+        if (cancelled) {
+          return;
+        }
+
+        const baseViewport = page.getViewport({ scale: 1 });
+        const containerWidth = Math.max(container.clientWidth - 24, 320);
+        const containerHeight = Math.max(container.clientHeight - 24, 320);
+        const scale = Math.min(
+          containerWidth / baseViewport.width,
+          containerHeight / baseViewport.height,
+        );
+        const viewport = page.getViewport({ scale });
+        const outputScale = window.devicePixelRatio || 1;
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+          return;
+        }
+
+        canvas.width = Math.floor(viewport.width * outputScale);
+        canvas.height = Math.floor(viewport.height * outputScale);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+        const renderTask = page.render({
+          canvas,
+          canvasContext: context,
+          transform:
+            outputScale !== 1
+              ? ([
+                  outputScale,
+                  0,
+                  0,
+                  outputScale,
+                  0,
+                  0,
+                ] as [number, number, number, number, number, number])
+              : undefined,
+          viewport,
+        });
+        replayRenderTaskRef.current = renderTask;
+        await renderTask.promise;
+      } catch (error) {
+        if (
+          !cancelled &&
+          error instanceof Error &&
+          error.name !== "RenderingCancelledException"
+        ) {
+          setReplayPdfError("当前页预览渲染失败，请切换页面或重新进入报告。");
+        }
+      }
+    };
+
+    void renderReplayPage();
+
+    return () => {
+      cancelled = true;
+      replayRenderTaskRef.current?.cancel();
+      replayRenderTaskRef.current = null;
+    };
+  }, [
+    activeTab,
+    currentReplaySegment,
+    replayPdfDocument,
+    replayPreviewPage,
+    replayRenderTick,
+  ]);
+
+  useEffect(() => {
+    if (activeTab !== "replay") {
+      return undefined;
+    }
+
+    const container = replayPreviewContainerRef.current;
+
+    if (!container) {
+      return undefined;
+    }
+
+    window.requestAnimationFrame(() => {
+      setReplayRenderTick((prev) => prev + 1);
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      setReplayRenderTick((prev) => prev + 1);
+    });
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, [activeTab, previewFile]);
+
   const replayTranscriptExcerpt = useMemo(
     () =>
       getTranscriptExcerptForSegment(
@@ -1259,10 +1451,12 @@ export function TrainingReportClient({
     }
   }
 
+  const isReplayTab = activeTab === "replay";
+
   return (
-    <div className="grid gap-5">
+    <div className={isReplayTab ? "grid gap-5" : "mx-auto grid w-full max-w-5xl gap-5"}>
       {/* === Tab 导航（sticky） === */}
-      <nav className="sticky top-0 z-10 -mx-6 border-b border-[var(--border)] bg-[var(--surface)]/95 px-6 backdrop-blur sm:-mx-8 sm:px-8 lg:-mx-10 lg:px-10">
+      <nav className="sticky top-0 z-10 rounded-t-lg border-b border-[var(--border)] bg-[var(--surface)]/95 px-6 backdrop-blur">
         {isAborted
           ? [
               { key: "abort-overview" as const, label: "中止概览" },
@@ -1306,7 +1500,7 @@ export function TrainingReportClient({
       </nav>
 
       {/* === Tab 内容区 === */}
-      <div ref={contentRef} className="scroll-mt-14">
+      <div>
         {/* === 中止态：中止概览 Tab === */}
         {activeTab === "abort-overview" && (
           <div className="grid gap-6">
@@ -1905,25 +2099,25 @@ export function TrainingReportClient({
       {/* === 路演回放 Tab === */}
       {activeTab === "replay" && (
         <div className="grid gap-6">
-          <section className="rounded-lg border border-slate-100 bg-white p-6">
+          <section className="rounded-lg border border-slate-800 bg-slate-950/70 p-4 shadow-2xl shadow-slate-950/30">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-slate-800">
+                <h2 className="text-sm font-semibold text-slate-100">
                   路演逐页回放
                 </h2>
-                <p className="mt-1 text-xs text-slate-400">
+                <p className="mt-1 text-xs text-slate-500">
                   按训练时翻页记录回看材料、音频片段、转写和个人笔记。
                 </p>
               </div>
-              <div className="text-xs text-slate-400">
+              <div className="text-xs text-slate-500">
                 {pitchReplaySegments.length > 0
                   ? `共 ${pitchReplaySegments.length} 个页面片段`
                   : "暂无翻页片段"}
               </div>
             </div>
 
-            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
-              <div className="rounded-lg border border-slate-100 bg-slate-950 p-3">
+            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_380px]">
+              <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-xs font-medium text-slate-200">
@@ -1931,7 +2125,9 @@ export function TrainingReportClient({
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
                       {currentReplaySegment
-                        ? `当前第 ${currentReplaySegment.pageIndex} 页`
+                        ? `当前第 ${currentReplaySegment.pageIndex} 页${
+                            replayTotalPages ? ` / ${replayTotalPages}` : ""
+                          }`
                         : previewNotice ?? "未记录可回放的页面片段。"}
                     </p>
                   </div>
@@ -1968,14 +2164,27 @@ export function TrainingReportClient({
                   </div>
                 </div>
 
-                <div className="flex min-h-[420px] items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-950">
+                <div
+                  ref={replayPreviewContainerRef}
+                  className="relative flex h-[74vh] min-h-[640px] items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-950 p-3"
+                >
                   {previewFile && currentReplaySegment ? (
-                    <iframe
-                      key={`${previewFile.id}-${replayPreviewPage}`}
-                      src={`${replayPreviewUrl}#page=${replayPreviewPage}`}
-                      title={`第 ${replayPreviewPage} 页材料预览`}
-                      className="h-[70vh] min-h-[420px] w-full bg-slate-950"
-                    />
+                    <>
+                      <canvas
+                        ref={replayCanvasRef}
+                        className="max-h-full max-w-full rounded-sm bg-white shadow-2xl shadow-slate-950/40"
+                      />
+                      {isReplayPdfLoading ? (
+                        <div className="absolute rounded-md bg-slate-950/80 px-3 py-2 text-xs text-slate-300">
+                          正在加载材料预览...
+                        </div>
+                      ) : null}
+                      {replayPdfError ? (
+                        <div className="absolute max-w-sm rounded-md border border-red-500/30 bg-red-950/80 px-4 py-3 text-center text-sm text-red-100">
+                          {replayPdfError}
+                        </div>
+                      ) : null}
+                    </>
                   ) : (
                     <div className="px-6 text-center text-sm text-slate-400">
                       <p>{previewNotice ?? "当前没有可预览的 PDF 材料。"}</p>
@@ -1995,8 +2204,8 @@ export function TrainingReportClient({
                         onClick={() => setReplayPageIndex(index)}
                         className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
                           index === safeReplayPageIndex
-                            ? "border-slate-900 bg-slate-900 text-white"
-                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                            ? "border-teal-400 bg-teal-400/15 text-teal-100"
+                            : "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
                         }`}
                       >
                         第 {segment.pageIndex} 页 ·{" "}
@@ -2008,8 +2217,8 @@ export function TrainingReportClient({
               </div>
 
               <aside className="grid content-start gap-4">
-                <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-4">
-                  <h3 className="text-sm font-semibold text-slate-800">
+                <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
+                  <h3 className="text-sm font-semibold text-slate-100">
                     对应该页的路演音频切分
                   </h3>
                   {recording && currentReplaySegment ? (
@@ -2027,14 +2236,14 @@ export function TrainingReportClient({
                         <button
                           type="button"
                           onClick={() => void playCurrentReplaySegment()}
-                          className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-slate-800"
+                          className="rounded-md bg-teal-400/90 px-3 py-1.5 text-xs font-medium text-slate-950 transition-colors hover:bg-teal-300"
                         >
                           {isReplayPlaying ? "重新播放本页" : "播放本页片段"}
                         </button>
                         <button
                           type="button"
                           onClick={pauseCurrentReplaySegment}
-                          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800"
                         >
                           暂停
                         </button>
@@ -2055,8 +2264,8 @@ export function TrainingReportClient({
                   )}
                 </div>
 
-                <div className="rounded-lg border border-slate-100 bg-white p-4">
-                  <h3 className="text-sm font-semibold text-slate-800">
+                <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
+                  <h3 className="text-sm font-semibold text-slate-100">
                     对应该页的音频转写
                   </h3>
                   <p className="mt-1 text-xs text-slate-400">
@@ -2071,31 +2280,48 @@ export function TrainingReportClient({
                         ? " · 按页面用时粗略匹配"
                         : ""}
                   </p>
-                  <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-100 bg-slate-50/60 p-3 text-sm leading-6 text-slate-600">
+                  <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/70 p-3 text-sm leading-6 text-slate-300">
                     {replayTranscriptExcerpt.text ||
                       "暂无可匹配的本页转写片段。新训练若使用腾讯云极速版时间戳，将按本页音频时间精确匹配。"}
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-100 bg-white p-4">
-                  <h3 className="text-sm font-semibold text-slate-800">笔记</h3>
+                <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
+                  <h3 className="text-sm font-semibold text-slate-100">笔记</h3>
                   <p className="mt-1 text-xs text-slate-400">
                     记录这一页讲得不好的地方、需要补充的证据或下一轮改法。
                   </p>
                   <textarea
                     value={pageNotes[replayNoteKey] ?? ""}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      setNoteSavedMessage("");
                       setPageNotes((prev) => ({
                         ...prev,
                         [replayNoteKey]: event.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                     placeholder="例如：这一页背景痛点讲得太泛，需要补一个真实客户场景。"
-                    className="mt-3 min-h-36 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition-colors focus:border-slate-400"
+                    className="mt-3 min-h-36 w-full resize-y rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm leading-6 text-slate-200 outline-none transition-colors placeholder:text-slate-600 focus:border-teal-400"
                   />
-                  <p className="mt-2 text-xs text-slate-400">
-                    笔记会保存在当前浏览器本地。
-                  </p>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <p className="text-xs text-slate-400">
+                      笔记会保存在当前浏览器本地。
+                    </p>
+                    <div className="flex items-center gap-2">
+                      {noteSavedMessage ? (
+                        <span className="text-xs text-emerald-600">
+                          {noteSavedMessage}
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setNoteSavedMessage("已记录")}
+                        className="rounded-md bg-teal-400/90 px-3 py-1.5 text-xs font-medium text-slate-950 transition-colors hover:bg-teal-300"
+                      >
+                        记录
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </aside>
             </div>
