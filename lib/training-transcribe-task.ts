@@ -255,7 +255,10 @@ async function runTranscription(
       });
 
       try {
-        const text = await transcribeAudio(target.absolutePath, target.mimeType);
+        const transcription = await transcribeAudio(
+          target.absolutePath,
+          target.mimeType,
+        );
         const completedAt = new Date();
 
         const updated = await prisma.trainingTranscript.update({
@@ -264,7 +267,11 @@ async function runTranscription(
           },
           data: {
             status: "COMPLETED",
-            text,
+            text: transcription.text,
+            segmentsJson:
+              transcription.segments.length > 0
+                ? JSON.stringify(transcription.segments)
+                : null,
             completedAt,
             errorMessage: null,
           },

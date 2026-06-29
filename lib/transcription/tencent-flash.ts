@@ -3,6 +3,10 @@ import { execFile } from "child_process";
 import { mkdir, readFile, rm, stat } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
+import type {
+  TranscriptionResult,
+  TranscriptionSegment,
+} from "@/lib/transcription";
 import {
   TranscribeBusinessError,
   TranscribeEmptyResultError,
@@ -28,6 +32,12 @@ type TencentFlashConfig = {
 
 type TencentFlashSentence = {
   text?: string;
+  start_time?: number;
+  end_time?: number;
+  startTime?: number;
+  endTime?: number;
+  speaker_id?: string | number;
+  speakerId?: string | number;
 };
 
 type TencentFlashResult = {
@@ -160,7 +170,7 @@ function buildQueryParams(config: TencentFlashConfig) {
     speaker_diarization: "0",
     timestamp: String(Math.floor(Date.now() / 1000)),
     voice_format: config.voiceFormat,
-    word_info: "0",
+    word_info: process.env.TENCENT_ASR_FLASH_WORD_INFO?.trim() || "3",
   };
 }
 
@@ -183,8 +193,54 @@ function buildSignedUrl(config: TencentFlashConfig) {
   };
 }
 
-function extractTencentFlashText(result: TencentFlashResponse) {
-  return (result.flash_result ?? [])
+function readTencentFlashTimeMs(value: unknown) {
+  const numberValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : NaN;
+
+  return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null;
+}
+
+function normalizeTencentFlashSegments(result: TencentFlashResponse) {
+  const segments: TranscriptionSegment[] = [];
+
+  for (const item of result.flash_result ?? []) {
+    for (const sentence of item.sentence_list ?? []) {
+      const text = (sentence.text ?? "").trim();
+      const startMs = readTencentFlashTimeMs(
+        sentence.start_time ?? sentence.startTime,
+      );
+      const endMs = readTencentFlashTimeMs(sentence.end_time ?? sentence.endTime);
+
+      if (!text || startMs === null || endMs === null || endMs <= startMs) {
+        continue;
+      }
+
+      segments.push({
+        startMs,
+        endMs,
+        text,
+        speakerId:
+          sentence.speaker_id !== undefined
+            ? String(sentence.speaker_id)
+            : sentence.speakerId !== undefined
+              ? String(sentence.speakerId)
+              : null,
+      });
+    }
+  }
+
+  return segments.sort((left, right) => left.startMs - right.startMs);
+}
+
+function extractTencentFlashResult(
+  result: TencentFlashResponse,
+): TranscriptionResult {
+  const segments = normalizeTencentFlashSegments(result);
+  const text = (result.flash_result ?? [])
     .map((item) => {
       const sentenceText = item.sentence_list
         ?.map((sentence) => sentence.text ?? "")
@@ -196,6 +252,11 @@ function extractTencentFlashText(result: TencentFlashResponse) {
     .join("")
     .replace(/\s+/g, " ")
     .trim();
+
+  return {
+    text,
+    segments,
+  };
 }
 
 async function callTencentFlashApi(
@@ -249,7 +310,7 @@ async function callTencentFlashApi(
 
 export async function transcribeWithTencentFlash(
   filePath: string,
-): Promise<string> {
+): Promise<TranscriptionResult> {
   const config = getTencentFlashConfig();
   const absolutePath = path.resolve(filePath);
   let convertedPath: string | null = null;
@@ -260,16 +321,16 @@ export async function transcribeWithTencentFlash(
 
     const audioBuffer = await readFile(converted.outputPath);
     const result = await callTencentFlashApi(config, audioBuffer);
-    const text = extractTencentFlashText(result);
+    const transcription = extractTencentFlashResult(result);
 
-    if (!text) {
+    if (!transcription.text) {
       throw new TranscribeEmptyResultError(
         "未识别到有效语音内容，请确认录音时已正常发声。",
         `ASR_EMPTY_RESULT provider=tencent_flash requestId=${result.request_id ?? "unknown"}`,
       );
     }
 
-    return text;
+    return transcription;
   } finally {
     if (convertedPath) {
       await rm(convertedPath, { force: true }).catch(() => {

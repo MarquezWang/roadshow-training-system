@@ -3,6 +3,10 @@ import { execFile } from "child_process";
 import { mkdir, readFile, rm, stat } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
+import type {
+  TranscriptionResult,
+  TranscriptionSegment,
+} from "@/lib/transcription";
 import { TranscribeBusinessError } from "@/lib/transcribe-error";
 
 const execFileAsync = promisify(execFile);
@@ -51,6 +55,11 @@ type DescribeTaskStatusResponse = {
     ResultDetail?: Array<{
       FinalSentence?: string;
       SliceSentence?: string;
+      StartMs?: number | string;
+      EndMs?: number | string;
+      StartTime?: number | string;
+      EndTime?: number | string;
+      SpeakerId?: string | number;
     }>;
   };
 };
@@ -244,7 +253,50 @@ async function convertToTencentMp3(inputPath: string) {
   };
 }
 
-function extractTencentResultText(data: NonNullable<DescribeTaskStatusResponse["Data"]>) {
+function readTencentTimeMs(value: unknown) {
+  const numberValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : NaN;
+
+  return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null;
+}
+
+function extractTencentSegments(
+  data: NonNullable<DescribeTaskStatusResponse["Data"]>,
+) {
+  const segments: TranscriptionSegment[] = [];
+
+  for (const item of data.ResultDetail ?? []) {
+    const text = (item.FinalSentence || item.SliceSentence || "")
+      .replace(/\[\d+:\d+(?:\.\d+)?,\d+:\d+(?:\.\d+)?\]/g, "")
+      .trim();
+    const startMs = readTencentTimeMs(item.StartMs ?? item.StartTime);
+    const endMs = readTencentTimeMs(item.EndMs ?? item.EndTime);
+
+    if (!text || startMs === null || endMs === null || endMs <= startMs) {
+      continue;
+    }
+
+    segments.push({
+      startMs,
+      endMs,
+      text,
+      speakerId:
+        item.SpeakerId !== undefined && item.SpeakerId !== null
+          ? String(item.SpeakerId)
+          : null,
+    });
+  }
+
+  return segments.sort((left, right) => left.startMs - right.startMs);
+}
+
+function extractTencentResult(
+  data: NonNullable<DescribeTaskStatusResponse["Data"]>,
+): TranscriptionResult {
   const detailText = data.ResultDetail?.map(
     (item) => item.FinalSentence || item.SliceSentence || "",
   )
@@ -252,10 +304,13 @@ function extractTencentResultText(data: NonNullable<DescribeTaskStatusResponse["
     .trim();
   const rawText = (data.Result ?? "").trim();
 
-  return (detailText || rawText)
-    .replace(/\[\d+:\d+(?:\.\d+)?,\d+:\d+(?:\.\d+)?\]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return {
+    text: (detailText || rawText)
+      .replace(/\[\d+:\d+(?:\.\d+)?,\d+:\d+(?:\.\d+)?\]/g, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    segments: extractTencentSegments(data),
+  };
 }
 
 function isTencentTaskSucceeded(status: unknown, statusText: string) {
@@ -286,16 +341,16 @@ async function pollTencentResult(taskId: number, config: TencentAsrConfig) {
     const statusText = String(data.StatusStr ?? "").toLowerCase();
 
     if (isTencentTaskSucceeded(data.Status, statusText)) {
-      const text = extractTencentResultText(data);
+      const result = extractTencentResult(data);
 
-      if (!text) {
+      if (!result.text) {
         throw new TranscribeBusinessError(
           "转写结果为空，可能是录音声音过小或没有有效语音内容。",
           `腾讯云 ASR 任务 ${taskId} 成功但结果为空。`,
         );
       }
 
-      return text;
+      return result;
     }
 
     if (isTencentTaskFailed(data.Status, statusText)) {
@@ -314,7 +369,7 @@ async function pollTencentResult(taskId: number, config: TencentAsrConfig) {
 
 export async function transcribeWithTencent(
   filePath: string,
-): Promise<string> {
+): Promise<TranscriptionResult> {
   const config = getTencentAsrConfig();
   const absolutePath = path.resolve(filePath);
   let convertedPath: string | null = null;

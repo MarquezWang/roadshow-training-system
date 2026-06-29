@@ -122,6 +122,7 @@ export async function POST(
       source,
       language: normalizeLanguage(body?.language),
       text,
+      segmentsJson: null,
       completedAt: now,
     },
     update: {
@@ -129,6 +130,7 @@ export async function POST(
       source,
       language: normalizeLanguage(body?.language),
       text,
+      segmentsJson: null,
       errorMessage: null,
       completedAt: now,
     },

@@ -9,6 +9,34 @@ const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
 
 export type TranscriptionProvider = "openai" | "xfyun" | "tencent" | "tencent_flash";
 
+export type TranscriptionSegment = {
+  startMs: number;
+  endMs: number;
+  text: string;
+  speakerId?: string | null;
+};
+
+export type TranscriptionResult = {
+  text: string;
+  segments: TranscriptionSegment[];
+};
+
+export function normalizeTranscriptionResult(
+  result: string | TranscriptionResult,
+): TranscriptionResult {
+  if (typeof result === "string") {
+    return {
+      text: result,
+      segments: [],
+    };
+  }
+
+  return {
+    text: result.text,
+    segments: Array.isArray(result.segments) ? result.segments : [],
+  };
+}
+
 export function getTranscriptionProvider(): TranscriptionProvider {
   const provider = (process.env.TRANSCRIPTION_PROVIDER ?? "openai")
     .trim()
@@ -104,34 +132,38 @@ async function transcribeWithOpenAI(
 export async function transcribeAudio(
   filePath: string,
   mimeType?: string | null,
-): Promise<string> {
+): Promise<TranscriptionResult> {
   const provider = getTranscriptionProvider();
   const startedAt = Date.now();
 
   try {
-    let text: string;
+    let result: TranscriptionResult;
 
     switch (provider) {
       case "tencent_flash":
-        text = await transcribeWithTencentFlash(filePath);
+        result = normalizeTranscriptionResult(
+          await transcribeWithTencentFlash(filePath),
+        );
         break;
       case "tencent":
-        text = await transcribeWithTencent(filePath);
+        result = normalizeTranscriptionResult(await transcribeWithTencent(filePath));
         break;
       case "xfyun":
-        text = await transcribeWithXfyun(filePath, mimeType);
+        result = normalizeTranscriptionResult(
+          await transcribeWithXfyun(filePath, mimeType),
+        );
         break;
       case "openai":
       default:
-        text = await transcribeWithOpenAI(filePath);
+        result = normalizeTranscriptionResult(await transcribeWithOpenAI(filePath));
         break;
     }
 
     console.log(
-      `[ASR] provider=${provider} elapsedMs=${Date.now() - startedAt} ok=true textLength=${text.trim().length}`,
+      `[ASR] provider=${provider} elapsedMs=${Date.now() - startedAt} ok=true textLength=${result.text.trim().length} segments=${result.segments.length}`,
     );
 
-    return text;
+    return result;
   } catch (error) {
     console.warn(
       `[ASR] provider=${provider} elapsedMs=${Date.now() - startedAt} ok=false error=${getAsrErrorSummary(error)}`,
