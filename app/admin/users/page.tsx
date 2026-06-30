@@ -65,10 +65,10 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
           </p>
         </div>
         <Link
-          href="/projects"
+          href="/admin"
           className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
         >
-          返回项目列表
+          返回
         </Link>
       </div>
 

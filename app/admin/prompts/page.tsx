@@ -5,13 +5,31 @@ import { requireAdminUser } from "@/lib/auth-server";
 
 export const dynamic = "force-dynamic";
 
+type PromptModel = "fast" | "strong" | "待确认";
+type PromptRisk = "高" | "中" | "低" | "待确认";
+type PromptStatus = "已接入" | "未接入";
+
 type PromptAsset = {
   file: string;
   task: string;
   route: string;
-  model: "fast" | "strong" | "待确认";
-  risk: "高" | "中" | "低" | "待确认";
+  model: PromptModel;
+  risk: PromptRisk;
   output: string;
+  status: PromptStatus;
+};
+
+type PromptRow = PromptAsset & {
+  size: number;
+  updatedAt: Date;
+};
+
+type AdminPromptsPageProps = {
+  searchParams?: Promise<{
+    model?: string;
+    risk?: string;
+    status?: string;
+  }>;
 };
 
 const PROMPTS_DIR = path.resolve(process.cwd(), "prompts");
@@ -26,6 +44,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "高",
     output: "项目名称、简介、领域、应用场景、关键词、产品形态",
+    status: "已接入",
   },
   "project-trl-evidence-recognition.md": {
     file: "project-trl-evidence-recognition.md",
@@ -34,6 +53,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "高",
     output: "交付物类型、证据矩阵、缺失证据、置信度",
+    status: "已接入",
   },
   "training-qa-question-generation.md": {
     file: "training-qa-question-generation.md",
@@ -42,6 +62,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "高",
     output: "Q1/Q2/Q3 评委问题",
+    status: "已接入",
   },
   "dynamic-followup.md": {
     file: "dynamic-followup.md",
@@ -50,6 +71,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "高",
     output: "一个追问或 NO_DYNAMIC_FOLLOWUP",
+    status: "已接入",
   },
   "dynamic-followup-mismatch.md": {
     file: "dynamic-followup-mismatch.md",
@@ -58,6 +80,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "中",
     output: "一个追问或 NO_DYNAMIC_FOLLOWUP",
+    status: "已接入",
   },
   "dynamic-followup-content.md": {
     file: "dynamic-followup-content.md",
@@ -66,6 +89,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "中",
     output: "一个追问",
+    status: "已接入",
   },
   "pitch-performance-analysis.md": {
     file: "pitch-performance-analysis.md",
@@ -74,6 +98,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "高",
     output: "评分、结论、优势、短板、改进建议",
+    status: "已接入",
   },
   "question-generation.md": {
     file: "question-generation.md",
@@ -82,6 +107,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "中",
     output: "模拟评委问题",
+    status: "已接入",
   },
   "material-diagnosis.md": {
     file: "material-diagnosis.md",
@@ -90,6 +116,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "中",
     output: "材料问题、优化建议",
+    status: "已接入",
   },
   "scoring.md": {
     file: "scoring.md",
@@ -98,6 +125,7 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "strong",
     risk: "中",
     output: "评分维度或评分建议",
+    status: "已接入",
   },
   "project-summary.md": {
     file: "project-summary.md",
@@ -106,24 +134,31 @@ const promptAssets: Record<string, PromptAsset> = {
     model: "fast",
     risk: "低",
     output: "轻量摘要或测试返回",
+    status: "已接入",
   },
   "answer-feedback.md": {
     file: "answer-feedback.md",
-    task: "未接入：答案反馈",
+    task: "答案反馈",
     route: "当前未发现调用",
     model: "待确认",
     risk: "低",
     output: "历史模板，后续确认是否清理",
+    status: "未接入",
   },
   "final-report.md": {
     file: "final-report.md",
-    task: "未接入：旧报告模板",
+    task: "旧报告模板",
     route: "当前未发现调用",
     model: "待确认",
     risk: "低",
     output: "历史模板，后续确认是否清理",
+    status: "未接入",
   },
 };
+
+const modelOptions = ["全部", "strong", "fast", "待确认"] as const;
+const riskOptions = ["全部", "高", "中", "低", "待确认"] as const;
+const statusOptions = ["全部", "已接入", "未接入"] as const;
 
 function formatDate(value: Date) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -143,7 +178,7 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
-function getRiskClass(risk: PromptAsset["risk"]) {
+function getRiskClass(risk: PromptRisk) {
   switch (risk) {
     case "高":
       return "border-rose-200 bg-rose-50 text-rose-700";
@@ -154,6 +189,86 @@ function getRiskClass(risk: PromptAsset["risk"]) {
     case "待确认":
       return "border-slate-200 bg-slate-50 text-slate-500";
   }
+}
+
+function getStatusClass(status: PromptStatus) {
+  return status === "已接入"
+    ? "border-teal-200 bg-teal-50 text-teal-700"
+    : "border-slate-200 bg-slate-50 text-slate-500";
+}
+
+function createFilterHref({
+  model,
+  risk,
+  status,
+}: {
+  model: string;
+  risk: string;
+  status: string;
+}) {
+  const params = new URLSearchParams();
+
+  if (model !== "全部") {
+    params.set("model", model);
+  }
+
+  if (risk !== "全部") {
+    params.set("risk", risk);
+  }
+
+  if (status !== "全部") {
+    params.set("status", status);
+  }
+
+  const query = params.toString();
+  return query ? `/admin/prompts?${query}` : "/admin/prompts";
+}
+
+function FilterGroup({
+  label,
+  options,
+  active,
+  current,
+  param,
+}: {
+  label: string;
+  options: readonly string[];
+  active: string;
+  current: {
+    model: string;
+    risk: string;
+    status: string;
+  };
+  param: "model" | "risk" | "status";
+}) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {options.map((option) => {
+          const next = {
+            ...current,
+            [param]: option,
+          };
+          const isActive = option === active;
+
+          return (
+            <Link
+              key={option}
+              href={createFilterHref(next)}
+              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                isActive
+                  ? "border-slate-950 bg-slate-950 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+              }`}
+            >
+              {option}
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 async function loadPromptRows() {
@@ -179,6 +294,7 @@ async function loadPromptRows() {
         model: "待确认" as const,
         risk: "待确认" as const,
         output: "未登记",
+        status: "未接入" as const,
       };
 
       return {
@@ -230,22 +346,64 @@ async function loadChangelogPreview() {
           !line.includes("YYYY-MM-DD") &&
           line !== "Prompt 变更记录",
       )
-      .slice(0, 5)
+      .slice(0, 5);
   } catch {
     return [];
   }
 }
 
-export default async function AdminPromptsPage() {
+function filterPrompts(
+  prompts: PromptRow[],
+  filters: { model: string; risk: string; status: string },
+) {
+  return prompts.filter((prompt) => {
+    if (filters.model !== "全部" && prompt.model !== filters.model) {
+      return false;
+    }
+
+    if (filters.risk !== "全部" && prompt.risk !== filters.risk) {
+      return false;
+    }
+
+    if (filters.status !== "全部" && prompt.status !== filters.status) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+export default async function AdminPromptsPage({
+  searchParams,
+}: AdminPromptsPageProps) {
   await requireAdminUser();
+
+  const params = (await searchParams) ?? {};
+  const filters = {
+    model: modelOptions.includes(params.model as (typeof modelOptions)[number])
+      ? params.model ?? "全部"
+      : "全部",
+    risk: riskOptions.includes(params.risk as (typeof riskOptions)[number])
+      ? params.risk ?? "全部"
+      : "全部",
+    status: statusOptions.includes(
+      params.status as (typeof statusOptions)[number],
+    )
+      ? params.status ?? "全部"
+      : "全部",
+  };
 
   const [prompts, testSuites, changelogItems] = await Promise.all([
     loadPromptRows(),
     loadTestSuites(),
     loadChangelogPreview(),
   ]);
+  const filteredPrompts = filterPrompts(prompts, filters);
   const strongCount = prompts.filter((prompt) => prompt.model === "strong").length;
   const highRiskCount = prompts.filter((prompt) => prompt.risk === "高").length;
+  const integratedCount = prompts.filter(
+    (prompt) => prompt.status === "已接入",
+  ).length;
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
@@ -259,20 +417,12 @@ export default async function AdminPromptsPage() {
             只读查看当前 Prompt 资产、调用位置、模型档位、风险等级和测试样本。这里不提供在线编辑，避免误改线上 AI 行为。
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            href="/admin"
-            className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-          >
-            后台首页
-          </Link>
-          <Link
-            href="/projects"
-            className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-          >
-            返回项目列表
-          </Link>
-        </div>
+        <Link
+          href="/admin"
+          className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+        >
+          返回
+        </Link>
       </div>
 
       <section className="mt-6 grid gap-4 md:grid-cols-4">
@@ -280,6 +430,12 @@ export default async function AdminPromptsPage() {
           <p className="text-sm text-slate-500">Prompt 文件</p>
           <p className="mt-2 text-3xl font-semibold text-slate-950">
             {prompts.length}
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-sm text-slate-500">已接入</p>
+          <p className="mt-2 text-3xl font-semibold text-teal-700">
+            {integratedCount}
           </p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -294,64 +450,104 @@ export default async function AdminPromptsPage() {
             {highRiskCount}
           </p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">测试样本集</p>
-          <p className="mt-2 text-3xl font-semibold text-slate-950">
-            {testSuites.length}
-          </p>
+      </section>
+
+      <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="grid gap-5 lg:grid-cols-3">
+          <FilterGroup
+            label="模型档位"
+            options={modelOptions}
+            active={filters.model}
+            current={filters}
+            param="model"
+          />
+          <FilterGroup
+            label="风险等级"
+            options={riskOptions}
+            active={filters.risk}
+            current={filters}
+            param="risk"
+          />
+          <FilterGroup
+            label="接入状态"
+            options={statusOptions}
+            active={filters.status}
+            current={filters}
+            param="status"
+          />
         </div>
       </section>
 
       <section className="mt-6 rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 px-5 py-4">
-          <h2 className="text-base font-semibold text-slate-950">
-            Prompt 资产清单
-          </h2>
-          <p className="mt-1 text-sm text-slate-500">
-            修改 Prompt 前，先确认任务、风险和对应回归样本。
-          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-slate-950">
+                Prompt 资产清单
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                修改 Prompt 前，先确认任务、风险和对应回归样本。
+              </p>
+            </div>
+            <p className="text-sm text-slate-500">
+              当前显示 {filteredPrompts.length} / {prompts.length}
+            </p>
+          </div>
         </div>
 
         <div className="grid gap-3 p-5">
-          {prompts.map((prompt) => (
-            <article
-              key={prompt.file}
-              className="rounded-lg border border-slate-100 bg-slate-50/70 p-4"
-            >
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="font-mono text-sm font-semibold text-slate-950">
-                      {prompt.file}
-                    </h3>
-                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700">
-                      {prompt.model}
-                    </span>
-                    <span
-                      className={`rounded-full border px-2.5 py-1 text-xs font-medium ${getRiskClass(
-                        prompt.risk,
-                      )}`}
-                    >
-                      {prompt.risk}
-                    </span>
+          {filteredPrompts.length > 0 ? (
+            filteredPrompts.map((prompt) => (
+              <article
+                key={prompt.file}
+                className="rounded-lg border border-slate-100 bg-slate-50/70 p-4"
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-mono text-sm font-semibold text-slate-950">
+                        {prompt.file}
+                      </h3>
+                      <span
+                        className={`rounded-full border px-2.5 py-1 text-xs font-medium ${getStatusClass(
+                          prompt.status,
+                        )}`}
+                      >
+                        {prompt.status}
+                      </span>
+                      <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700">
+                        {prompt.model}
+                      </span>
+                      <span
+                        className={`rounded-full border px-2.5 py-1 text-xs font-medium ${getRiskClass(
+                          prompt.risk,
+                        )}`}
+                      >
+                        {prompt.risk}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm font-medium text-slate-800">
+                      {prompt.task}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      {prompt.output}
+                    </p>
                   </div>
-                  <p className="mt-2 text-sm font-medium text-slate-800">
-                    {prompt.task}
-                  </p>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
-                    {prompt.output}
-                  </p>
+                  <div className="shrink-0 text-left text-xs text-slate-500 lg:text-right">
+                    <p>{formatBytes(prompt.size)}</p>
+                    <p className="mt-1">{formatDate(prompt.updatedAt)}</p>
+                  </div>
                 </div>
-                <div className="shrink-0 text-left text-xs text-slate-500 lg:text-right">
-                  <p>{formatBytes(prompt.size)}</p>
-                  <p className="mt-1">{formatDate(prompt.updatedAt)}</p>
+                <div className="mt-3 rounded-md border border-slate-100 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-500">
+                  {prompt.route}
                 </div>
-              </div>
-              <div className="mt-3 rounded-md border border-slate-100 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-500">
-                {prompt.route}
-              </div>
-            </article>
-          ))}
+              </article>
+            ))
+          ) : (
+            <p className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              当前筛选条件下没有 Prompt。
+            </p>
+          )}
         </div>
       </section>
 

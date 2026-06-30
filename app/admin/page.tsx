@@ -18,16 +18,16 @@ const adminModules = [
     status: "已启用",
   },
   {
+    title: "系统状态",
+    description: "集中查看 AI、ASR、LibreOffice 和预览链路配置状态。",
+    href: "/admin/system",
+    status: "已启用",
+  },
+  {
     title: "更新日志",
     description: "查看内部测试阶段的版本变更记录。",
     href: "/changelog",
     status: "已启用",
-  },
-  {
-    title: "系统状态",
-    description: "后续集中展示 AI、ASR、LibreOffice 和预览链路状态。",
-    href: null,
-    status: "规划中",
   },
   {
     title: "内部测试清单",
@@ -99,22 +99,14 @@ export default async function AdminHomePage() {
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-sm text-slate-500">管理员后台</p>
-          <h1 className="mt-1 text-2xl font-semibold text-slate-950">
-            后台管理
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-            仅 ADMIN 用户可访问。这里集中放置用户、Prompt、版本和后续系统状态相关管理入口。
-          </p>
-        </div>
-        <Link
-          href="/projects"
-          className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-        >
-          返回项目列表
-        </Link>
+      <div>
+        <p className="text-sm text-slate-500">管理员后台</p>
+        <h1 className="mt-1 text-2xl font-semibold text-slate-950">
+          后台管理
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+          仅 ADMIN 用户可访问。这里集中放置用户、Prompt、系统状态和版本相关的管理入口。
+        </p>
       </div>
 
       <section className="mt-6 grid gap-4 md:grid-cols-3">
@@ -146,4 +138,3 @@ export default async function AdminHomePage() {
     </main>
   );
 }
-
