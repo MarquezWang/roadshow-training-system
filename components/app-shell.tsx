@@ -16,7 +16,7 @@ type AuthState = {
 };
 
 function isTrainingFlowPath(pathname: string) {
-  return /^\/training\/[^/]+\/(prepare|pitch|qa-prepare|qa|report)(?:\/.*)?$/.test(
+  return /^\/training\/[^/]+\/(prepare|pitch|qa-prepare|qa|report|replay)(?:\/.*)?$/.test(
     pathname,
   );
 }

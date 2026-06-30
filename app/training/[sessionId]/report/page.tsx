@@ -1,10 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentAccessUserId, withSessionOwnerFilter } from "@/lib/auth-server";
-import {
-  getDisplayMaterialNotice,
-  selectDisplayablePdf,
-} from "@/lib/display-material";
 import { prisma } from "@/lib/prisma";
 import { TrainingReportClient } from "./training-report-client";
 
@@ -26,19 +22,6 @@ export default async function TrainingReportPage({
         select: {
           id: true,
           name: true,
-          fileAssets: {
-            orderBy: {
-              createdAt: "asc",
-            },
-            select: {
-              id: true,
-              originalName: true,
-              fileType: true,
-              previewPdfPath: true,
-              previewStatus: true,
-              previewError: true,
-            },
-          },
         },
       },
       recordings: {
@@ -51,8 +34,6 @@ export default async function TrainingReportPage({
           mimeType: true,
           sizeBytes: true,
           durationSec: true,
-          startedAt: true,
-          endedAt: true,
           transcript: {
             select: {
               id: true,
@@ -115,11 +96,9 @@ export default async function TrainingReportPage({
                   id: true,
                   phase: true,
                   mimeType: true,
-          sizeBytes: true,
-          durationSec: true,
-          startedAt: true,
-          endedAt: true,
-          transcript: {
+                  sizeBytes: true,
+                  durationSec: true,
+                  transcript: {
                     select: {
                       id: true,
                       recordingId: true,
@@ -142,24 +121,6 @@ export default async function TrainingReportPage({
           },
         },
       },
-      slideEvents: {
-        orderBy: [
-          {
-            elapsedSec: "asc",
-          },
-          {
-            createdAt: "asc",
-          },
-        ],
-        select: {
-          id: true,
-          fileId: true,
-          pageIndex: true,
-          eventType: true,
-          elapsedSec: true,
-          createdAt: true,
-        },
-      },
     },
   });
 
@@ -175,11 +136,6 @@ export default async function TrainingReportPage({
     redirect(`/training/${session.id}/pitch`);
   }
 
-  const previewFile = selectDisplayablePdf(session.project.fileAssets);
-  const previewNotice = previewFile
-    ? null
-    : (getDisplayMaterialNotice(session.project.fileAssets)?.message ?? null);
-
   const pitchRecording =
     session.recordings.find(
       (recording) => recording.phase === "PITCH" && recording.transcript,
@@ -190,8 +146,6 @@ export default async function TrainingReportPage({
     ? {
         ...pitchRecording,
         playbackUrl: `/training/${session.id}/recordings/${pitchRecording.id}`,
-        startedAt: pitchRecording.startedAt?.toISOString() ?? null,
-        endedAt: pitchRecording.endedAt?.toISOString() ?? null,
         transcript: pitchRecording.transcript
           ? {
               ...pitchRecording.transcript,
@@ -390,10 +344,6 @@ function parseActionItems(value: unknown) {
                 mimeType: question.answer.recording.mimeType,
                 sizeBytes: question.answer.recording.sizeBytes,
                 durationSec: question.answer.recording.durationSec,
-                startedAt:
-                  question.answer.recording.startedAt?.toISOString() ?? null,
-                endedAt:
-                  question.answer.recording.endedAt?.toISOString() ?? null,
                 transcript: question.answer.recording.transcript
                   ? {
                       ...question.answer.recording.transcript,
@@ -412,14 +362,10 @@ function parseActionItems(value: unknown) {
         }
       : null,
   }));
-  const slideEvents = session.slideEvents.map((event) => ({
-    ...event,
-    createdAt: event.createdAt.toISOString(),
-  }));
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-[1600px] flex-1 px-6 py-4 text-[var(--foreground)] sm:px-8 lg:px-10">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 border-b border-[var(--border)] pb-4 sm:flex-row sm:items-end sm:justify-between">
+    <main className="mx-auto min-h-screen w-full max-w-5xl flex-1 px-6 py-4 text-[var(--foreground)] sm:px-8 lg:px-10">
+      <div className="flex flex-col gap-3 border-b border-[var(--border)] pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-[var(--foreground)]">
             训练报告
@@ -446,10 +392,6 @@ function parseActionItems(value: unknown) {
           qaQuestions={qaQuestions}
           recording={recording}
           initialAnalysis={initialAnalysis}
-          pitchDurationSec={session.pitchDurationSec}
-          previewFile={previewFile}
-          previewNotice={previewNotice}
-          slideEvents={slideEvents}
         />
       </div>
     </main>

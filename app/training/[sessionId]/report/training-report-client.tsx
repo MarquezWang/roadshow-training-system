@@ -1,10 +1,5 @@
 "use client";
 
-import type {
-  PDFDocumentLoadingTask,
-  PDFDocumentProxy,
-  RenderTask,
-} from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatTranscriptErrorMessage, canRetryTranscript } from "@/lib/transcript-error-message";
@@ -32,8 +27,6 @@ type TrainingRecording = {
   mimeType: string;
   sizeBytes: number;
   durationSec: number | null;
-  startedAt?: string | null;
-  endedAt?: string | null;
   transcript: TrainingTranscript | null;
 };
 
@@ -135,43 +128,6 @@ function hasEnteredQaQuestion(question: TrainingQaQuestion) {
   );
 }
 
-type ReportPreviewFile = {
-  id: string;
-  originalName: string;
-  fileType: string;
-  previewPdfPath?: string | null;
-  previewStatus?: string | null;
-  previewError?: string | null;
-  displaySource?: "PDF" | "POWERPOINT_PREVIEW";
-};
-
-type ReportSlideEvent = {
-  id: string;
-  fileId: string | null;
-  pageIndex: number;
-  eventType: string;
-  elapsedSec: number;
-  createdAt: string;
-};
-
-type PitchReplaySegment = {
-  pageIndex: number;
-  startSec: number;
-  endSec: number;
-  durationSec: number;
-  ranges: Array<{
-    startSec: number;
-    endSec: number;
-  }>;
-};
-
-type TranscriptSegment = {
-  startMs: number;
-  endMs: number;
-  text: string;
-  speakerId?: string | null;
-};
-
 type TrainingReportClientProps = Readonly<{
   sessionId: string;
   sessionStatus: string;
@@ -181,259 +137,7 @@ type TrainingReportClientProps = Readonly<{
   qaQuestions: TrainingQaQuestion[];
   recording: TrainingRecording | null;
   initialAnalysis: TrainingAnalysis | null;
-  pitchDurationSec: number | null;
-  previewFile: ReportPreviewFile | null;
-  previewNotice: string | null;
-  slideEvents: ReportSlideEvent[];
 }>;
-
-function formatReplayTime(totalSec: number) {
-  const safeTotal = Number.isFinite(totalSec) ? Math.max(0, Math.floor(totalSec)) : 0;
-  const minutes = Math.floor(safeTotal / 60);
-  const seconds = safeTotal % 60;
-  return `${minutes.toString().padStart(2, "0")}:${seconds
-    .toString()
-    .padStart(2, "0")}`;
-}
-
-function buildPitchReplaySegments(
-  events: ReportSlideEvent[],
-  fallbackDurationSec: number | null,
-): PitchReplaySegment[] {
-  const orderedEvents = events
-    .filter(
-      (event) =>
-        Number.isFinite(event.elapsedSec) &&
-        Number.isFinite(event.pageIndex) &&
-        event.pageIndex > 0,
-    )
-    .sort((a, b) => {
-      if (a.elapsedSec !== b.elapsedSec) {
-        return a.elapsedSec - b.elapsedSec;
-      }
-      return a.createdAt.localeCompare(b.createdAt);
-    });
-  const maxEventSec = orderedEvents.reduce(
-    (max, event) => Math.max(max, event.elapsedSec),
-    0,
-  );
-  const totalDurationSec = Math.max(fallbackDurationSec ?? 0, maxEventSec);
-
-  if (orderedEvents.length === 0) {
-    return totalDurationSec > 0
-      ? [
-          {
-            pageIndex: 1,
-            startSec: 0,
-            endSec: totalDurationSec,
-            durationSec: totalDurationSec,
-            ranges: [{ startSec: 0, endSec: totalDurationSec }],
-          },
-        ]
-      : [];
-  }
-
-  const pageRanges = new Map<number, Array<{ startSec: number; endSec: number }>>();
-
-  orderedEvents.forEach((event, index) => {
-    if (event.eventType === "END") {
-      return;
-    }
-
-    const startSec = Math.max(0, event.elapsedSec);
-    const nextEvent = orderedEvents
-      .slice(index + 1)
-      .find((item) => item.elapsedSec >= startSec);
-    const endSec = nextEvent ? nextEvent.elapsedSec : totalDurationSec;
-
-    if (endSec <= startSec) {
-      return;
-    }
-
-    const ranges = pageRanges.get(event.pageIndex) ?? [];
-    ranges.push({ startSec, endSec });
-    pageRanges.set(event.pageIndex, ranges);
-  });
-
-  return Array.from(pageRanges.entries())
-    .map(([pageIndex, ranges]) => {
-      const durationSec = ranges.reduce(
-        (total, range) => total + Math.max(0, range.endSec - range.startSec),
-        0,
-      );
-      return {
-        pageIndex,
-        startSec: ranges[0]?.startSec ?? 0,
-        endSec: ranges[0]?.endSec ?? 0,
-        durationSec,
-        ranges,
-      };
-    })
-    .filter((segment) => segment.durationSec > 0)
-    .sort((a, b) => a.pageIndex - b.pageIndex);
-}
-
-function getTranscriptExcerptForSegment(
-  text: string,
-  segmentsJson: string | null | undefined,
-  segment: PitchReplaySegment | null,
-  totalDurationSec: number,
-) {
-  const segments = parseTranscriptSegments(segmentsJson);
-  const preciseText = getPreciseTranscriptExcerpt(segments, segment);
-
-  if (preciseText) {
-    return {
-      text: preciseText,
-      matchType: "precise" as const,
-    };
-  }
-
-  const trimmedText = text.trim();
-  if (!trimmedText || !segment || totalDurationSec <= 0) {
-    return {
-      text: "",
-      matchType: "none" as const,
-    };
-  }
-
-  const startRatio = Math.min(1, Math.max(0, segment.startSec / totalDurationSec));
-  const endRatio = Math.min(1, Math.max(startRatio, segment.endSec / totalDurationSec));
-  const startIndex = Math.floor(trimmedText.length * startRatio);
-  const endIndex = Math.max(
-    startIndex + 1,
-    Math.ceil(trimmedText.length * endRatio),
-  );
-
-  return {
-    text: trimmedText.slice(startIndex, endIndex).trim(),
-    matchType: "estimated" as const,
-  };
-}
-
-function parseTranscriptSegments(
-  value: string | null | undefined,
-): TranscriptSegment[] {
-  if (!value) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    const segments: TranscriptSegment[] = [];
-
-    for (const item of parsed) {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        continue;
-      }
-
-      const record = item as Record<string, unknown>;
-      const startMs = Number(record.startMs);
-      const endMs = Number(record.endMs);
-      const segmentText =
-        typeof record.text === "string" ? record.text.trim() : "";
-
-      if (
-        !Number.isFinite(startMs) ||
-        !Number.isFinite(endMs) ||
-        endMs <= startMs ||
-        !segmentText
-      ) {
-        continue;
-      }
-
-      segments.push({
-        startMs,
-        endMs,
-        text: segmentText,
-        speakerId:
-          typeof record.speakerId === "string" ? record.speakerId : null,
-      });
-    }
-
-    return segments.sort((left, right) => left.startMs - right.startMs);
-  } catch {
-    return [];
-  }
-}
-
-function getPreciseTranscriptExcerpt(
-  segments: TranscriptSegment[],
-  segment: PitchReplaySegment | null,
-) {
-  if (!segment || segments.length === 0) {
-    return "";
-  }
-
-  const startMs = segment.startSec * 1000;
-  const endMs = segment.endSec * 1000;
-
-  return segments
-    .filter((item) => item.endMs > startMs && item.startMs < endMs)
-    .map((item) => trimTranscriptSegmentToWindow(item, startMs, endMs))
-    .filter(Boolean)
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function trimTranscriptSegmentToWindow(
-  segment: TranscriptSegment,
-  windowStartMs: number,
-  windowEndMs: number,
-) {
-  const segmentDurationMs = segment.endMs - segment.startMs;
-
-  if (segmentDurationMs <= 0) {
-    return "";
-  }
-
-  const characters = Array.from(segment.text);
-  let startIndex = 0;
-  let endIndex = characters.length;
-  const crossesStart = segment.startMs < windowStartMs;
-  const crossesEnd = segment.endMs > windowEndMs;
-
-  if (crossesStart) {
-    const startRatio = Math.min(
-      1,
-      Math.max(0, (windowStartMs - segment.startMs) / segmentDurationMs),
-    );
-    startIndex = Math.min(
-      characters.length,
-      Math.floor(characters.length * startRatio),
-    );
-  }
-
-  if (crossesEnd) {
-    const endRatio = Math.min(
-      1,
-      Math.max(0, (windowEndMs - segment.startMs) / segmentDurationMs),
-    );
-    endIndex = Math.max(startIndex, Math.ceil(characters.length * endRatio));
-  }
-
-  let text = characters.slice(startIndex, endIndex).join("").trim();
-
-  if (crossesStart) {
-    text = text.replace(/^[，。！？；、,.!?;\s]+/, "");
-    const firstSentenceEnd = text.search(/[。！？!?；;]/);
-
-    if (firstSentenceEnd >= 0 && firstSentenceEnd <= 18) {
-      text = text.slice(firstSentenceEnd + 1).trim();
-    }
-  }
-
-  if (crossesEnd) {
-    text = text.replace(/[，。！？；、,.!?;\s]+$/, "");
-  }
-
-  return text;
-}
 
 const REPORT_GENERATION_FAILURE_MESSAGE =
   "报告生成失败，请稍后重试或返回项目详情重新开始训练。";
@@ -443,14 +147,6 @@ const REPORT_GENERATION_STAGES = [
   "正在分析路演表达、内容完整度与答辩表现",
   "正在生成评分、评语与改进建议",
 ];
-const pdfWorkerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.mjs",
-  import.meta.url,
-).toString();
-const pdfCMapUrl = "/pdfjs/cmaps/";
-const pdfStandardFontDataUrl = "/pdfjs/standard_fonts/";
-const pdfWasmUrl = "/pdfjs/wasm/";
-const pdfIccUrl = "/pdfjs/iccs/";
 
 function getReportGenerationStageIndex(elapsedMs: number) {
   return Math.floor(elapsedMs / 30_000) % REPORT_GENERATION_STAGES.length;
@@ -517,10 +213,6 @@ export function TrainingReportClient({
   qaQuestions,
   recording,
   initialAnalysis,
-  pitchDurationSec,
-  previewFile,
-  previewNotice,
-  slideEvents,
 }: TrainingReportClientProps) {
   const router = useRouter();
   const isAborted = sessionStatus === "ABORTED";
@@ -607,36 +299,17 @@ export function TrainingReportClient({
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [copySummaryMessage, setCopySummaryMessage] = useState("");
   const [activeTab, setActiveTab] = useState<
-    | "overview"
-    | "pitch"
-    | "replay"
-    | "qa"
-    | "abort-overview"
-    | "abort-pitch"
-    | "abort-qa"
+    "overview" | "pitch" | "qa" | "abort-overview" | "abort-pitch" | "abort-qa"
   >(isAborted ? "abort-overview" : "overview");
+  const contentRef = useRef<HTMLDivElement>(null);
   // 展开/收起：内容覆盖
   const [showAllCoverage, setShowAllCoverage] = useState(false);
-  const [replayPageIndex, setReplayPageIndex] = useState(0);
-  const [isReplayPlaying, setIsReplayPlaying] = useState(false);
-  const [pageNotes, setPageNotes] = useState<Record<string, string>>({});
-  const [isPageNotesLoaded, setIsPageNotesLoaded] = useState(false);
-  const [noteSavedMessage, setNoteSavedMessage] = useState("");
-  const [replayPdfDocument, setReplayPdfDocument] =
-    useState<PDFDocumentProxy | null>(null);
-  const [replayTotalPages, setReplayTotalPages] = useState<number | null>(null);
-  const [replayPdfError, setReplayPdfError] = useState("");
-  const [isReplayPdfLoading, setIsReplayPdfLoading] = useState(Boolean(previewFile));
-  const [replayRenderTick, setReplayRenderTick] = useState(0);
-  const pitchReplayAudioRef = useRef<HTMLAudioElement | null>(null);
-  const replayCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const replayPreviewContainerRef = useRef<HTMLDivElement | null>(null);
-  const replayRenderTaskRef = useRef<RenderTask | null>(null);
 
   useEffect(() => {
     if (!isAnalysisLoading || isAborted) {
       return undefined;
     }
+
     const startedAt = reportGenerationStartedAtRef.current || Date.now();
 
     if (reportGenerationStartedAtRef.current === 0) {
@@ -649,6 +322,15 @@ export function TrainingReportClient({
 
     return () => window.clearInterval(timer);
   }, [isAnalysisLoading, isAborted]);
+
+  // 切换 Tab 时回到内容顶部
+  useEffect(() => {
+    const el = contentRef.current;
+
+    if (el) {
+      el.scrollIntoView({ block: "start" });
+    }
+  }, [activeTab]);
 
   // 单一 status polling：定期检查 report/status，驱动整个自动生成流程
   useEffect(() => {
@@ -869,306 +551,6 @@ export function TrainingReportClient({
 
       return next;
     });
-  }, []);
-
-  const pitchReplaySegments = useMemo(
-    () =>
-      buildPitchReplaySegments(
-        slideEvents,
-        recording?.durationSec ?? pitchDurationSec,
-      ),
-    [pitchDurationSec, recording?.durationSec, slideEvents],
-  );
-  const safeReplayPageIndex =
-    pitchReplaySegments.length > 0
-      ? Math.min(replayPageIndex, pitchReplaySegments.length - 1)
-      : 0;
-  const currentReplaySegment = pitchReplaySegments[safeReplayPageIndex] ?? null;
-  const replayTotalDurationSec =
-    recording?.durationSec ??
-    pitchDurationSec ??
-    (currentReplaySegment?.endSec ?? 0);
-  const replayPreviewUrl = previewFile
-    ? `/api/files/${previewFile.id}/preview`
-    : "";
-  const replayPreviewPage = currentReplaySegment?.pageIndex ?? 1;
-
-  useEffect(() => {
-    if (!previewFile || !replayPreviewUrl) {
-      const timer = window.setTimeout(() => {
-        setReplayPdfDocument(null);
-        setReplayTotalPages(null);
-        setReplayPdfError("");
-        setIsReplayPdfLoading(false);
-      }, 0);
-
-      return () => window.clearTimeout(timer);
-    }
-
-    let cancelled = false;
-    let loadingTask: PDFDocumentLoadingTask | null = null;
-
-    const loadReplayPdf = async () => {
-      setReplayPdfError("");
-      setIsReplayPdfLoading(true);
-
-      try {
-        const pdfjs = await import("pdfjs-dist");
-        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
-        loadingTask = pdfjs.getDocument({
-          url: replayPreviewUrl,
-          cMapUrl: pdfCMapUrl,
-          cMapPacked: true,
-          standardFontDataUrl: pdfStandardFontDataUrl,
-          wasmUrl: pdfWasmUrl,
-          useWasm: true,
-          iccUrl: pdfIccUrl,
-          useSystemFonts: false,
-          disableFontFace: true,
-          isEvalSupported: true,
-          fontExtraProperties: true,
-        });
-        const pdfDocument = await loadingTask.promise;
-
-        if (cancelled) {
-          pdfDocument.destroy();
-          return;
-        }
-
-        setReplayPdfDocument(pdfDocument);
-        setReplayTotalPages(pdfDocument.numPages);
-      } catch {
-        if (!cancelled) {
-          setReplayPdfDocument(null);
-          setReplayTotalPages(null);
-          setReplayPdfError("材料预览加载失败，请返回训练页检查展示材料。");
-        }
-      } finally {
-        if (!cancelled) {
-          setIsReplayPdfLoading(false);
-        }
-      }
-    };
-
-    void loadReplayPdf();
-
-    return () => {
-      cancelled = true;
-      loadingTask?.destroy();
-    };
-  }, [previewFile, replayPreviewUrl]);
-
-  useEffect(() => {
-    if (activeTab !== "replay" || !replayPdfDocument || !currentReplaySegment) {
-      return undefined;
-    }
-
-    const canvas = replayCanvasRef.current;
-    const container = replayPreviewContainerRef.current;
-
-    if (!canvas || !container) {
-      return undefined;
-    }
-
-    let cancelled = false;
-
-    const renderReplayPage = async () => {
-      try {
-        replayRenderTaskRef.current?.cancel();
-        const pageNumber = Math.min(
-          Math.max(1, replayPreviewPage),
-          replayPdfDocument.numPages,
-        );
-        const page = await replayPdfDocument.getPage(pageNumber);
-
-        if (cancelled) {
-          return;
-        }
-
-        const baseViewport = page.getViewport({ scale: 1 });
-        const containerWidth = Math.max(container.clientWidth - 24, 320);
-        const containerHeight = Math.max(container.clientHeight - 24, 320);
-        const scale = Math.min(
-          containerWidth / baseViewport.width,
-          containerHeight / baseViewport.height,
-        );
-        const viewport = page.getViewport({ scale });
-        const outputScale = window.devicePixelRatio || 1;
-        const context = canvas.getContext("2d");
-
-        if (!context) {
-          return;
-        }
-
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.style.height = `${Math.floor(viewport.height)}px`;
-
-        const renderTask = page.render({
-          canvas,
-          canvasContext: context,
-          transform:
-            outputScale !== 1
-              ? ([
-                  outputScale,
-                  0,
-                  0,
-                  outputScale,
-                  0,
-                  0,
-                ] as [number, number, number, number, number, number])
-              : undefined,
-          viewport,
-        });
-        replayRenderTaskRef.current = renderTask;
-        await renderTask.promise;
-      } catch (error) {
-        if (
-          !cancelled &&
-          error instanceof Error &&
-          error.name !== "RenderingCancelledException"
-        ) {
-          setReplayPdfError("当前页预览渲染失败，请切换页面或重新进入报告。");
-        }
-      }
-    };
-
-    void renderReplayPage();
-
-    return () => {
-      cancelled = true;
-      replayRenderTaskRef.current?.cancel();
-      replayRenderTaskRef.current = null;
-    };
-  }, [
-    activeTab,
-    currentReplaySegment,
-    replayPdfDocument,
-    replayPreviewPage,
-    replayRenderTick,
-  ]);
-
-  useEffect(() => {
-    if (activeTab !== "replay") {
-      return undefined;
-    }
-
-    const container = replayPreviewContainerRef.current;
-
-    if (!container) {
-      return undefined;
-    }
-
-    window.requestAnimationFrame(() => {
-      setReplayRenderTick((prev) => prev + 1);
-    });
-
-    const resizeObserver = new ResizeObserver(() => {
-      setReplayRenderTick((prev) => prev + 1);
-    });
-    resizeObserver.observe(container);
-
-    return () => resizeObserver.disconnect();
-  }, [activeTab, previewFile]);
-
-  const replayTranscriptExcerpt = useMemo(
-    () =>
-      getTranscriptExcerptForSegment(
-        transcript?.text ?? "",
-        transcript?.segmentsJson,
-        currentReplaySegment,
-        replayTotalDurationSec,
-      ),
-    [
-      currentReplaySegment,
-      replayTotalDurationSec,
-      transcript?.segmentsJson,
-      transcript?.text,
-    ],
-  );
-  const replayNoteKey = currentReplaySegment
-    ? String(currentReplaySegment.pageIndex)
-    : "1";
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      try {
-        const rawValue = window.localStorage.getItem(
-          `training-report:${sessionId}:pitch-page-notes`,
-        );
-        const parsed = rawValue ? JSON.parse(rawValue) : {};
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          setPageNotes(parsed as Record<string, string>);
-        }
-      } catch {
-        setPageNotes({});
-      } finally {
-        setIsPageNotesLoaded(true);
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (!isPageNotesLoaded) {
-      return;
-    }
-
-    window.localStorage.setItem(
-      `training-report:${sessionId}:pitch-page-notes`,
-      JSON.stringify(pageNotes),
-    );
-  }, [isPageNotesLoaded, pageNotes, sessionId]);
-
-  useEffect(() => {
-    const audio = pitchReplayAudioRef.current;
-    if (!audio || !currentReplaySegment) {
-      return undefined;
-    }
-
-    const handleTimeUpdate = () => {
-      if (audio.currentTime >= currentReplaySegment.endSec) {
-        audio.pause();
-        setIsReplayPlaying(false);
-      }
-    };
-    const handlePause = () => setIsReplayPlaying(false);
-
-    audio.addEventListener("timeupdate", handleTimeUpdate);
-    audio.addEventListener("pause", handlePause);
-
-    return () => {
-      audio.removeEventListener("timeupdate", handleTimeUpdate);
-      audio.removeEventListener("pause", handlePause);
-    };
-  }, [currentReplaySegment]);
-
-  const playCurrentReplaySegment = useCallback(async () => {
-    const audio = pitchReplayAudioRef.current;
-    if (!audio || !currentReplaySegment) {
-      return;
-    }
-
-    audio.currentTime = currentReplaySegment.startSec;
-
-    try {
-      await audio.play();
-      setIsReplayPlaying(true);
-    } catch {
-      setIsReplayPlaying(false);
-    }
-  }, [currentReplaySegment]);
-
-  const pauseCurrentReplaySegment = useCallback(() => {
-    const audio = pitchReplayAudioRef.current;
-    if (!audio) {
-      return;
-    }
-
-    audio.pause();
-    setIsReplayPlaying(false);
   }, []);
 
   const strengths = useMemo(
@@ -1451,12 +833,10 @@ export function TrainingReportClient({
     }
   }
 
-  const isReplayTab = activeTab === "replay";
-
   return (
-    <div className={isReplayTab ? "grid gap-5" : "mx-auto grid w-full max-w-5xl gap-5"}>
+    <div className="grid gap-5">
       {/* === Tab 导航（sticky） === */}
-      <nav className="sticky top-0 z-10 rounded-t-lg border-b border-[var(--border)] bg-[var(--surface)]/95 px-6 backdrop-blur">
+      <nav className="sticky top-0 z-10 -mx-6 border-b border-[var(--border)] bg-[var(--surface)]/95 px-6 backdrop-blur sm:-mx-8 sm:px-8 lg:-mx-10 lg:px-10">
         {isAborted
           ? [
               { key: "abort-overview" as const, label: "中止概览" },
@@ -1480,7 +860,6 @@ export function TrainingReportClient({
             ? [
                 { key: "overview" as const, label: "总览" },
                 { key: "pitch" as const, label: "路演表现" },
-                { key: "replay" as const, label: "路演回放" },
                 { key: "qa" as const, label: "答辩表现" },
               ].map((tab) => (
                 <button
@@ -1500,7 +879,7 @@ export function TrainingReportClient({
       </nav>
 
       {/* === Tab 内容区 === */}
-      <div>
+      <div ref={contentRef} className="scroll-mt-14">
         {/* === 中止态：中止概览 Tab === */}
         {activeTab === "abort-overview" && (
           <div className="grid gap-6">
@@ -2093,239 +1472,6 @@ export function TrainingReportClient({
             />
           </section>
           )}
-        </div>
-      )}
-
-      {/* === 路演回放 Tab === */}
-      {activeTab === "replay" && (
-        <div className="grid gap-6">
-          <section className="rounded-lg border border-slate-800 bg-slate-950/70 p-4 shadow-2xl shadow-slate-950/30">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-100">
-                  路演逐页回放
-                </h2>
-                <p className="mt-1 text-xs text-slate-500">
-                  按训练时翻页记录回看材料、音频片段、转写和个人笔记。
-                </p>
-              </div>
-              <div className="text-xs text-slate-500">
-                {pitchReplaySegments.length > 0
-                  ? `共 ${pitchReplaySegments.length} 个页面片段`
-                  : "暂无翻页片段"}
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_380px]">
-              <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-xs font-medium text-slate-200">
-                      {previewFile?.originalName ?? "暂无可预览材料"}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {currentReplaySegment
-                        ? `当前第 ${currentReplaySegment.pageIndex} 页${
-                            replayTotalPages ? ` / ${replayTotalPages}` : ""
-                          }`
-                        : previewNotice ?? "未记录可回放的页面片段。"}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setReplayPageIndex(() =>
-                          Math.max(0, safeReplayPageIndex - 1),
-                        )
-                      }
-                      disabled={safeReplayPageIndex <= 0}
-                      className="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      上一页
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setReplayPageIndex(() =>
-                          Math.min(
-                            pitchReplaySegments.length - 1,
-                            safeReplayPageIndex + 1,
-                          ),
-                        )
-                      }
-                      disabled={
-                        safeReplayPageIndex >= pitchReplaySegments.length - 1
-                      }
-                      className="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      下一页
-                    </button>
-                  </div>
-                </div>
-
-                <div
-                  ref={replayPreviewContainerRef}
-                  className="relative flex h-[74vh] min-h-[640px] items-center justify-center overflow-hidden rounded-md border border-slate-800 bg-slate-950 p-3"
-                >
-                  {previewFile && currentReplaySegment ? (
-                    <>
-                      <canvas
-                        ref={replayCanvasRef}
-                        className="max-h-full max-w-full rounded-sm bg-white shadow-2xl shadow-slate-950/40"
-                      />
-                      {isReplayPdfLoading ? (
-                        <div className="absolute rounded-md bg-slate-950/80 px-3 py-2 text-xs text-slate-300">
-                          正在加载材料预览...
-                        </div>
-                      ) : null}
-                      {replayPdfError ? (
-                        <div className="absolute max-w-sm rounded-md border border-red-500/30 bg-red-950/80 px-4 py-3 text-center text-sm text-red-100">
-                          {replayPdfError}
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <div className="px-6 text-center text-sm text-slate-400">
-                      <p>{previewNotice ?? "当前没有可预览的 PDF 材料。"}</p>
-                      <p className="mt-2 text-xs text-slate-500">
-                        仍可查看下方路演录音、转写和分析结果。
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {pitchReplaySegments.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {pitchReplaySegments.map((segment, index) => (
-                      <button
-                        key={`${segment.pageIndex}-${index}`}
-                        type="button"
-                        onClick={() => setReplayPageIndex(index)}
-                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                          index === safeReplayPageIndex
-                            ? "border-teal-400 bg-teal-400/15 text-teal-100"
-                            : "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
-                        }`}
-                      >
-                        第 {segment.pageIndex} 页 ·{" "}
-                        {formatReplayTime(segment.durationSec)}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              <aside className="grid content-start gap-4">
-                <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    对应该页的路演音频切分
-                  </h3>
-                  {recording && currentReplaySegment ? (
-                    <div className="mt-3 grid gap-3">
-                      <audio
-                        ref={pitchReplayAudioRef}
-                        controls
-                        preload="metadata"
-                        src={recording.playbackUrl}
-                        className="w-full"
-                      >
-                        <track kind="captions" />
-                      </audio>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void playCurrentReplaySegment()}
-                          className="rounded-md bg-teal-400/90 px-3 py-1.5 text-xs font-medium text-slate-950 transition-colors hover:bg-teal-300"
-                        >
-                          {isReplayPlaying ? "重新播放本页" : "播放本页片段"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={pauseCurrentReplaySegment}
-                          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800"
-                        >
-                          暂停
-                        </button>
-                      </div>
-                      <p className="text-xs leading-5 text-slate-500">
-                        片段区间：{formatReplayTime(currentReplaySegment.startSec)}
-                        {" - "}
-                        {formatReplayTime(currentReplaySegment.endSec)}
-                        <br />
-                        本页累计用时：
-                        {formatReplayTime(currentReplaySegment.durationSec)}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-sm leading-6 text-slate-500">
-                      当前没有可用的路演录音或页面片段。
-                    </p>
-                  )}
-                </div>
-
-                <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    对应该页的音频转写
-                  </h3>
-                  <p className="mt-1 text-xs text-slate-400">
-                    {currentReplaySegment
-                      ? `本页用时 ${formatReplayTime(
-                          currentReplaySegment.durationSec,
-                        )}`
-                      : "暂无页面用时"}
-                    {replayTranscriptExcerpt.matchType === "precise"
-                      ? " · 已按句子时间戳精确匹配"
-                      : replayTranscriptExcerpt.matchType === "estimated"
-                        ? " · 按页面用时粗略匹配"
-                        : ""}
-                  </p>
-                  <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/70 p-3 text-sm leading-6 text-slate-300">
-                    {replayTranscriptExcerpt.text ||
-                      "暂无可匹配的本页转写片段。新训练若使用腾讯云极速版时间戳，将按本页音频时间精确匹配。"}
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-4">
-                  <h3 className="text-sm font-semibold text-slate-100">笔记</h3>
-                  <p className="mt-1 text-xs text-slate-400">
-                    记录这一页讲得不好的地方、需要补充的证据或下一轮改法。
-                  </p>
-                  <textarea
-                    value={pageNotes[replayNoteKey] ?? ""}
-                    onChange={(event) => {
-                      setNoteSavedMessage("");
-                      setPageNotes((prev) => ({
-                        ...prev,
-                        [replayNoteKey]: event.target.value,
-                      }));
-                    }}
-                    placeholder="例如：这一页背景痛点讲得太泛，需要补一个真实客户场景。"
-                    className="mt-3 min-h-36 w-full resize-y rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm leading-6 text-slate-200 outline-none transition-colors placeholder:text-slate-600 focus:border-teal-400"
-                  />
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <p className="text-xs text-slate-400">
-                      笔记会保存在当前浏览器本地。
-                    </p>
-                    <div className="flex items-center gap-2">
-                      {noteSavedMessage ? (
-                        <span className="text-xs text-emerald-600">
-                          {noteSavedMessage}
-                        </span>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => setNoteSavedMessage("已记录")}
-                        className="rounded-md bg-teal-400/90 px-3 py-1.5 text-xs font-medium text-slate-950 transition-colors hover:bg-teal-300"
-                      >
-                        记录
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </aside>
-            </div>
-          </section>
         </div>
       )}
 

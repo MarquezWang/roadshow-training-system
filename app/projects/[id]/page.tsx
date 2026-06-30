@@ -466,12 +466,20 @@ export default async function ProjectDetailPage({
                         第 {Math.max(1, session.currentPageIndex)} 页
                       </td>
                       <td className="border-b border-slate-100 px-4 py-3.5">
-                        <Link
-                          href={`/training/${session.id}`}
-                          className="text-sm font-medium text-teal-700 hover:text-teal-900"
-                        >
-                          查看训练
-                        </Link>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <Link
+                            href={`/training/${session.id}`}
+                            className="text-sm font-medium text-teal-700 hover:text-teal-900"
+                          >
+                            查看训练
+                          </Link>
+                          <Link
+                            href={`/training/${session.id}/replay`}
+                            className="text-sm font-medium text-slate-600 hover:text-slate-900"
+                          >
+                            路演回放
+                          </Link>
+                        </div>
                       </td>
                     </tr>
                   ))}
