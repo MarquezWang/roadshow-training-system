@@ -109,19 +109,19 @@ const promptAssets: Record<string, PromptAsset> = {
   },
   "answer-feedback.md": {
     file: "answer-feedback.md",
-    task: "答案反馈",
-    route: "待确认",
+    task: "未接入：答案反馈",
+    route: "当前未发现调用",
     model: "待确认",
-    risk: "待确认",
-    output: "待确认",
+    risk: "低",
+    output: "历史模板，后续确认是否清理",
   },
   "final-report.md": {
     file: "final-report.md",
-    task: "旧报告模板",
-    route: "待确认",
+    task: "未接入：旧报告模板",
+    route: "当前未发现调用",
     model: "待确认",
-    risk: "待确认",
-    output: "待确认",
+    risk: "低",
+    output: "历史模板，后续确认是否清理",
   },
 };
 
@@ -223,8 +223,14 @@ async function loadChangelogPreview() {
     return changelog
       .split("\n")
       .filter((line) => line.startsWith("## "))
+      .map((line) => line.replace(/^##\s+/, "").trim())
+      .filter(
+        (line) =>
+          !line.includes("记录模板") &&
+          !line.includes("YYYY-MM-DD") &&
+          line !== "Prompt 变更记录",
+      )
       .slice(0, 5)
-      .map((line) => line.replace(/^##\s+/, "").trim());
   } catch {
     return [];
   }
@@ -255,10 +261,10 @@ export default async function AdminPromptsPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Link
-            href="/admin/users"
+            href="/admin"
             className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
           >
-            用户管理
+            后台首页
           </Link>
           <Link
             href="/projects"
@@ -296,7 +302,7 @@ export default async function AdminPromptsPage() {
         </div>
       </section>
 
-      <section className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <section className="mt-6 rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 px-5 py-4">
           <h2 className="text-base font-semibold text-slate-950">
             Prompt 资产清单
@@ -306,37 +312,21 @@ export default async function AdminPromptsPage() {
           </p>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px] text-left text-sm">
-            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-5 py-3">文件</th>
-                <th className="px-5 py-3">任务</th>
-                <th className="px-5 py-3">模型</th>
-                <th className="px-5 py-3">风险</th>
-                <th className="px-5 py-3">主要输出</th>
-                <th className="px-5 py-3">调用位置</th>
-                <th className="px-5 py-3">更新时间</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {prompts.map((prompt) => (
-                <tr key={prompt.file} className="align-top">
-                  <td className="px-5 py-4">
-                    <div className="font-medium text-slate-950">
+        <div className="grid gap-3 p-5">
+          {prompts.map((prompt) => (
+            <article
+              key={prompt.file}
+              className="rounded-lg border border-slate-100 bg-slate-50/70 p-4"
+            >
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-mono text-sm font-semibold text-slate-950">
                       {prompt.file}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-400">
-                      {formatBytes(prompt.size)}
-                    </div>
-                  </td>
-                  <td className="px-5 py-4 text-slate-700">{prompt.task}</td>
-                  <td className="px-5 py-4">
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
+                    </h3>
+                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700">
                       {prompt.model}
                     </span>
-                  </td>
-                  <td className="px-5 py-4">
                     <span
                       className={`rounded-full border px-2.5 py-1 text-xs font-medium ${getRiskClass(
                         prompt.risk,
@@ -344,18 +334,24 @@ export default async function AdminPromptsPage() {
                     >
                       {prompt.risk}
                     </span>
-                  </td>
-                  <td className="px-5 py-4 text-slate-600">{prompt.output}</td>
-                  <td className="px-5 py-4 font-mono text-xs leading-5 text-slate-500">
-                    {prompt.route}
-                  </td>
-                  <td className="px-5 py-4 text-slate-500">
-                    {formatDate(prompt.updatedAt)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+                  <p className="mt-2 text-sm font-medium text-slate-800">
+                    {prompt.task}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    {prompt.output}
+                  </p>
+                </div>
+                <div className="shrink-0 text-left text-xs text-slate-500 lg:text-right">
+                  <p>{formatBytes(prompt.size)}</p>
+                  <p className="mt-1">{formatDate(prompt.updatedAt)}</p>
+                </div>
+              </div>
+              <div className="mt-3 rounded-md border border-slate-100 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-500">
+                {prompt.route}
+              </div>
+            </article>
+          ))}
         </div>
       </section>
 
@@ -406,4 +402,3 @@ export default async function AdminPromptsPage() {
     </main>
   );
 }
-

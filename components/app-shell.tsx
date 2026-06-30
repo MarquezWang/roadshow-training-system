@@ -65,22 +65,6 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
             {authState?.authEnabled ? (
               authState.user ? (
                 <>
-                  {authState.user.role === "ADMIN" ? (
-                    <>
-                      <a
-                        href="/admin/users"
-                        className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                      >
-                        用户管理
-                      </a>
-                      <a
-                        href="/admin/prompts"
-                        className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                      >
-                        Prompt 管理
-                      </a>
-                    </>
-                  ) : null}
                   <div className="text-right">
                     <p className="text-xs text-slate-500">当前用户</p>
                     <p className="text-sm font-medium text-slate-900">
