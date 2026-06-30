@@ -6,6 +6,7 @@ type TestState = {
   status: "idle" | "running" | "success" | "error";
   message: string;
   detail?: string;
+  rawDetail?: string;
   elapsedMs?: number;
 };
 
@@ -35,8 +36,52 @@ function ResultBox({ state }: { state: TestState }) {
           {state.detail}
         </p>
       ) : null}
+      {state.rawDetail ? (
+        <details className="mt-2 text-xs opacity-80">
+          <summary className="cursor-pointer select-none">
+            查看原始返回摘要
+          </summary>
+          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-white/60 p-2 font-mono">
+            {state.rawDetail}
+          </pre>
+        </details>
+      ) : null}
     </div>
   );
+}
+
+function summarizeAiResponse(text?: string) {
+  const normalized = text?.trim();
+
+  if (!normalized) {
+    return {
+      detail: "模型已响应，但测试接口没有返回可展示文本。",
+      rawDetail: undefined,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    const keys =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? Object.keys(parsed)
+        : [];
+
+    return {
+      detail:
+        keys.length > 0
+          ? `模型返回结构正常，包含 ${keys.length} 个顶层字段：${keys
+              .slice(0, 6)
+              .join("、")}${keys.length > 6 ? "等" : ""}。`
+          : "模型返回结构正常。",
+      rawDetail: normalized.slice(0, 800),
+    };
+  } catch {
+    return {
+      detail: `模型已返回文本，长度 ${normalized.length} 字。`,
+      rawDetail: normalized.slice(0, 800),
+    };
+  }
 }
 
 export function SystemTestPanel() {
@@ -68,7 +113,7 @@ export function SystemTestPanel() {
       setAiState({
         status: "success",
         message: "AI 连通性正常。",
-        detail: data.text?.slice(0, 300),
+        ...summarizeAiResponse(data.text),
         elapsedMs: Date.now() - startedAt,
       });
     } catch (error) {
@@ -87,7 +132,7 @@ export function SystemTestPanel() {
     if (!file) {
       setAsrState({
         status: "error",
-        message: "请先选择一段 10MB 以内的测试音频。",
+        message: "请先选择一段 5-10 秒、10MB 以内的中文测试音频。",
       });
       return;
     }
@@ -173,6 +218,9 @@ export function SystemTestPanel() {
               </h3>
               <p className="mt-1 text-sm leading-6 text-slate-500">
                 上传 5-10 秒测试音频，调用当前 TRANSCRIPTION_PROVIDER。
+              </p>
+              <p className="mt-1 text-xs leading-5 text-slate-400">
+                建议使用训练录音中的短片段；测试会消耗一次当前转写额度。
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">

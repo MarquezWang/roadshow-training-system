@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const changelogItems = [
   {
     version: "v0.6.0",
@@ -63,39 +65,45 @@ const changelogItems = [
 
 export default function ChangelogPage() {
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
-      <section className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-12">
-        <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-8 shadow-2xl shadow-slate-950/40">
-          <p className="text-sm font-medium text-cyan-300">
-            ROADSHOW TRAINING SYSTEM
-          </p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">
-            更新日志
-          </h1>
-          <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-300">
-            这里记录内部测试阶段的关键版本变化。后续开发建议先在本地完成一组较完整的改动与验收，再统一提交、推送并同步服务器。
-          </p>
+    <main className="min-h-screen bg-slate-50 text-slate-950">
+      <section className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-8">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm text-slate-500">管理员工具</p>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+              更新日志
+            </h1>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+              这里记录内部测试阶段的关键版本变化。后续开发建议先在本地完成一组较完整的改动与验收，再统一提交、推送并同步服务器。
+            </p>
+          </div>
+          <Link
+            href="/admin"
+            className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            返回
+          </Link>
         </div>
 
         <div className="space-y-5">
           {changelogItems.map((item) => (
             <article
               key={item.version}
-              className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6"
+              className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
             >
               <div className="flex flex-wrap items-center gap-3">
-                <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-sm font-semibold text-cyan-200">
+                <span className="rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-sm font-semibold text-teal-700">
                   {item.version}
                 </span>
-                <span className="text-sm text-slate-400">{item.date}</span>
+                <span className="text-sm text-slate-500">{item.date}</span>
               </div>
-              <h2 className="mt-4 text-xl font-semibold text-white">
+              <h2 className="mt-4 text-xl font-semibold text-slate-950">
                 {item.title}
               </h2>
-              <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-300">
+              <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-600">
                 {item.items.map((change) => (
                   <li key={change} className="flex gap-3">
-                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300" />
+                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-teal-500" />
                     <span>{change}</span>
                   </li>
                 ))}

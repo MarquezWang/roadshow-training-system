@@ -90,6 +90,36 @@ function Section({
   );
 }
 
+function CollapsibleSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="group rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-4">
+        <span>
+          <span className="block text-base font-semibold text-slate-950">
+            {title}
+          </span>
+          <span className="mt-1 block text-sm leading-6 text-slate-500">
+            {description}
+          </span>
+        </span>
+        <span className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-500 transition group-open:bg-slate-50">
+          <span className="group-open:hidden">展开</span>
+          <span className="hidden group-open:inline">收起</span>
+        </span>
+      </summary>
+      <div className="mt-4 border-t border-slate-100 pt-2">{children}</div>
+    </details>
+  );
+}
+
 async function checkDatabaseConnection() {
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -299,7 +329,7 @@ export default async function AdminSystemPage() {
           />
         </Section>
 
-        <Section
+        <CollapsibleSection
           title="运维提示"
           description="这里展示的是配置状态，不替代真实业务链路测试。"
         >
@@ -313,9 +343,9 @@ export default async function AdminSystemPage() {
               如修改服务器环境变量，需要重启应用并确认 PM2 使用了最新环境。
             </li>
           </ul>
-        </Section>
+        </CollapsibleSection>
 
-        <Section
+        <CollapsibleSection
           title="基础运行检查"
           description="不调用大模型、不转写音频，只检查基础依赖是否可用。"
         >
@@ -331,9 +361,9 @@ export default async function AdminSystemPage() {
             ok={uploadDirectoryCheck.ok}
             note={uploadDirectoryCheck.ok ? undefined : uploadDirectoryCheck.note}
           />
-        </Section>
+        </CollapsibleSection>
 
-        <Section
+        <CollapsibleSection
           title="最近诊断事件"
           description="记录 AI、ASR、PPT 预览和系统测试中的最近异常或测试结果。"
         >
@@ -370,7 +400,7 @@ export default async function AdminSystemPage() {
               暂无诊断事件。
             </p>
           )}
-        </Section>
+        </CollapsibleSection>
       </div>
     </main>
   );
