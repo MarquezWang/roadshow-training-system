@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { getAiModel, type AiModelTask } from "@/lib/ai-models";
+import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 
 type CallAIOptions = {
   systemPrompt: string;
@@ -87,6 +88,15 @@ function logAICall({
     console.log(message);
   } else {
     console.warn(message);
+    void writeDiagnosticEvent({
+      type: task === "reportGeneration" ? "REPORT_ERROR" : "AI_ERROR",
+      message: error ? `AI call failed: ${error}` : "AI call failed",
+      meta: {
+        task,
+        model,
+        elapsedMs,
+      },
+    });
   }
 }
 

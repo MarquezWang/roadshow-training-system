@@ -1,6 +1,7 @@
 import { createReadStream, existsSync } from "fs";
 import OpenAI from "openai";
 import path from "path";
+import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { transcribeWithTencentFlash } from "@/lib/transcription/tencent-flash";
 import { transcribeWithTencent } from "@/lib/transcription/tencent";
 import { transcribeWithXfyun } from "@/lib/transcription/xfyun";
@@ -168,6 +169,14 @@ export async function transcribeAudio(
     console.warn(
       `[ASR] provider=${provider} elapsedMs=${Date.now() - startedAt} ok=false error=${getAsrErrorSummary(error)}`,
     );
+    void writeDiagnosticEvent({
+      type: "ASR_ERROR",
+      message: getAsrErrorSummary(error),
+      meta: {
+        provider,
+        elapsedMs: Date.now() - startedAt,
+      },
+    });
     throw error;
   }
 }

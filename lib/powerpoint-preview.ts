@@ -3,6 +3,7 @@ import { mkdir, rename, rm, stat } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
 
+import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { prisma } from "@/lib/prisma";
 
 const execFileAsync = promisify(execFile);
@@ -352,6 +353,15 @@ export async function generatePowerPointPreviewPdf(file: FileAssetForPreview) {
         getPreviewErrorReason(error),
       )} file=${quoteLogValue(getShortPath(file.filePath))}`,
     );
+    void writeDiagnosticEvent({
+      type: "PPT_PREVIEW_ERROR",
+      message: previewError,
+      meta: {
+        reason: getPreviewErrorReason(error),
+        fileType: file.fileType,
+        file: getShortPath(file.filePath),
+      },
+    });
 
     await prisma.fileAsset.update({
       where: {

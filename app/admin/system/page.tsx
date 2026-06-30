@@ -4,8 +4,10 @@ import path from "path";
 import type { ReactNode } from "react";
 import { AI_MODEL_FAST, AI_MODEL_STRONG } from "@/lib/ai-models";
 import { requireAdminUser } from "@/lib/auth-server";
+import { readRecentDiagnosticEvents } from "@/lib/diagnostic-log";
 import { checkLibreOfficeAvailability } from "@/lib/powerpoint-preview";
 import { prisma } from "@/lib/prisma";
+import { SystemTestPanel } from "./system-test-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -126,10 +128,16 @@ async function checkUploadDirectory() {
 export default async function AdminSystemPage() {
   await requireAdminUser();
 
-  const [libreOffice, databaseCheck, uploadDirectoryCheck] = await Promise.all([
+  const [
+    libreOffice,
+    databaseCheck,
+    uploadDirectoryCheck,
+    diagnosticEvents,
+  ] = await Promise.all([
     checkLibreOfficeAvailability(),
     checkDatabaseConnection(),
     checkUploadDirectory(),
+    readRecentDiagnosticEvents(12),
   ]);
   const transcriptionProvider =
     process.env.TRANSCRIPTION_PROVIDER?.trim() || "openai";
@@ -159,6 +167,8 @@ export default async function AdminSystemPage() {
       </div>
 
       <div className="mt-6 grid gap-6">
+        <SystemTestPanel />
+
         <Section
           title="AI 模型与调用配置"
           description="用于项目识别、TRL 判断、评委问题、动态追问和报告生成等任务。"
@@ -321,6 +331,45 @@ export default async function AdminSystemPage() {
             ok={uploadDirectoryCheck.ok}
             note={uploadDirectoryCheck.ok ? undefined : uploadDirectoryCheck.note}
           />
+        </Section>
+
+        <Section
+          title="最近诊断事件"
+          description="记录 AI、ASR、PPT 预览和系统测试中的最近异常或测试结果。"
+        >
+          {diagnosticEvents.length > 0 ? (
+            <div className="grid gap-3">
+              {diagnosticEvents.map((event, index) => (
+                <div
+                  key={`${event.ts}-${index}`}
+                  className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700">
+                        {event.type}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {new Date(event.ts).toLocaleString("zh-CN")}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="mt-2 break-words text-sm leading-6 text-slate-700">
+                    {event.message}
+                  </p>
+                  {event.meta ? (
+                    <pre className="mt-2 overflow-x-auto rounded-md border border-slate-100 bg-white px-3 py-2 text-xs leading-5 text-slate-500">
+                      {JSON.stringify(event.meta, null, 2)}
+                    </pre>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+              暂无诊断事件。
+            </p>
+          )}
         </Section>
       </div>
     </main>
