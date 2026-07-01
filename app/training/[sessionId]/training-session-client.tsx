@@ -1,32 +1,17 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import type {
-  PDFDocumentLoadingTask,
-  PDFDocumentProxy,
-  RenderTask,
-} from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { devLog, devWarn } from "@/lib/dev-log";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 import { getTrainingFlowPath } from "@/lib/training-status";
 import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
 import { PREFERRED_DEVICE_KEY } from "@/lib/use-audio-input";
-
-type TrainingFile = {
-  id: string;
-  originalName: string;
-  fileType: string;
-  previewPdfPath?: string | null;
-  previewStatus?: string;
-  previewError?: string | null;
-  displaySource?: "PDF" | "POWERPOINT_PREVIEW";
-};
-
-type PreviewNotice = {
-  type: "converting" | "failed" | "unavailable";
-  message: string;
-};
+import {
+  usePitchPdfPreview,
+  type PreviewNotice,
+  type TrainingFile,
+} from "@/lib/use-pitch-pdf-preview";
 
 type TrainingTranscript = {
   id: string;
@@ -89,7 +74,6 @@ type TrainingAnalysis = {
   updatedAt: string;
 };
 
-type PreviewMode = "standard" | "compatible";
 type RecordingStatus =
   | "UNDECIDED"
   | "READY_TO_RECORD"
@@ -122,14 +106,6 @@ type TrainingSessionClientProps = Readonly<{
 }>;
 
 const pitchLimitSec = 9 * 60;
-const pdfWorkerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.mjs",
-  import.meta.url,
-).toString();
-const pdfCMapUrl = "/pdfjs/cmaps/";
-const pdfStandardFontDataUrl = "/pdfjs/standard_fonts/";
-const pdfWasmUrl = "/pdfjs/wasm/";
-const pdfIccUrl = "/pdfjs/iccs/";
 const recordingMimeTypeCandidates = [
   "audio/webm;codecs=opus",
   "audio/webm",
@@ -262,12 +238,6 @@ export function TrainingSessionClient({
   const [remainingSec, setRemainingSec] = useState(initialRemainingSec);
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
-  const [totalPages, setTotalPages] = useState<number | null>(null);
-  const [pdfError, setPdfError] = useState("");
-  const [isPdfLoading, setIsPdfLoading] = useState(Boolean(previewFile));
-  const [renderTick, setRenderTick] = useState(0);
-  const [previewMode, setPreviewMode] = useState<PreviewMode>("standard");
   const [recordingStatus, setRecordingStatus] =
     useState<RecordingStatus>(initialRecording ? "SAVED" : "UNDECIDED");
   const [recordingMessage, setRecordingMessage] = useState(
@@ -321,9 +291,6 @@ export function TrainingSessionClient({
   const [isFullscreenActive, setIsFullscreenActive] = useState(false);
   const [fullscreenMessage, setFullscreenMessage] = useState("");
   const trainingShellRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const previewContainerRef = useRef<HTMLDivElement | null>(null);
-  const renderTaskRef = useRef<RenderTask | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -334,20 +301,52 @@ export function TrainingSessionClient({
   const isCompletingNormallyRef = useRef(false);
   const isPitching = status === "PITCHING";
   const isEnded = status === "PITCH_ENDED" || status === "FINISHED";
-  const primaryFileId = previewFile?.id ?? null;
-  const currentPageNumber = pageIndex + 1;
-  const previewUrl = previewFile
-    ? `/api/files/${previewFile.id}/preview`
-    : null;
-  const compatiblePreviewUrl = previewUrl
-    ? `${previewUrl}#page=${currentPageNumber}`
-    : null;
-  const canGoPrev = pageIndex > 0;
-  const canGoNext =
-    previewFile && totalPages !== null ? pageIndex < totalPages - 1 : true;
-  const pageLabel = totalPages
-    ? `${currentPageNumber} / ${totalPages}`
-    : String(currentPageNumber);
+  const handlePdfDocumentLoaded = useCallback((loadedTotalPages: number) => {
+    setPageIndex((currentIndex) =>
+      Math.min(Math.max(currentIndex, 0), loadedTotalPages - 1),
+    );
+  }, []);
+  const handlePdfPageChange = useCallback((nextPageIndex: number) => {
+    setPageIndex(nextPageIndex);
+  }, []);
+  const handlePdfSubmittingChange = useCallback((submitting: boolean) => {
+    setIsSubmitting(submitting);
+  }, []);
+  const handlePdfPageChangeStart = useCallback(() => {
+    setMessage("");
+  }, []);
+  const handlePdfError = useCallback((errorMessage: string) => {
+    setMessage(errorMessage);
+  }, []);
+  const {
+    canvasRef,
+    previewContainerRef,
+    compatiblePreviewUrl,
+    primaryFileId,
+    currentPageNumber,
+    pageLabel,
+    canGoPrev,
+    canGoNext,
+    pdfError,
+    isPdfLoading,
+    previewMode,
+    setPreviewMode,
+    changePage,
+    requestRender: requestPdfRender,
+  } = usePitchPdfPreview({
+    sessionId,
+    previewFile,
+    pageIndex,
+    elapsedSec,
+    isPitching,
+    isSubmitting,
+    isBigScreenMode,
+    onDocumentLoaded: handlePdfDocumentLoaded,
+    onPageChange: handlePdfPageChange,
+    onSubmittingChange: handlePdfSubmittingChange,
+    onPageChangeStart: handlePdfPageChangeStart,
+    onError: handlePdfError,
+  });
   const statusLabel = useMemo(() => {
     const labels: Record<string, string> = {
       CREATED: "待开始",
@@ -580,200 +579,13 @@ export function TrainingSessionClient({
   }, [isPitching, isGuardResolved, sessionId]);
 
   useEffect(() => {
-    if (!previewFile || !previewUrl) {
-      return;
-    }
-
-    const pdfUrl = previewUrl;
-    let cancelled = false;
-    let loadingTask: PDFDocumentLoadingTask | null = null;
-
-    async function loadPdf() {
-      setIsPdfLoading(true);
-      setPdfError("");
-
-      try {
-        const pdfjs = await import("pdfjs-dist");
-
-        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
-        loadingTask = pdfjs.getDocument({
-          url: pdfUrl,
-          cMapUrl: pdfCMapUrl,
-          cMapPacked: true,
-          standardFontDataUrl: pdfStandardFontDataUrl,
-          wasmUrl: pdfWasmUrl,
-          useWasm: true,
-          iccUrl: pdfIccUrl,
-          useSystemFonts: false,
-          disableFontFace: true,
-          isEvalSupported: true,
-          fontExtraProperties: true,
-        });
-
-        const loadedDocument = await loadingTask.promise;
-
-        if (cancelled) {
-          await loadedDocument.destroy();
-          return;
-        }
-
-        setPdfDocument(loadedDocument);
-        setTotalPages(loadedDocument.numPages);
-        setPageIndex((currentIndex) =>
-          Math.min(Math.max(currentIndex, 0), loadedDocument.numPages - 1),
-        );
-      } catch (error) {
-        if (!cancelled) {
-          const message =
-            error instanceof Error ? error.message : "PDF 加载失败。";
-
-          setPdfDocument(null);
-          setTotalPages(null);
-          setPdfError(`PDF 加载失败：${message}`);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsPdfLoading(false);
-        }
-      }
-    }
-
-    void loadPdf();
-
-    return () => {
-      cancelled = true;
-      renderTaskRef.current?.cancel();
-      void loadingTask?.destroy();
-    };
-  }, [previewFile, previewUrl]);
-
-  useEffect(() => {
-    if (!pdfDocument || !canvasRef.current) {
-      return;
-    }
-
-    let cancelled = false;
-    const canvas = canvasRef.current;
-    const loadedDocument = pdfDocument;
-
-    async function renderPage() {
-      renderTaskRef.current?.cancel();
-
-      try {
-        const page = await loadedDocument.getPage(currentPageNumber);
-
-        if (cancelled) {
-          return;
-        }
-
-        const baseViewport = page.getViewport({ scale: 1 });
-        const containerWidth =
-          previewContainerRef.current?.clientWidth ?? baseViewport.width;
-        const containerHeight =
-          previewContainerRef.current?.clientHeight ?? baseViewport.height;
-        const widthScale = containerWidth / baseViewport.width;
-        const heightScale =
-          containerHeight > 0
-            ? containerHeight / baseViewport.height
-            : widthScale;
-        const cssScale = Math.max(
-          0.1,
-          Math.min(widthScale, heightScale, isBigScreenMode ? 4 : 2.5),
-        );
-        const viewport = page.getViewport({ scale: cssScale });
-        const outputScale = window.devicePixelRatio || 1;
-        const context = canvas.getContext("2d");
-
-        if (!context) {
-          throw new Error("当前浏览器不支持 Canvas 渲染。");
-        }
-
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.style.height = `${Math.floor(viewport.height)}px`;
-
-        const renderTask = page.render({
-          canvas,
-          canvasContext: context,
-          transform:
-            outputScale !== 1
-              ? ([outputScale, 0, 0, outputScale, 0, 0] as [
-                  number,
-                  number,
-                  number,
-                  number,
-                  number,
-                  number,
-                ])
-              : undefined,
-          viewport,
-        });
-
-        renderTaskRef.current = renderTask;
-        await renderTask.promise;
-      } catch (error) {
-        if (
-          !cancelled &&
-          error instanceof Error &&
-          error.name !== "RenderingCancelledException"
-        ) {
-          setPdfError(`PDF 页面渲染失败：${error.message}`);
-        }
-      }
-    }
-
-    void renderPage();
-
-    return () => {
-      cancelled = true;
-      renderTaskRef.current?.cancel();
-    };
-  }, [
-    currentPageNumber,
-    isBigScreenMode,
-    pdfDocument,
-    renderTick,
-  ]);
-
-  useEffect(() => {
-    if (!previewFile) {
-      return;
-    }
-
-    const handleResize = () => {
-      setRenderTick((tick) => tick + 1);
-    };
-
-    window.addEventListener("resize", handleResize);
-
-    return () => window.removeEventListener("resize", handleResize);
-  }, [previewFile]);
-
-  useEffect(() => {
-    const previewContainer = previewContainerRef.current;
-
-    if (!previewContainer || !previewFile) {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      setRenderTick((tick) => tick + 1);
-    });
-
-    observer.observe(previewContainer);
-
-    return () => observer.disconnect();
-  }, [previewFile]);
-
-  useEffect(() => {
     setIsFullscreenSupported(
       Boolean(document.fullscreenEnabled && trainingShellRef.current),
     );
 
     const handleFullscreenChange = () => {
       setIsFullscreenActive(document.fullscreenElement !== null);
-      setRenderTick((tick) => tick + 1);
+      requestPdfRender();
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -781,12 +593,12 @@ export function TrainingSessionClient({
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
-  }, []);
+  }, [requestPdfRender]);
 
   const enterBigScreen = useCallback(async (requestBrowserFullscreen = true) => {
     setFullscreenMessage("");
     setIsBigScreenMode(true);
-    setRenderTick((tick) => tick + 1);
+    requestPdfRender();
 
     if (!requestBrowserFullscreen) {
       return true;
@@ -804,20 +616,20 @@ export function TrainingSessionClient({
       setFullscreenMessage("浏览器阻止了自动全屏，请点击“进入全屏”。");
       return false;
     }
-  }, []);
+  }, [requestPdfRender]);
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const exitBigScreen = useCallback(async () => {
     setIsBigScreenMode(false);
     setFullscreenMessage("");
-    setRenderTick((tick) => tick + 1);
+    requestPdfRender();
 
     if (document.fullscreenElement) {
       await document.exitFullscreen().catch(() => {
         setFullscreenMessage("退出浏览器全屏失败，可按 Esc 退出。");
       });
     }
-  }, []);
+  }, [requestPdfRender]);
 
   const stopMediaStream = useCallback(() => {
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -1347,68 +1159,6 @@ export function TrainingSessionClient({
       setIsAnalysisLoading(false);
     }
   }, [isEnded, sessionId, transcript, transcribeStatus]);
-
-  const recordSlideEvent = useCallback(
-    async (eventType: "NEXT" | "PREV" | "JUMP", nextPageIndex: number) => {
-      const response = await fetch(`/training/${sessionId}/events`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          eventType,
-          pageIndex: nextPageIndex + 1,
-          elapsedSec,
-          fileId: primaryFileId,
-        }),
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-
-        throw new Error(body?.error ?? "翻页事件记录失败。");
-      }
-    },
-    [elapsedSec, primaryFileId, sessionId],
-  );
-
-  const changePage = useCallback(
-    async (direction: "NEXT" | "PREV") => {
-      if (isSubmitting) {
-        return;
-      }
-
-      const nextPageIndex =
-        direction === "NEXT"
-          ? Math.min(
-              pageIndex + 1,
-              totalPages === null ? pageIndex + 1 : totalPages - 1,
-            )
-          : Math.max(0, pageIndex - 1);
-
-      if (nextPageIndex === pageIndex) {
-        return;
-      }
-
-      setIsSubmitting(true);
-      setMessage("");
-
-      try {
-        if (isPitching) {
-          await recordSlideEvent(direction, nextPageIndex);
-        }
-
-        setPageIndex(nextPageIndex);
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : "翻页失败。");
-      } finally {
-        setIsSubmitting(false);
-      }
-    },
-    [isPitching, isSubmitting, pageIndex, recordSlideEvent, totalPages],
-  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
