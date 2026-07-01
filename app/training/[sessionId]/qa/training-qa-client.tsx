@@ -12,6 +12,10 @@ import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
 import { PREFERRED_DEVICE_KEY } from "@/lib/use-audio-input";
 import type { DisplayMaterialNotice } from "@/lib/display-material";
+import {
+  speechUnavailableMessage,
+  useQaSpeech,
+} from "@/lib/use-qa-speech";
 
 type TrainingQaQuestion = {
   id: string;
@@ -51,12 +55,6 @@ type TrainingQaClientProps = Readonly<{
 
 type QaPhase = "READY" | "ASKING" | "COUNTDOWN" | "ANSWERING" | "SAVING" | "DONE";
 type PreviewMode = "standard" | "compatible";
-type QuestionTextDialog =
-  | {
-      question: TrainingQaQuestion;
-      mode: "reading" | "fallback" | "review";
-    }
-  | null;
 
 const qaLimitSec = 3 * 60;
 const dynamicFollowupAnswerLimitSec = 60;
@@ -77,9 +75,6 @@ const recordingMimeTypeCandidates = [
 ];
 const dynamicFollowupRetryDelayMs = 3_000;
 const dynamicFollowupMaxRetryCount = 10;
-const speechUnavailableMessage =
-  "题目语音播报暂不可用，已切换为文字提问。你的回答录音不受影响。";
-const recoverableSpeechErrorCodes = new Set(["canceled", "interrupted"]);
 
 function formatDuration(totalSec: number) {
   const normalizedSec = Math.max(0, totalSec);
@@ -142,12 +137,6 @@ function getPreferredAudioConstraints(): MediaStreamConstraints {
   return { audio: true };
 }
 
-function estimateQuestionSpeechMs(text: string) {
-  const chineseCharCount = Array.from(text.trim()).length;
-
-  return Math.min(28000, Math.max(5000, chineseCharCount * 170));
-}
-
 function isEditableOrClickableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -190,99 +179,6 @@ function isTranscriptNotReadyReason(reason: string | undefined) {
   );
 }
 
-function chooseJudgeVoice(voices: SpeechSynthesisVoice[]) {
-  if (voices.length === 0) return null;
-
-  const normalizedVoices = voices.map((voice) => ({
-    voice,
-    name: voice.name.toLowerCase(),
-    lang: voice.lang.toLowerCase(),
-  }));
-
-  const isHuihui = ({ name }: { name: string }) =>
-    name.includes("huihui") || name.includes("慧慧");
-  const preferredNameKeywords = [
-    "xiaoyi",
-    "晓伊",
-    "yunyang",
-    "云扬",
-    "xiaoxiao",
-    "晓晓",
-    "yunxi",
-    "云希",
-    "natural",
-    "自然",
-  ];
-
-  const findByName = (
-    keywords: string[],
-    predicate?: (voice: { lang: string; name: string }) => boolean,
-  ) => {
-    const normalizedKeywords = keywords.map((keyword) => keyword.toLowerCase());
-
-    return normalizedVoices.find(
-      ({ name, lang }) =>
-        (!predicate || predicate({ lang, name })) &&
-        normalizedKeywords.some((keyword) => name.includes(keyword)),
-    )?.voice;
-  };
-
-  const zhCNVoices = normalizedVoices.filter(({ lang }) => lang === "zh-cn");
-  const zhVoices = normalizedVoices.filter(({ lang }) => lang.startsWith("zh-"));
-  const nonHuihuiZhCNVoices = zhCNVoices.filter((voice) => !isHuihui(voice));
-  const nonHuihuiZhVoices = zhVoices.filter((voice) => !isHuihui(voice));
-
-  return (
-    findByName(preferredNameKeywords, ({ lang }) => lang === "zh-cn") ??
-    nonHuihuiZhCNVoices.find(({ voice }) => voice.default)?.voice ??
-    nonHuihuiZhCNVoices[0]?.voice ??
-    findByName(preferredNameKeywords, ({ lang }) => lang.startsWith("zh-")) ??
-    nonHuihuiZhVoices.find(({ voice }) => voice.default)?.voice ??
-    nonHuihuiZhVoices[0]?.voice ??
-    findByName(preferredNameKeywords) ??
-    findByName(["huihui", "慧慧"]) ??
-    voices.find((voice) => voice.default) ??
-    voices[0] ??
-    null
-  );
-}
-
-function getVoicesAfterChange(timeoutMs: number) {
-  return new Promise<SpeechSynthesisVoice[]>((resolve) => {
-    const timeout = window.setTimeout(() => {
-      window.speechSynthesis.removeEventListener("voiceschanged", handler);
-      resolve(window.speechSynthesis.getVoices());
-    }, timeoutMs);
-
-    function handler() {
-      window.clearTimeout(timeout);
-      resolve(window.speechSynthesis.getVoices());
-    }
-
-    window.speechSynthesis.addEventListener("voiceschanged", handler, {
-      once: true,
-    });
-  });
-}
-
-async function getVoicesWithRetry(timeoutMs = 3000) {
-  const startedAt = Date.now();
-  let voices = window.speechSynthesis.getVoices();
-
-  if (voices.length > 0) {
-    return voices;
-  }
-
-  voices = await getVoicesAfterChange(Math.min(1200, timeoutMs));
-
-  while (voices.length === 0 && Date.now() - startedAt < timeoutMs) {
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    voices = window.speechSynthesis.getVoices();
-  }
-
-  return voices;
-}
-
 export function TrainingQaClient({
   sessionId,
   projectName,
@@ -322,8 +218,6 @@ export function TrainingQaClient({
   const [preAnswerOverlay, setPreAnswerOverlay] = useState<number | null>(null);
   const [dynamicFollowupIntroQuestion, setDynamicFollowupIntroQuestion] =
     useState<TrainingQaQuestion | null>(null);
-  const [questionTextDialog, setQuestionTextDialog] =
-    useState<QuestionTextDialog>(null);
   const [isGuardResolved, setIsGuardResolved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [, setQaRecordingMessage] = useState("");
@@ -340,12 +234,12 @@ export function TrainingQaClient({
   const answerElapsedBeforePhaseRef = useRef(
     Math.max(0, qaLimitSec - Math.min(initialRemainingSec, qaLimitSec)),
   );
-  const speechTimeoutRef = useRef<number | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
   const dynamicFollowupIntroTimerRef = useRef<number | null>(null);
   const beginJudgeQuestionRef = useRef<((questionIndex: number) => void) | null>(
     null,
   );
+  const beginPreAnswerCountdownRef = useRef<(() => void) | null>(null);
   const dynamicFollowupIntroShownQuestionIdsRef = useRef<Set<string>>(
     new Set(
       initialStatus === "QAING" &&
@@ -357,9 +251,6 @@ export function TrainingQaClient({
   const hasAutoEndedRef = useRef(false);
   const hasResumedQaingRef = useRef(false);
   const isCompletingNormallyRef = useRef(false);
-  const hasMoveOnRef = useRef(false);
-  const speechRunIdRef = useRef(0);
-  const preferredJudgeVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const qaPhaseRef = useRef<QaPhase>(qaPhase);
   const dynamicFollowupRetryCountRef = useRef(0);
   const dynamicFollowupInFlightRef = useRef(false);
@@ -409,13 +300,6 @@ export function TrainingQaClient({
   const pageLabel = totalPages
     ? `${currentPageNumber} / ${totalPages}`
     : String(currentPageNumber);
-  const shouldShowMessageToast =
-    Boolean(message) &&
-    !questionTextDialog &&
-    message !== "答辩问题已生成。开始前不会展示完整题目。" &&
-    message !== "评委问题生成时间较长，请稍候……" &&
-    message !== speechUnavailableMessage;
-
   useTrainingAbortGuard({
     sessionId,
     enabled: status === "QA_READY" || status === "QAING",
@@ -707,13 +591,6 @@ export function TrainingQaClient({
     };
   }, []);
 
-  function clearSpeechTimer() {
-    if (speechTimeoutRef.current !== null) {
-      window.clearTimeout(speechTimeoutRef.current);
-      speechTimeoutRef.current = null;
-    }
-  }
-
   function clearCountdownTimer() {
     if (countdownIntervalRef.current !== null) {
       window.clearInterval(countdownIntervalRef.current);
@@ -738,40 +615,30 @@ export function TrainingQaClient({
     });
   }, []);
 
-  const prepareJudgeVoice = useCallback(async () => {
-    if (
-      typeof window === "undefined" ||
-      !("speechSynthesis" in window) ||
-      typeof SpeechSynthesisUtterance === "undefined"
-    ) {
-      preferredJudgeVoiceRef.current = null;
-      return null;
-    }
+  const {
+    questionTextDialog,
+    setQuestionTextDialog,
+    clearSpeechTimer,
+    cancelSpeech,
+    confirmFallbackQuestionRead,
+    startQuestionSpeech,
+  } = useQaSpeech({
+    sessionId,
+    status,
+    hasAutoEndedRef,
+    beginPreAnswerCountdown: () => {
+      beginPreAnswerCountdownRef.current?.();
+    },
+    onMessageChange: setMessage,
+    onQuestionTextRevealed: markQuestionTextRevealed,
+  });
 
-    const voices = await getVoicesWithRetry(3000);
-    const selectedVoice = chooseJudgeVoice(voices);
-
-    preferredJudgeVoiceRef.current = selectedVoice;
-    if (selectedVoice) {
-      devLog(
-        `[QA TTS] 预选语音：${selectedVoice.name} (${selectedVoice.lang})`,
-      );
-    } else {
-      devLog("[QA TTS] 未找到可预选语音，将尝试浏览器默认语音", {
-        sessionId,
-      });
-    }
-
-    return selectedVoice;
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (status !== "QA_READY" && status !== "QAING") {
-      return;
-    }
-
-    void prepareJudgeVoice();
-  }, [prepareJudgeVoice, status]);
+  const shouldShowMessageToast =
+    Boolean(message) &&
+    !questionTextDialog &&
+    message !== "答辩问题已生成。开始前不会展示完整题目。" &&
+    message !== "评委问题生成时间较长，请稍候……" &&
+    message !== speechUnavailableMessage;
 
   const changeMaterialPage = useCallback(
     (direction: "PREV" | "NEXT") => {
@@ -1118,9 +985,9 @@ export function TrainingQaClient({
     setDynamicFollowupUsedSec(0);
     setQaPhase("ANSWERING");
     // 确保评委语音已停止，避免被录进用户回答
-    window.speechSynthesis?.cancel();
+    cancelSpeech();
     await startQuestionRecording();
-  }, [startQuestionRecording, usedAnswerSec]);
+  }, [cancelSpeech, startQuestionRecording, usedAnswerSec]);
 
   const beginPreAnswerCountdown = useCallback(() => {
     clearSpeechTimer();
@@ -1148,61 +1015,13 @@ export function TrainingQaClient({
         return next;
       });
     }, 1000);
-  }, [beginAnswering]);
+  }, [beginAnswering, clearSpeechTimer]);
 
-  const showQuestionTextFallback = useCallback(
-    (question: TrainingQaQuestion, speechRunId: number, reason: string) => {
-      if (speechRunIdRef.current !== speechRunId || hasAutoEndedRef.current) {
-        return;
-      }
+  useEffect(() => {
+    beginPreAnswerCountdownRef.current = beginPreAnswerCountdown;
+  }, [beginPreAnswerCountdown]);
 
-      clearSpeechTimer();
-      hasMoveOnRef.current = true;
-      markQuestionTextRevealed(question.id);
-      setQuestionTextDialog({
-        question,
-        mode: "fallback",
-      });
-      setMessage(speechUnavailableMessage);
-      devLog("[QA TTS] 切换为文字提问", {
-        sessionId,
-        questionId: question.id,
-        reason,
-      });
-    },
-    [markQuestionTextRevealed, sessionId],
-  );
-
-  const confirmFallbackQuestionRead = useCallback(() => {
-    if (!questionTextDialog || hasAutoEndedRef.current) {
-      setQuestionTextDialog(null);
-      return;
-    }
-
-    if (questionTextDialog.mode === "review") {
-      setQuestionTextDialog(null);
-      return;
-    }
-
-    setQuestionTextDialog(null);
-    setMessage("");
-    beginPreAnswerCountdown();
-  }, [beginPreAnswerCountdown, questionTextDialog]);
-
-function buildMoveOn(
-  hasMovedOnRef: { current: boolean },
-  beginPreAnswerCountdown: () => void,
-) {
-  return () => {
-    if (hasMovedOnRef.current) {
-      return;
-    }
-    hasMovedOnRef.current = true;
-    beginPreAnswerCountdown();
-  };
-}
-
-const beginJudgeQuestion = useCallback(
+  const beginJudgeQuestion = useCallback(
     (questionIndex: number) => {
       const question = questions[questionIndex];
 
@@ -1213,8 +1032,7 @@ const beginJudgeQuestion = useCallback(
       clearDynamicFollowupIntroTimer();
       clearSpeechTimer();
       clearCountdownTimer();
-      window.speechSynthesis?.cancel();
-      hasMoveOnRef.current = false;
+      cancelSpeech();
       setMessage("");
       setQaRecordingMessage("");
 
@@ -1234,156 +1052,18 @@ const beginJudgeQuestion = useCallback(
         return;
       }
 
-      const speechRunId = speechRunIdRef.current + 1;
-      speechRunIdRef.current = speechRunId;
-      setQuestionTextDialog({
-        question,
-        mode: "reading",
-      });
       setCurrentQuestionIndex(questionIndex);
       setDynamicFollowupIntroQuestion(null);
       setQaPhase("ASKING");
-
-      if (
-        typeof window === "undefined" ||
-        !("speechSynthesis" in window) ||
-        typeof SpeechSynthesisUtterance === "undefined"
-      ) {
-        showQuestionTextFallback(question, speechRunId, "unsupported");
-        return;
-      }
-
-      const moveOn = buildMoveOn(hasMoveOnRef, () => {
-        setQuestionTextDialog(null);
-        beginPreAnswerCountdown();
-      });
-      const isCurrentSpeechRun = () =>
-        speechRunIdRef.current === speechRunId && !hasAutoEndedRef.current;
-      const speechStartedRef = { current: false };
-
-      const speakQuestion = async (retryCount = 0) => {
-        const utterance = new SpeechSynthesisUtterance(question.questionText);
-
-        utterance.lang = "zh-CN";
-        utterance.rate = 1.15;
-        utterance.pitch = 0.92;
-        utterance.onstart = () => {
-          speechStartedRef.current = true;
-        };
-        utterance.onend = () => {
-          if (!isCurrentSpeechRun()) {
-            return;
-          }
-
-          moveOn();
-        };
-        utterance.onerror = (event) => {
-          if (!isCurrentSpeechRun()) {
-            return;
-          }
-
-          const errorCode = event.error;
-
-          devLog("[QA TTS] 播报错误", {
-            sessionId,
-            questionId: question.id,
-            errorCode,
-            retryCount,
-          });
-
-          if (recoverableSpeechErrorCodes.has(errorCode) && retryCount < 1) {
-            window.setTimeout(() => {
-              if (!isCurrentSpeechRun()) {
-                return;
-              }
-
-              void speakQuestion(retryCount + 1);
-            }, 180);
-            return;
-          }
-
-          if (errorCode === "not-allowed") {
-            showQuestionTextFallback(question, speechRunId, errorCode);
-            return;
-          }
-
-          showQuestionTextFallback(question, speechRunId, errorCode);
-        };
-
-        let selectedVoice = preferredJudgeVoiceRef.current;
-        if (!selectedVoice) {
-          const voices = await getVoicesWithRetry(3000);
-
-          selectedVoice = chooseJudgeVoice(voices);
-          preferredJudgeVoiceRef.current = selectedVoice;
-        }
-
-        if (!isCurrentSpeechRun()) {
-          return;
-        }
-
-        if (selectedVoice) {
-          utterance.voice = selectedVoice;
-          utterance.lang = selectedVoice.lang;
-          devLog(`[QA TTS] 选中语音：${selectedVoice.name} (${selectedVoice.lang})`);
-          try {
-            localStorage.setItem("qa-preferred-voice", selectedVoice.name);
-          } catch {
-            // localStorage 不可用
-          }
-        } else {
-          devLog("[QA TTS] 未获取到 voice，尝试使用浏览器默认语音", {
-            sessionId,
-            questionId: question.id,
-          });
-        }
-
-        try {
-          window.speechSynthesis.resume();
-          window.speechSynthesis.speak(utterance);
-        } catch (error) {
-          if (!isCurrentSpeechRun()) {
-            return;
-          }
-
-          devLog("[QA TTS] speak 调用失败", {
-            sessionId,
-            questionId: question.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          showQuestionTextFallback(question, speechRunId, "speak_failed");
-        }
-      };
-
-      void speakQuestion();
-
-      // setTimeout 仅作为兜底保护，如果语音仍在播放则不前进
-      function scheduleFallback() {
-        speechTimeoutRef.current = window.setTimeout(() => {
-          if (hasMoveOnRef.current || speechRunIdRef.current !== speechRunId) {
-            return;
-          }
-          if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-            // 仍在播放，延后再检查
-            scheduleFallback();
-            return;
-          }
-          if (!speechStartedRef.current) {
-            showQuestionTextFallback(question, speechRunId, "speech_not_started");
-            return;
-          }
-          moveOn();
-        }, estimateQuestionSpeechMs(question.questionText));
-      }
-
-      scheduleFallback();
+      startQuestionSpeech(question);
     },
     [
-      beginPreAnswerCountdown,
+      cancelSpeech,
       clearDynamicFollowupIntroTimer,
+      clearSpeechTimer,
       questions,
-      sessionId,
-      showQuestionTextFallback,
+      setQuestionTextDialog,
+      startQuestionSpeech,
     ],
   );
 
@@ -1403,7 +1083,7 @@ const beginJudgeQuestion = useCallback(
       setMessage("");
       clearSpeechTimer();
       clearCountdownTimer();
-      window.speechSynthesis?.cancel();
+      cancelSpeech();
 
       try {
         const recordingId = await stopAndUploadCurrentRecording();
@@ -1443,6 +1123,8 @@ const beginJudgeQuestion = useCallback(
       }
     },
     [
+      cancelSpeech,
+      clearSpeechTimer,
       getCurrentUsedAnswerSec,
       revealedQuestionIds,
       router,
@@ -1520,13 +1202,13 @@ const beginJudgeQuestion = useCallback(
       clearDynamicFollowupIntroTimer();
       clearSpeechTimer();
       clearCountdownTimer();
-      window.speechSynthesis?.cancel();
+      cancelSpeech();
       if (mediaRecorderRef.current?.state === "recording") {
         mediaRecorderRef.current.stop();
       }
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
-  }, [clearDynamicFollowupIntroTimer]);
+  }, [cancelSpeech, clearDynamicFollowupIntroTimer, clearSpeechTimer]);
 
   // 自动生成 QA 问题：轮询 GET → POST 一次 → 等待 → 超时
   useEffect(() => {
