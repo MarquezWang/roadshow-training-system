@@ -12,6 +12,7 @@ import {
   type PreviewNotice,
   type TrainingFile,
 } from "@/lib/use-pitch-pdf-preview";
+import { useFullscreenMode } from "@/lib/use-fullscreen-mode";
 
 type TrainingTranscript = {
   id: string;
@@ -279,18 +280,9 @@ export function TrainingSessionClient({
     useState(false);
   const [showRecordingReenableConfirm, setShowRecordingReenableConfirm] =
     useState(false);
-  const [isBigScreenMode, setIsBigScreenMode] = useState(
-    initialStatus === "PITCHING",
-  );
   const [isGuardResolved, setIsGuardResolved] = useState(false);
   const [prepCountdown, setPrepCountdown] = useState<number | null>(null);
   const prepCountdownIntervalRef = useRef<number | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [isFullscreenSupported, setIsFullscreenSupported] = useState(false);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [isFullscreenActive, setIsFullscreenActive] = useState(false);
-  const [fullscreenMessage, setFullscreenMessage] = useState("");
-  const trainingShellRef = useRef<HTMLDivElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -301,6 +293,19 @@ export function TrainingSessionClient({
   const isCompletingNormallyRef = useRef(false);
   const isPitching = status === "PITCHING";
   const isEnded = status === "PITCH_ENDED" || status === "FINISHED";
+  const requestPdfRenderRef = useRef<() => void>(() => {});
+  const handleFullscreenLayoutChanged = useCallback(() => {
+    requestPdfRenderRef.current();
+  }, []);
+  const {
+    containerRef: trainingShellRef,
+    isBigScreenMode,
+    fullscreenMessage,
+    enterBigScreen,
+  } = useFullscreenMode({
+    initialBigScreenMode: initialStatus === "PITCHING",
+    onLayoutChanged: handleFullscreenLayoutChanged,
+  });
   const handlePdfDocumentLoaded = useCallback((loadedTotalPages: number) => {
     setPageIndex((currentIndex) =>
       Math.min(Math.max(currentIndex, 0), loadedTotalPages - 1),
@@ -347,6 +352,9 @@ export function TrainingSessionClient({
     onPageChangeStart: handlePdfPageChangeStart,
     onError: handlePdfError,
   });
+  useEffect(() => {
+    requestPdfRenderRef.current = requestPdfRender;
+  }, [requestPdfRender]);
   const statusLabel = useMemo(() => {
     const labels: Record<string, string> = {
       CREATED: "待开始",
@@ -577,59 +585,6 @@ export function TrainingSessionClient({
         });
       });
   }, [isPitching, isGuardResolved, sessionId]);
-
-  useEffect(() => {
-    setIsFullscreenSupported(
-      Boolean(document.fullscreenEnabled && trainingShellRef.current),
-    );
-
-    const handleFullscreenChange = () => {
-      setIsFullscreenActive(document.fullscreenElement !== null);
-      requestPdfRender();
-    };
-
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener("fullscreenchange", handleFullscreenChange);
-    };
-  }, [requestPdfRender]);
-
-  const enterBigScreen = useCallback(async (requestBrowserFullscreen = true) => {
-    setFullscreenMessage("");
-    setIsBigScreenMode(true);
-    requestPdfRender();
-
-    if (!requestBrowserFullscreen) {
-      return true;
-    }
-
-    if (!document.fullscreenEnabled || !trainingShellRef.current) {
-      setFullscreenMessage("当前浏览器不支持全屏，可继续使用大屏模式。");
-      return false;
-    }
-
-    try {
-      await trainingShellRef.current.requestFullscreen();
-      return true;
-    } catch {
-      setFullscreenMessage("浏览器阻止了自动全屏，请点击“进入全屏”。");
-      return false;
-    }
-  }, [requestPdfRender]);
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const exitBigScreen = useCallback(async () => {
-    setIsBigScreenMode(false);
-    setFullscreenMessage("");
-    requestPdfRender();
-
-    if (document.fullscreenElement) {
-      await document.exitFullscreen().catch(() => {
-        setFullscreenMessage("退出浏览器全屏失败，可按 Esc 退出。");
-      });
-    }
-  }, [requestPdfRender]);
 
   const stopMediaStream = useCallback(() => {
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
