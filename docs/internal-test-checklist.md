@@ -2,6 +2,17 @@
 
 本清单用于每次功能改动后人工验收 `roadshow-training-system` 主流程。重点覆盖项目新建、材料预览、训练、答辩、报告和训练记录，避免核心链路在后续开发中回退。
 
+## 最近人工验收记录
+
+### 2026-07-01 路演页结构拆分后主流程回归
+
+- [x] 本地手动跑完整训练流程，未发现阻塞问题。
+- [x] Pitch 页面可正常进入、录音、翻页和结束路演。
+- [x] 结束路演后录音保存与自动转写触发正常。
+- [x] QA 页面可正常进入并完成答辩。
+- [x] 报告页与路演回放入口可正常访问。
+- [x] 本轮验证覆盖 `use-pitch-pdf-preview`、`use-fullscreen-mode`、`use-pitch-recording`、`use-pitch-transcript`、`use-pitch-analysis` 拆分后的主链路。
+
 ## A. 项目新建流程
 
 - [ ] 打开 `/projects/new` 页面正常，无运行时错误。
