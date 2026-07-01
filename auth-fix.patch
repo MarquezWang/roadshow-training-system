@@ -1,0 +1,82 @@
+diff --git a/app/api/ai/test/route.ts b/app/api/ai/test/route.ts
+index c6dc4e4..b88a84e 100644
+--- a/app/api/ai/test/route.ts
++++ b/app/api/ai/test/route.ts
+@@ -2,10 +2,23 @@ import { NextResponse } from "next/server";
+ import { callAI } from "@/lib/ai";
+ import { loadPromptTemplate } from "@/lib/prompt-loader";
+ import { renderPrompt } from "@/lib/prompt-renderer";
++import { isAuthEnabled } from "@/lib/auth";
++import { getCurrentAuthUser } from "@/lib/auth-server";
+ 
+ export const runtime = "nodejs";
+ 
+ export async function GET() {
++  if (process.env.NODE_ENV === "production") {
++    return NextResponse.json({ error: "Not found" }, { status: 404 });
++  }
++
++  if (isAuthEnabled() && !(await getCurrentAuthUser())) {
++    return NextResponse.json(
++      { error: "请先登录后再使用该接口。" },
++      { status: 401 },
++    );
++  }
++
+   try {
+     const template = await loadPromptTemplate("project-summary");
+     const userPrompt = renderPrompt(template, {
+diff --git a/app/api/projects/material-parse/route.ts b/app/api/projects/material-parse/route.ts
+index 3f0b578..54f90f4 100644
+--- a/app/api/projects/material-parse/route.ts
++++ b/app/api/projects/material-parse/route.ts
+@@ -3,6 +3,8 @@ import {
+   InitialProjectMaterialValidationError,
+   validateInitialProjectMaterial,
+ } from "@/lib/file-upload";
++import { isAuthEnabled } from "@/lib/auth";
++import { getCurrentAuthUser } from "@/lib/auth-server";
+ 
+ const SYSTEM_FAILURE_MESSAGE =
+   "材料解析失败，请更换文件或手动填写项目档案。";
+@@ -15,6 +17,13 @@ function debugLog(stage: string, details: unknown) {
+ }
+ 
+ export async function POST(request: Request) {
++  if (isAuthEnabled() && !(await getCurrentAuthUser())) {
++    return Response.json(
++      { status: "unauthorized", message: "请先登录后再使用该功能。" },
++      { status: 401 },
++    );
++  }
++
+   try {
+     const formData = await request.formData();
+     const materials = formData
+diff --git a/app/api/projects/profile-recognition/route.ts b/app/api/projects/profile-recognition/route.ts
+index ae381ac..8d94ba2 100644
+--- a/app/api/projects/profile-recognition/route.ts
++++ b/app/api/projects/profile-recognition/route.ts
+@@ -1,6 +1,8 @@
+ import { callAI } from "@/lib/ai";
+ import { parseFirstAIJsonObject } from "@/lib/json-utils";
+ import { loadPromptTemplate } from "@/lib/prompt-loader";
++import { isAuthEnabled } from "@/lib/auth";
++import { getCurrentAuthUser } from "@/lib/auth-server";
+ import {
+   extractLooseProjectProfile,
+   normalizeProjectField,
+@@ -306,6 +308,13 @@ function failedResponse(reason: FailureReason, message: string, status: number)
+ }
+ 
+ export async function POST(request: Request) {
++  if (isAuthEnabled() && !(await getCurrentAuthUser())) {
++    return Response.json(
++      { status: "unauthorized", message: "请先登录后再使用该功能。" },
++      { status: 401 },
++    );
++  }
++
+   let body: {
+     fileName?: unknown;
+     extractedText?: unknown;

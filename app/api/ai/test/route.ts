@@ -2,10 +2,23 @@ import { NextResponse } from "next/server";
 import { callAI } from "@/lib/ai";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
+import { isAuthEnabled } from "@/lib/auth";
+import { getCurrentAuthUser } from "@/lib/auth-server";
 
 export const runtime = "nodejs";
 
 export async function GET() {
+  if (process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (isAuthEnabled() && !(await getCurrentAuthUser())) {
+    return NextResponse.json(
+      { error: "请先登录后再使用该接口。" },
+      { status: 401 },
+    );
+  }
+
   try {
     const template = await loadPromptTemplate("project-summary");
     const userPrompt = renderPrompt(template, {

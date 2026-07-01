@@ -1,6 +1,8 @@
 import { callAI } from "@/lib/ai";
 import { parseFirstAIJsonObject } from "@/lib/json-utils";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
+import { isAuthEnabled } from "@/lib/auth";
+import { getCurrentAuthUser } from "@/lib/auth-server";
 import {
   extractLooseProjectProfile,
   normalizeProjectField,
@@ -306,6 +308,13 @@ function failedResponse(reason: FailureReason, message: string, status: number) 
 }
 
 export async function POST(request: Request) {
+  if (isAuthEnabled() && !(await getCurrentAuthUser())) {
+    return Response.json(
+      { status: "unauthorized", message: "请先登录后再使用该功能。" },
+      { status: 401 },
+    );
+  }
+
   let body: {
     fileName?: unknown;
     extractedText?: unknown;

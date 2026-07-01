@@ -3,6 +3,8 @@ import {
   InitialProjectMaterialValidationError,
   validateInitialProjectMaterial,
 } from "@/lib/file-upload";
+import { isAuthEnabled } from "@/lib/auth";
+import { getCurrentAuthUser } from "@/lib/auth-server";
 
 const SYSTEM_FAILURE_MESSAGE =
   "材料解析失败，请更换文件或手动填写项目档案。";
@@ -15,6 +17,13 @@ function debugLog(stage: string, details: unknown) {
 }
 
 export async function POST(request: Request) {
+  if (isAuthEnabled() && !(await getCurrentAuthUser())) {
+    return Response.json(
+      { status: "unauthorized", message: "请先登录后再使用该功能。" },
+      { status: 401 },
+    );
+  }
+
   try {
     const formData = await request.formData();
     const materials = formData
