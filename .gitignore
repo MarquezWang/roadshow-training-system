@@ -58,6 +58,9 @@ tmp/xfyun-debug/
 !/data/raw/.gitkeep
 !/data/raw/README.md
 
+# local diagnostic events
+/data/diagnostics.jsonl
+
 # local sqlite database
 /prisma/dev.db
 /prisma/dev.db-journal
