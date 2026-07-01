@@ -8,11 +8,17 @@ import { getCurrentAuthUser } from "@/lib/auth-server";
 export const runtime = "nodejs";
 
 export async function GET() {
-  if (process.env.NODE_ENV === "production") {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  const isProduction = process.env.NODE_ENV === "production";
+  const user = await getCurrentAuthUser();
 
-  if (isAuthEnabled() && !(await getCurrentAuthUser())) {
+  if (isProduction) {
+    // 生产环境仅作为管理员诊断入口：未登录、未开启鉴权或非管理员一律返回 404，
+    // 与 /admin 系列页面的 requireAdminUser() 行为保持一致，不额外暴露"存在该接口"的信息。
+    if (!isAuthEnabled() || !user || user.role !== "ADMIN") {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+  } else if (isAuthEnabled() && !user) {
+    // 开发环境仍允许本地联调，但如果本地也开了 AUTH_ENABLED，登录态要求保持一致。
     return NextResponse.json(
       { error: "请先登录后再使用该接口。" },
       { status: 401 },
