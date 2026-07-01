@@ -15,10 +15,9 @@ import { useFullscreenMode } from "@/lib/use-fullscreen-mode";
 import {
   usePitchRecording,
   type RecordingStatus,
-  type SavedPitchRecording,
   type TrainingRecording,
 } from "@/lib/use-pitch-recording";
-import type { TrainingTranscript } from "@/lib/use-pitch-transcript";
+import { usePitchTranscript } from "@/lib/use-pitch-transcript";
 
 type TrainingCoverageItem = {
   item: string;
@@ -154,26 +153,6 @@ export function TrainingSessionClient({
   const [remainingSec, setRemainingSec] = useState(initialRemainingSec);
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [transcript, setTranscript] = useState<TrainingTranscript | null>(
-    initialRecording?.transcript ?? null,
-  );
-  const [transcriptDraft, setTranscriptDraft] = useState(
-    initialRecording?.transcript?.text ?? "",
-  );
-  const [isTranscriptEditing, setIsTranscriptEditing] = useState(
-    !initialRecording?.transcript,
-  );
-  const [isTranscriptSaving, setIsTranscriptSaving] = useState(false);
-  const [transcriptMessage, setTranscriptMessage] = useState("");
-  const [transcribeStatus, setTranscribeStatus] = useState<
-    "idle" | "transcribing" | "completed" | "failed"
-  >(
-    initialRecording?.transcript?.status === "COMPLETED" &&
-    initialRecording.transcript.text
-      ? "completed"
-      : "idle",
-  );
-  const [transcribeErrorMessage, setTranscribeErrorMessage] = useState("");
   const [analysis, setAnalysis] = useState<TrainingAnalysis | null>(
     initialAnalysis,
   );
@@ -186,16 +165,25 @@ export function TrainingSessionClient({
   const isCompletingNormallyRef = useRef(false);
   const isPitching = status === "PITCHING";
   const isEnded = status === "PITCH_ENDED" || status === "FINISHED";
-  const resetTranscriptAfterRecordingSaved = useCallback(
-    (recording: SavedPitchRecording) => {
-      void recording;
-      setTranscript(null);
-      setTranscriptDraft("");
-      setIsTranscriptEditing(true);
-      setTranscriptMessage("");
-    },
-    [],
-  );
+  const {
+    transcript,
+    transcriptDraft,
+    setTranscriptDraft,
+    isTranscriptEditing,
+    setIsTranscriptEditing,
+    isTranscriptSaving,
+    transcriptMessage,
+    setTranscriptMessage,
+    transcribeStatus,
+    transcribeErrorMessage,
+    saveTranscript,
+    triggerTranscribe,
+    resetTranscriptAfterRecordingSaved,
+  } = usePitchTranscript({
+    sessionId,
+    recordingId: initialRecording?.id ?? "",
+    initialTranscript: initialRecording?.transcript ?? null,
+  });
   const {
     recordingStatus,
     recordingMessage,
@@ -527,146 +515,6 @@ export function TrainingSessionClient({
       }
     };
   }, []);
-
-  const saveTranscript = useCallback(async () => {
-    const text = transcriptDraft.trim();
-
-    if (!recordingId) {
-      setTranscriptMessage("录音尚未保存，不能保存转写文本。");
-      return;
-    }
-
-    if (!text) {
-      setTranscriptMessage("转写文本不能为空。");
-      return;
-    }
-
-    setIsTranscriptSaving(true);
-    setTranscriptMessage("");
-
-    try {
-      const response = await fetch(
-        `/training/${sessionId}/recordings/${recordingId}/transcript`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text,
-            source: "MANUAL",
-            language: "zh-CN",
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-
-        throw new Error(body?.error ?? "转写文本保存失败。");
-      }
-
-      const body = (await response.json()) as {
-        transcript: TrainingTranscript;
-      };
-
-      setTranscript(body.transcript);
-      setTranscriptDraft(body.transcript.text);
-      setIsTranscriptEditing(false);
-      setTranscriptMessage("转写文本已保存。");
-    } catch (error) {
-      setTranscriptMessage(
-        error instanceof Error ? error.message : "转写文本保存失败。",
-      );
-    } finally {
-      setIsTranscriptSaving(false);
-    }
-  }, [recordingId, sessionId, transcriptDraft]);
-
-  const triggerTranscribe = useCallback(
-    async (targetRecordingId?: string) => {
-      const rid = targetRecordingId ?? recordingId;
-
-      if (!rid) {
-        setTranscribeErrorMessage("没有录音 ID，无法触发转写。");
-        return;
-      }
-
-      const transcribeUrl = `/training/${sessionId}/recordings/${rid}/transcribe/start`;
-      devLog("[triggerTranscribe]", {
-        sessionId,
-        savedRecordingId: targetRecordingId,
-        recordingId,
-        rid,
-        transcribeUrl,
-      });
-
-      setTranscribeStatus("transcribing");
-      setTranscribeErrorMessage("");
-
-      try {
-        const response = await fetch(transcribeUrl, { method: "POST" });
-
-        devLog("[triggerTranscribe] response", {
-          status: response.status,
-          statusText: response.statusText,
-          ok: response.ok,
-          url: response.url,
-        });
-
-        const body = (await response.json().catch(() => null)) as {
-          transcript?: TrainingTranscript;
-          error?: string;
-          ok?: boolean;
-          message?: string;
-        } | null;
-
-        if (!response.ok) {
-          throw new Error(body?.error ?? `自动转写请求失败 (HTTP ${response.status})。`);
-        }
-
-        // 业务失败：HTTP 200 但 body.ok === false
-        if (body?.ok === false && body.transcript) {
-          setTranscript(body.transcript);
-          setTranscribeStatus("failed");
-          setTranscribeErrorMessage(
-            body.message ?? body.transcript.errorMessage ?? "自动转写未返回有效文本。",
-          );
-          return;
-        }
-
-        const transcript = body?.transcript;
-
-        if (transcript?.status === "COMPLETED" && transcript.text) {
-          setTranscript(transcript);
-          setTranscriptDraft(transcript.text);
-          setIsTranscriptEditing(false);
-          setTranscribeStatus("completed");
-          setTranscriptMessage("自动转写已完成。");
-        } else if (
-          transcript?.status === "PENDING" ||
-          transcript?.status === "PROCESSING"
-        ) {
-          setTranscript(transcript);
-          setTranscribeStatus("transcribing");
-          setTranscriptMessage("自动转写已启动，系统将在后台继续处理。");
-        } else {
-          setTranscribeStatus("failed");
-          setTranscribeErrorMessage(
-            transcript?.errorMessage ?? "自动转写未返回有效文本。",
-          );
-        }
-      } catch (error) {
-        setTranscribeStatus("failed");
-        setTranscribeErrorMessage(
-          error instanceof Error ? error.message : "自动转写失败。",
-        );
-      }
-    },
-    [recordingId, sessionId],
-  );
 
   const generateAnalysis = useCallback(async () => {
     if (!isEnded) {
