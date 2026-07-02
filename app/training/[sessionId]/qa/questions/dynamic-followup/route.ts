@@ -6,6 +6,13 @@ import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { devLog, devWarn } from "@/lib/dev-log";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import {
+  createOrReturnDynamicQuestion,
+  DYNAMIC_FOLLOWUP_SOURCE,
+  findExistingDynamicQuestion,
+  serializeDynamicQuestion,
+  type SerializedDynamicQuestion,
+} from "@/lib/dynamic-followup-question";
 
 type DynamicFollowupContext = Readonly<{
   params: Promise<{
@@ -65,68 +72,7 @@ interface DebugInfo {
   usedStage?: "main" | "mismatch" | "content";
 }
 
-const DYNAMIC_FOLLOWUP_ORDER_INDEX = 4;
-const DYNAMIC_FOLLOWUP_SOURCE = "DYNAMIC_FOLLOWUP";
-const DYNAMIC_FOLLOWUP_TYPE = "FOLLOWUP";
 const dynamicFollowupInFlightSessionIds = new Set<string>();
-const DYNAMIC_FOLLOWUP_BASIS = "基于本轮 Pitch 转写生成的动态追问";
-
-const dynamicQuestionSelect = {
-  id: true,
-  orderIndex: true,
-  questionText: true,
-  questionType: true,
-  source: true,
-  basis: true,
-  answer: {
-    select: {
-      id: true,
-      answerText: true,
-      revealedQuestionText: true,
-      startedAt: true,
-      endedAt: true,
-      durationSec: true,
-    },
-  },
-} as const;
-
-function serializeDynamicQuestion(
-  question: Awaited<ReturnType<typeof findExistingDynamicQuestion>>,
-) {
-  if (!question) {
-    return null;
-  }
-
-  return {
-    id: question.id,
-    orderIndex: question.orderIndex,
-    questionText: question.questionText,
-    questionType: question.questionType,
-    source: question.source,
-    basis: question.basis,
-    answer: question.answer
-      ? {
-          id: question.answer.id,
-          answerText: question.answer.answerText,
-          revealedQuestionText: question.answer.revealedQuestionText,
-          startedAt: question.answer.startedAt?.toISOString() ?? null,
-          endedAt: question.answer.endedAt?.toISOString() ?? null,
-          durationSec: question.answer.durationSec,
-        }
-      : null,
-  };
-}
-
-async function findExistingDynamicQuestion(sessionId: string) {
-  return prisma.trainingQuestion.findFirst({
-    where: {
-      sessionId,
-      orderIndex: DYNAMIC_FOLLOWUP_ORDER_INDEX,
-      source: DYNAMIC_FOLLOWUP_SOURCE,
-    },
-    select: dynamicQuestionSelect,
-  });
-}
 
 export async function POST(
   request: NextRequest,
@@ -183,7 +129,7 @@ export async function POST(
       return base;
     }
 
-    function buildSuccessResponse(question: NonNullable<ReturnType<typeof serializeDynamicQuestion>>) {
+    function buildSuccessResponse(question: SerializedDynamicQuestion) {
       const base = {
         ok: true,
         createdQuestion: question,
@@ -213,50 +159,6 @@ export async function POST(
     }
 
     const projectId = session.projectId;
-
-    async function createOrReturnDynamicQuestion(questionText: string) {
-      const existingQuestion = await findExistingDynamicQuestion(sessionId);
-      const serializedExistingQuestion =
-        serializeDynamicQuestion(existingQuestion);
-
-      if (serializedExistingQuestion) {
-        return serializedExistingQuestion;
-      }
-
-      try {
-        const createdQuestion = await prisma.trainingQuestion.create({
-          data: {
-            sessionId,
-            projectId,
-            orderIndex: DYNAMIC_FOLLOWUP_ORDER_INDEX,
-            questionText,
-            questionType: DYNAMIC_FOLLOWUP_TYPE,
-            source: DYNAMIC_FOLLOWUP_SOURCE,
-            basis: DYNAMIC_FOLLOWUP_BASIS,
-          },
-          select: dynamicQuestionSelect,
-        });
-
-        const serializedCreatedQuestion =
-          serializeDynamicQuestion(createdQuestion);
-
-        if (serializedCreatedQuestion) {
-          return serializedCreatedQuestion;
-        }
-      } catch (error) {
-        const fallbackQuestion = await findExistingDynamicQuestion(sessionId);
-        const serializedFallbackQuestion =
-          serializeDynamicQuestion(fallbackQuestion);
-
-        if (serializedFallbackQuestion) {
-          return serializedFallbackQuestion;
-        }
-
-        throw error;
-      }
-
-      throw new Error("dynamic followup question create failed");
-    }
 
     const existingDynamicQuestion = await findExistingDynamicQuestion(sessionId);
     const serializedExistingDynamicQuestion = serializeDynamicQuestion(
@@ -926,7 +828,11 @@ export async function POST(
             debugInfo.fallbackValidationReason = null;
             debugInfo.fallbackUsed = true;
             const createdQuestion =
-              await createOrReturnDynamicQuestion(fallbackText);
+              await createOrReturnDynamicQuestion({
+                sessionId,
+                projectId,
+                questionText: fallbackText,
+              });
             devLog(
               "[dynamic-followup:POST] mismatch fallback created dynamic question",
               {
@@ -1044,7 +950,11 @@ export async function POST(
               debugInfo.contentFallbackValidationReason = null;
               debugInfo.contentFallbackUsed = true;
               const createdQuestion =
-                await createOrReturnDynamicQuestion(contentText);
+                await createOrReturnDynamicQuestion({
+                  sessionId,
+                  projectId,
+                  questionText: contentText,
+                });
               devLog(
                 "[dynamic-followup:POST] content fallback created dynamic question",
                 {
@@ -1130,7 +1040,11 @@ ${otherQuestionsText.slice(0, 800)}`;
                 debugInfo.contentFallbackValidationReason = null;
                 debugInfo.contentFallbackUsed = true;
                 const createdQuestion =
-                  await createOrReturnDynamicQuestion(retryText);
+                  await createOrReturnDynamicQuestion({
+                    sessionId,
+                    projectId,
+                    questionText: retryText,
+                  });
                 devLog(
                   "[dynamic-followup:POST] content fallback retry created dynamic question",
                   {
@@ -1202,7 +1116,11 @@ ${otherQuestionsText.slice(0, 800)}`;
     }
 
     const createdQuestion =
-      await createOrReturnDynamicQuestion(acceptedFollowupText);
+      await createOrReturnDynamicQuestion({
+        sessionId,
+        projectId,
+        questionText: acceptedFollowupText,
+      });
 
     devLog("[dynamic-followup:POST] dynamic followup created", {
       sessionId,
