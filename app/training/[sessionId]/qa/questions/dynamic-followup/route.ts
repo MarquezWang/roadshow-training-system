@@ -20,6 +20,7 @@ import {
   callMainDynamicFollowup,
   callMismatchDynamicFollowup,
 } from "@/lib/dynamic-followup-ai";
+import { evaluateContentFallbackEligibility } from "@/lib/dynamic-followup-fallback";
 import {
   MAX_DYNAMIC_FOLLOWUP_QUESTION_LENGTH,
   MIN_DYNAMIC_FOLLOWUP_QUESTION_LENGTH,
@@ -524,42 +525,14 @@ export async function POST(
       }
 
       // 第二层兜底：mismatch 也失败，但 Pitch 有足够内容且包含项目关键词时，尝试 content fallback
-      const PROJECT_CONTENT_KEYWORDS = [
-        "项目",
-        "系统",
-        "产品",
-        "平台",
-        "模块",
-        "已完成",
-        "原型",
-        "测试",
-        "试用",
-        "客户",
-        "用户",
-        "商业模式",
-        "落地",
-        "数据",
-        "指标",
-        "验证",
-        "动态追问",
-        "自动转写",
-        "模拟答辩",
-        "训练报告",
-        "没有讲透",
-        "证据支撑",
-      ];
-      const matchedKeywords = PROJECT_CONTENT_KEYWORDS.filter((kw) =>
-        transcriptText.includes(kw),
-      );
-      const hasPitchProjectContent = matchedKeywords.length > 0;
-      debugInfo.hasPitchProjectContent = hasPitchProjectContent;
-      debugInfo.pitchProjectContentMatchedKeywords = matchedKeywords;
+      const contentFallbackEligibility =
+        evaluateContentFallbackEligibility(transcriptText);
+      debugInfo.hasPitchProjectContent =
+        contentFallbackEligibility.hasPitchProjectContent;
+      debugInfo.pitchProjectContentMatchedKeywords =
+        contentFallbackEligibility.matchedKeywords;
 
-      const MIN_CONTENT_PITCH_CHARS = 120;
-      if (
-        transcriptText.length >= MIN_CONTENT_PITCH_CHARS &&
-        hasPitchProjectContent
-      ) {
+      if (contentFallbackEligibility.shouldAttemptContentFallback) {
         debugInfo.contentFallbackAttempted = true;
         try {
           devLog("[dynamic-followup:POST] attempting content fallback", {
