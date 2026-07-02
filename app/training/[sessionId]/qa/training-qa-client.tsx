@@ -2,14 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type {
-  PDFDocumentLoadingTask,
-  PDFDocumentProxy,
-  RenderTask,
-} from "pdfjs-dist";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
 import type { DisplayMaterialNotice } from "@/lib/display-material";
+import { useQaMaterialPreview } from "@/lib/use-qa-material-preview";
 import { useQaQuestionGeneration } from "@/lib/use-qa-question-generation";
 import { useQaRecording } from "@/lib/use-qa-recording";
 import {
@@ -54,18 +50,9 @@ type TrainingQaClientProps = Readonly<{
 }>;
 
 type QaPhase = "READY" | "ASKING" | "COUNTDOWN" | "ANSWERING" | "SAVING" | "DONE";
-type PreviewMode = "standard" | "compatible";
 
 const qaLimitSec = 3 * 60;
 const dynamicFollowupAnswerLimitSec = 60;
-const pdfWorkerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.mjs",
-  import.meta.url,
-).toString();
-const pdfCMapUrl = "/pdfjs/cmaps/";
-const pdfStandardFontDataUrl = "/pdfjs/standard_fonts/";
-const pdfWasmUrl = "/pdfjs/wasm/";
-const pdfIccUrl = "/pdfjs/iccs/";
 
 function formatDuration(totalSec: number) {
   const normalizedSec = Math.max(0, totalSec);
@@ -83,18 +70,6 @@ function findInitialQuestionIndex(questions: TrainingQaQuestion[]) {
   );
 
   return activeIndex >= 0 ? activeIndex : Math.max(0, questions.length - 1);
-}
-
-function isEditableOrClickableTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  return Boolean(
-    target.closest(
-      'input, textarea, select, button, a, [contenteditable="true"], [role="button"]',
-    ),
-  );
 }
 
 function isDynamicFollowupQuestion(question: TrainingQaQuestion | null) {
@@ -143,12 +118,6 @@ export function TrainingQaClient({
     useState<TrainingQaQuestion | null>(null);
   const [isGuardResolved, setIsGuardResolved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [totalPages, setTotalPages] = useState<number | null>(null);
-  const [isPdfLoading, setIsPdfLoading] = useState(Boolean(previewFile));
-  const [pdfError, setPdfError] = useState("");
-  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
-  const [previewMode, setPreviewMode] = useState<PreviewMode>("standard");
   const currentAnswerStartedAtRef = useRef<Date | null>(
     initialStatus === "QAING" ? new Date() : null,
   );
@@ -173,8 +142,6 @@ export function TrainingQaClient({
   const hasAutoEndedRef = useRef(false);
   const hasResumedQaingRef = useRef(false);
   const isCompletingNormallyRef = useRef(false);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const currentQuestion = questions[currentQuestionIndex] ?? null;
   const isQaing = status === "QAING";
   const isCurrentDynamicFollowup = isDynamicFollowupQuestion(currentQuestion);
@@ -196,19 +163,19 @@ export function TrainingQaClient({
     isCurrentDynamicFollowup ||
     isLastQuestion ||
     (remainingSec < 30 && hasNextBaseQuestion);
-  const previewUrl = previewFile
-    ? `/api/files/${previewFile.id}/preview`
-    : null;
-  const currentPageNumber = pageIndex + 1;
-  const compatiblePreviewUrl = previewUrl
-    ? `${previewUrl}#page=${currentPageNumber}`
-    : null;
-  const canGoPrev = pageIndex > 0;
-  const canGoNext =
-    previewFile && totalPages !== null ? pageIndex < totalPages - 1 : true;
-  const pageLabel = totalPages
-    ? `${currentPageNumber} / ${totalPages}`
-    : String(currentPageNumber);
+  const {
+    canvasRef,
+    previewContainerRef,
+    compatiblePreviewUrl,
+    canGoPrev,
+    canGoNext,
+    pageLabel,
+    isPdfLoading,
+    pdfError,
+    previewMode,
+    setPreviewMode,
+    changeMaterialPage,
+  } = useQaMaterialPreview({ previewFile });
   useTrainingAbortGuard({
     sessionId,
     enabled: status === "QA_READY" || status === "QAING",
@@ -361,23 +328,6 @@ export function TrainingQaClient({
     message !== "评委问题生成时间较长，请稍候……" &&
     message !== speechUnavailableMessage;
 
-  const changeMaterialPage = useCallback(
-    (direction: "PREV" | "NEXT") => {
-      if (!previewFile) {
-        return;
-      }
-
-      setPageIndex((currentIndex) => {
-        const nextIndex =
-          direction === "NEXT" ? currentIndex + 1 : currentIndex - 1;
-        const maxIndex = totalPages !== null ? totalPages - 1 : currentIndex + 1;
-
-        return Math.min(Math.max(nextIndex, 0), Math.max(0, maxIndex));
-      });
-    },
-    [previewFile, totalPages],
-  );
-
   const getCurrentUsedAnswerSec = useCallback(() => {
     if (isDynamicFollowupQuestion(currentQuestion)) {
       if (qaPhase !== "ANSWERING" || answerPhaseStartedMsRef.current === null) {
@@ -406,172 +356,6 @@ export function TrainingQaClient({
       answerElapsedBeforePhaseRef.current + elapsedInPhase,
     );
   }, [currentQuestion, dynamicFollowupUsedSec, qaPhase, usedAnswerSec]);
-
-  useEffect(() => {
-    if (!previewFile || !previewUrl) {
-      window.queueMicrotask(() => {
-        setPdfDocument(null);
-        setTotalPages(null);
-        setIsPdfLoading(false);
-        setPdfError("");
-      });
-      return;
-    }
-
-    const pdfUrl: string = previewUrl;
-    let isCancelled = false;
-    let loadingTask: PDFDocumentLoadingTask | null = null;
-
-    async function loadPdf() {
-      setIsPdfLoading(true);
-      setPdfError("");
-
-      try {
-        const pdfjs = await import("pdfjs-dist");
-
-        pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
-        loadingTask = pdfjs.getDocument({
-          url: pdfUrl,
-          cMapUrl: pdfCMapUrl,
-          cMapPacked: true,
-          standardFontDataUrl: pdfStandardFontDataUrl,
-          wasmUrl: pdfWasmUrl,
-          iccUrl: pdfIccUrl,
-        });
-
-        const loadedDocument = await loadingTask.promise;
-
-        if (!isCancelled) {
-          setPdfDocument(loadedDocument);
-          setTotalPages(loadedDocument.numPages);
-          setPageIndex((currentIndex) =>
-            Math.min(Math.max(currentIndex, 0), loadedDocument.numPages - 1),
-          );
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          setPdfDocument(null);
-          setTotalPages(null);
-          setPdfError(
-            error instanceof Error ? error.message : "PDF 材料加载失败。",
-          );
-        }
-      } finally {
-        if (!isCancelled) {
-          setIsPdfLoading(false);
-        }
-      }
-    }
-
-    void loadPdf();
-
-    return () => {
-      isCancelled = true;
-      void loadingTask?.destroy();
-    };
-  }, [previewFile, previewUrl]);
-
-  useEffect(() => {
-    if (!pdfDocument || !canvasRef.current) {
-      return;
-    }
-
-    const loadedDocument: PDFDocumentProxy = pdfDocument;
-    let isCancelled = false;
-    let renderTask: RenderTask | null = null;
-    const canvas = canvasRef.current;
-    const container = previewContainerRef.current;
-
-    async function renderPage() {
-      try {
-        const page = await loadedDocument.getPage(currentPageNumber);
-
-        if (isCancelled) {
-          return;
-        }
-
-        const baseViewport = page.getViewport({ scale: 1 });
-        const availableWidth = container?.clientWidth ?? baseViewport.width;
-        const availableHeight = container?.clientHeight ?? baseViewport.height;
-        const scaleByWidth = Math.max(0.1, (availableWidth - 32) / baseViewport.width);
-        const scaleByHeight = Math.max(
-          0.1,
-          (availableHeight - 32) / baseViewport.height,
-        );
-        const cssScale = Math.min(scaleByWidth, scaleByHeight);
-        const viewport = page.getViewport({ scale: cssScale });
-        const context = canvas.getContext("2d");
-
-        if (!context) {
-          throw new Error("当前浏览器不支持 Canvas 渲染。");
-        }
-
-        const outputScale = window.devicePixelRatio || 1;
-
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.style.height = `${Math.floor(viewport.height)}px`;
-        context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
-        renderTask = page.render({
-          canvas,
-          canvasContext: context,
-          viewport,
-        });
-        await renderTask.promise;
-      } catch (error) {
-        if (!isCancelled && error instanceof Error && error.name !== "RenderingCancelledException") {
-          setPdfError(error.message);
-        }
-      }
-    }
-
-    void renderPage();
-
-    return () => {
-      isCancelled = true;
-      renderTask?.cancel();
-    };
-  }, [currentPageNumber, pdfDocument]);
-
-  useEffect(() => {
-    const container = previewContainerRef.current;
-
-    if (!container || !previewFile) {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      setPageIndex((currentIndex) => currentIndex);
-    });
-
-    observer.observe(container);
-
-    return () => observer.disconnect();
-  }, [previewFile]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableOrClickableTarget(event.target)) {
-        return;
-      }
-
-      if (["ArrowRight", "PageDown", " ", "Enter"].includes(event.key)) {
-        event.preventDefault();
-        changeMaterialPage("NEXT");
-        return;
-      }
-
-      if (["ArrowLeft", "PageUp", "Backspace"].includes(event.key)) {
-        event.preventDefault();
-        changeMaterialPage("PREV");
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [changeMaterialPage]);
 
   const beginAnswering = useCallback(async () => {
     clearCountdownTimer();
