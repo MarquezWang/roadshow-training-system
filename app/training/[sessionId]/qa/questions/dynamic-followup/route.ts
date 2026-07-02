@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { callAI } from "@/lib/ai";
 import { buildProjectAIContext } from "@/lib/project-context";
-import { loadPromptTemplate } from "@/lib/prompt-loader";
-import { renderPrompt } from "@/lib/prompt-renderer";
 import { devLog, devWarn } from "@/lib/dev-log";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
@@ -17,6 +15,11 @@ import {
   buildDynamicFollowupProjectContext,
   evaluateDynamicFollowupPreflight,
 } from "@/lib/dynamic-followup-context";
+import {
+  callContentDynamicFollowup,
+  callMainDynamicFollowup,
+  callMismatchDynamicFollowup,
+} from "@/lib/dynamic-followup-ai";
 import {
   MAX_DYNAMIC_FOLLOWUP_QUESTION_LENGTH,
   MIN_DYNAMIC_FOLLOWUP_QUESTION_LENGTH,
@@ -364,17 +367,6 @@ export async function POST(
     }
 
     // 生成动态追问
-    const followupTemplate = await loadPromptTemplate("dynamic-followup");
-
-    const followupPrompt = renderPrompt(followupTemplate, {
-      transcript: pitchTranscript.text,
-      project: aiContext?.project ?? null,
-      files: aiContext?.files ?? [],
-      evaluationRule: aiContext?.evaluationRule ?? null,
-      criteria: aiContext?.criteria ?? [],
-      existingQuestions: otherQuestionsText,
-    });
-
     debugInfo.promptInputSummary = {
       hasPitchText: transcriptText.length > 0,
       hasProjectContext: projectContextText.length > 0,
@@ -384,12 +376,10 @@ export async function POST(
         (aiContext?.criteria ?? []).length > 0,
     };
 
-    const followupResult = await callAI({
-      task: "dynamicFollowup",
-      systemPrompt: "你是一名专业路演答辩评委，只输出一个问题。",
-      userPrompt: followupPrompt,
-      temperature: 0.3,
-      maxOutputTokens: 500,
+    const followupResult = await callMainDynamicFollowup({
+      transcript: pitchTranscript.text,
+      aiContext,
+      existingQuestions: otherQuestionsText,
     });
 
     const rawAiOutput = followupResult.text;
@@ -456,21 +446,10 @@ export async function POST(
           devLog("[dynamic-followup:POST] attempting mismatch fallback", {
             sessionId,
           });
-          const mismatchTemplate = await loadPromptTemplate(
-            "dynamic-followup-mismatch",
-          );
-          const mismatchPrompt = renderPrompt(mismatchTemplate, {
+          const mismatchResult = await callMismatchDynamicFollowup({
             projectTitle: projectName ?? "",
             projectContext: projectContextText.slice(0, 2000),
             pitchTranscript: transcriptText,
-          });
-          const mismatchResult = await callAI({
-            task: "dynamicFollowup",
-            systemPrompt:
-              "你是一名专业路演答辩评委，只输出一个问题或 NO_DYNAMIC_FOLLOWUP。",
-            userPrompt: mismatchPrompt,
-            temperature: 0.3,
-            maxOutputTokens: 500,
           });
 
           const fallbackRaw = mismatchResult.text;
@@ -586,22 +565,11 @@ export async function POST(
           devLog("[dynamic-followup:POST] attempting content fallback", {
             sessionId,
           });
-          const contentTemplate = await loadPromptTemplate(
-            "dynamic-followup-content",
-          );
-          const contentPrompt = renderPrompt(contentTemplate, {
+          const contentResult = await callContentDynamicFollowup({
             projectTitle: projectName ?? "",
             projectContext: projectContextText.slice(0, 2000),
             pitchTranscript: transcriptText,
             existingQuestions: otherQuestionsText,
-          });
-          const contentResult = await callAI({
-            task: "dynamicFollowup",
-            systemPrompt:
-              "你是一名专业路演答辩评委，只输出一个问题。",
-            userPrompt: contentPrompt,
-            temperature: 0.3,
-            maxOutputTokens: 500,
           });
 
           const contentRaw = contentResult.text;
