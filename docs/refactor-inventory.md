@@ -8,7 +8,7 @@
 | --- | ---: | --- | --- |
 | `app/training/[sessionId]/report/training-report-client.tsx` | 2190 | 报告总览、路演表现、答辩表现和报告状态展示仍集中在一个客户端文件中。 | 高 |
 | `app/training/[sessionId]/training-session-client.tsx` | 1550 | 路演页已完成 PDF、全屏、录音、转写、分析 hook 拆分，但主状态机和页面渲染仍较重。 | 中 |
-| `app/training/[sessionId]/qa/questions/dynamic-followup/route.ts` | 1156 | 动态追问已抽出问题查询、序列化和幂等创建模块；上下文整理、prompt 渲染、AI 调用、结果校验和 fallback 逻辑仍集中在 route 中，适合继续拆 service。 | 高 |
+| `app/training/[sessionId]/qa/questions/dynamic-followup/route.ts` | 1043 | 动态追问已抽出问题查询、序列化、幂等创建、项目上下文组装和 Pitch 预检模块；prompt 渲染、AI 调用、结果校验和 fallback 逻辑仍集中在 route 中，适合继续拆 service。 | 高 |
 | `app/training/[sessionId]/qa/training-qa-client.tsx` | 950 | QA 页已完成语音、录音、问题生成、材料预览和页面守卫 hook 拆分；剩余为答辩推进状态机和渲染。 | 中 |
 
 ## 下一轮建议
