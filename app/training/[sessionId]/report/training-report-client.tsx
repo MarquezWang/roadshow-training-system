@@ -155,9 +155,17 @@ function getReportGenerationStageIndex(elapsedMs: number) {
 function ReportGenerationPanel({
   message,
   elapsedMs,
+  canRetry = false,
+  retryLabel = "重新生成报告",
+  retryHint,
+  onRetry,
 }: Readonly<{
   message: string;
   elapsedMs: number;
+  canRetry?: boolean;
+  retryLabel?: string;
+  retryHint?: string;
+  onRetry?: () => void;
 }>) {
   const activeStageIndex = getReportGenerationStageIndex(elapsedMs);
 
@@ -198,6 +206,21 @@ function ReportGenerationPanel({
           <p className="mt-4 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs leading-5 text-slate-400">
             报告生成通常需要 1-3 分钟，请勿刷新页面。完成后页面会自动更新。
           </p>
+          {canRetry ? (
+            <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+              <p className="text-xs leading-5 text-amber-100">
+                {retryHint ||
+                  "如果页面长时间停留在生成中，可能是上一次生成请求被中断。你可以重新触发生成。"}
+              </p>
+              <button
+                type="button"
+                onClick={onRetry}
+                className="mt-3 inline-flex h-8 items-center justify-center rounded border border-amber-300/40 bg-amber-300 px-3 text-xs font-medium text-slate-950 transition-colors hover:bg-amber-200"
+              >
+                {retryLabel}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -248,6 +271,8 @@ export function TrainingReportClient({
       : 0,
   );
   const [reportGenerationElapsedMs, setReportGenerationElapsedMs] = useState(0);
+  const [canRetryAnalysisGeneration, setCanRetryAnalysisGeneration] =
+    useState(false);
 
   // 单一 status polling 控制
   const statusPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -349,6 +374,7 @@ export function TrainingReportClient({
           analysisError?: string | null;
           canGenerateAnalysis?: boolean;
           hasStaleAnalysis?: boolean;
+          analysisProcessingTimedOut?: boolean;
           qaTranscriptPendingCount?: number;
           qaTranscriptProcessingCount?: number;
           qaTranscriptItems?: Array<{
@@ -405,6 +431,7 @@ export function TrainingReportClient({
             if (analysisBody?.analysis) {
               setAnalysis(analysisBody.analysis);
               setIsAnalysisLoading(false);
+              setCanRetryAnalysisGeneration(false);
               setAnalysisMessage("");
             }
             return;
@@ -421,6 +448,7 @@ export function TrainingReportClient({
             statusPollTimerRef.current = null;
           }
           setIsAnalysisLoading(false);
+          setCanRetryAnalysisGeneration(true);
           setAnalysisMessage(REPORT_GENERATION_FAILURE_MESSAGE);
           return;
         }
@@ -429,6 +457,7 @@ export function TrainingReportClient({
         const needsGeneration =
           status.analysisStatus === "NONE" ||
           status.analysisStatus === "FAILED" ||
+          status.analysisProcessingTimedOut ||
           status.hasStaleAnalysis;
 
         if (
@@ -437,9 +466,12 @@ export function TrainingReportClient({
           !isGeneratingAnalysisRef.current
         ) {
           isGeneratingAnalysisRef.current = true;
+          setCanRetryAnalysisGeneration(false);
           setAnalysisMessage(
             status.hasStaleAnalysis
               ? "报告正在根据最新转写内容更新……"
+              : status.analysisProcessingTimedOut
+                ? "检测到上一次报告生成可能已中断，正在重新生成……"
               : "正在生成训练报告……",
           );
           await generateAnalysis();
@@ -1436,6 +1468,19 @@ export function TrainingReportClient({
               <ReportGenerationPanel
                 message={analysisMessage}
                 elapsedMs={reportGenerationElapsedMs}
+                canRetry={
+                  canRetryAnalysisGeneration ||
+                  reportGenerationElapsedMs >= 180_000
+                }
+                retryHint={
+                  canRetryAnalysisGeneration
+                    ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
+                    : undefined
+                }
+                onRetry={() => {
+                  setCanRetryAnalysisGeneration(false);
+                  void generateAnalysis();
+                }}
               />
             </section>
           ) : analysis?.status === "FAILED" ? (
@@ -1462,15 +1507,41 @@ export function TrainingReportClient({
               <ReportGenerationPanel
                 message={analysisMessage}
                 elapsedMs={reportGenerationElapsedMs}
+                canRetry={
+                  canRetryAnalysisGeneration ||
+                  reportGenerationElapsedMs >= 180_000
+                }
+                retryHint={
+                  canRetryAnalysisGeneration
+                    ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
+                    : undefined
+                }
+                onRetry={() => {
+                  setCanRetryAnalysisGeneration(false);
+                  void generateAnalysis();
+                }}
               />
             </section>
           ) : (
             <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
               <ReportGenerationPanel
                 message={analysisMessage || "正在准备报告数据，请稍候……"}
-              elapsedMs={reportGenerationElapsedMs}
-            />
-          </section>
+                elapsedMs={reportGenerationElapsedMs}
+                canRetry={
+                  canRetryAnalysisGeneration ||
+                  reportGenerationElapsedMs >= 180_000
+                }
+                retryHint={
+                  canRetryAnalysisGeneration
+                    ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
+                    : undefined
+                }
+                onRetry={() => {
+                  setCanRetryAnalysisGeneration(false);
+                  void generateAnalysis();
+                }}
+              />
+            </section>
           )}
         </div>
       )}

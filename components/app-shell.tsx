@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { BeianLink } from "@/components/beian-link";
 
 type AuthUser = {
   id: string;
@@ -95,6 +96,9 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
         </div>
       </header>
       {children}
+      <footer className="border-t border-slate-200 bg-white px-6 py-4 text-center text-xs text-slate-500 sm:px-8 lg:px-10">
+        <BeianLink className="transition hover:text-slate-800" />
+      </footer>
     </div>
   );
 }

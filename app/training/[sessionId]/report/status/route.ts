@@ -11,6 +11,7 @@ type ReportStatusContext = Readonly<{
 }>;
 
 const TRANSCRIPT_WAIT_TIMEOUT_MS = 90_000;
+const PROCESSING_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1_000;
 
 function isWaitingTranscriptStatus(status: string | null | undefined) {
   return status === "PENDING" || status === "PROCESSING";
@@ -212,6 +213,10 @@ export async function GET(
 
   // 判断是否有 stale analysis
   let hasStaleAnalysis = false;
+  const analysisProcessingTimedOut =
+    analysis?.status === "PROCESSING" &&
+    analysis.updatedAt !== null &&
+    nowMs - analysis.updatedAt.getTime() > PROCESSING_ANALYSIS_TIMEOUT_MS;
   if (
     analysis &&
     analysis.status === "COMPLETED" &&
@@ -252,6 +257,7 @@ export async function GET(
     qaTotalCount,
     canGenerateAnalysis,
     hasStaleAnalysis,
+    analysisProcessingTimedOut,
     qaTranscriptItems,
   });
 }
