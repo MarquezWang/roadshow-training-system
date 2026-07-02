@@ -8,14 +8,14 @@
 | --- | ---: | --- | --- |
 | `app/training/[sessionId]/report/training-report-client.tsx` | 2190 | 报告总览、路演表现、答辩表现和报告状态展示仍集中在一个客户端文件中。 | 高 |
 | `app/training/[sessionId]/training-session-client.tsx` | 1550 | 路演页已完成 PDF、全屏、录音、转写、分析 hook 拆分，但主状态机和页面渲染仍较重。 | 中 |
-| `app/training/[sessionId]/qa/questions/dynamic-followup/route.ts` | 1043 | 动态追问已抽出问题查询、序列化、幂等创建、项目上下文组装和 Pitch 预检模块；prompt 渲染、AI 调用、结果校验和 fallback 逻辑仍集中在 route 中，适合继续拆 service。 | 高 |
+| `app/training/[sessionId]/qa/questions/dynamic-followup/route.ts` | 852 | 动态追问已抽出问题查询、序列化、幂等创建、项目上下文组装、Pitch 预检和输出校验模块；prompt 渲染、AI 调用和 fallback 编排仍集中在 route 中。 | 高 |
 | `app/training/[sessionId]/qa/training-qa-client.tsx` | 950 | QA 页已完成语音、录音、问题生成、材料预览和页面守卫 hook 拆分；剩余为答辩推进状态机和渲染。 | 中 |
 
 ## 下一轮建议
 
 1. 优先拆 `dynamic-followup/route.ts`
-   - 理由：这是后端 AI 核心链路，文件仍超过 1000 行，且逻辑复杂。
-   - 建议拆分方向：上下文准备、prompt 输入构造、AI 响应解析、结果落库。
+   - 理由：这是后端 AI 核心链路，文件仍接近 900 行，且 fallback 编排复杂。
+   - 建议拆分方向：prompt 输入构造、AI 响应解析、fallback 阶段编排、结果落库。
    - 风险：中。只做函数搬迁，不改 prompt 和判断规则。
 
 2. 再拆 `training-report-client.tsx`
