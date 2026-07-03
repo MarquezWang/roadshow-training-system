@@ -23,6 +23,30 @@ PM2 应用名：
 roadshow-training-system
 ```
 
+## 域名规范
+
+当前生产环境主访问域名：
+
+```text
+https://roadshow-ai.tech
+```
+
+域名策略：
+
+- `https://roadshow-ai.tech` 作为唯一主域名。
+- `https://www.roadshow-ai.tech` 由 Nginx 301 跳转到 `https://roadshow-ai.tech`。
+- `http://roadshow-ai.tech` 和 `http://www.roadshow-ai.tech` 统一跳转到 HTTPS 裸域名。
+- 对外链接、测试链接和文档示例优先使用裸域名，不再优先使用 `www`。
+
+这样可以避免双域名带来的登录 Cookie、缓存、回调地址和排查口径不一致问题。
+
+Nginx 反代应确认：
+
+- `client_max_body_size` 足够支持当前材料上传限制。
+- `proxy_read_timeout` 和 `proxy_send_timeout` 足够覆盖报告生成、文件预览和长耗时请求。
+- `X-Forwarded-Proto`、`X-Forwarded-Host`、`X-Real-IP`、`X-Forwarded-For` 正确透传。
+- 修改 Nginx 配置后执行 `sudo nginx -t` 和 `sudo systemctl reload nginx`。
+
 ## 必填配置
 
 生产环境至少需要确认以下配置。
@@ -274,4 +298,3 @@ npm run test:stability
 - SQLite 生产数据库
 - 临时补丁文件 `*.patch`
 - 本地诊断日志 `data/diagnostics.jsonl`
-
