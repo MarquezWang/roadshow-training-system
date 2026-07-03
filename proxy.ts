@@ -14,8 +14,8 @@ function isProtectedPath(pathname: string) {
     pathname === "/training" ||
     pathname.startsWith("/training/") ||
     pathname.startsWith("/api/files/") ||
-    pathname === "/api/projects/material-parse" ||
-    pathname === "/api/projects/profile-recognition"
+    pathname.startsWith("/api/projects/") ||
+    pathname.startsWith("/api/admin/")
   );
 }
 
@@ -72,7 +72,7 @@ export const config = {
     "/projects/:path*",
     "/training/:path*",
     "/api/files/:path*",
-    "/api/projects/material-parse",
-    "/api/projects/profile-recognition",
+    "/api/projects/:path*",
+    "/api/admin/:path*",
   ],
 };
