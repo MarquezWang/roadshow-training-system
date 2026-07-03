@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { canRetryTranscript } from "@/lib/transcript-error-message";
 import {
   REPORT_GENERATION_FAILURE_MESSAGE,
   ReportTabNavigation,
@@ -16,6 +15,7 @@ import {
 import { ReportOverviewTab } from "./report-overview";
 import { ReportPitchTab } from "./report-pitch";
 import { ReportQaTab } from "./report-qa";
+import { useReportQaTranscripts } from "./use-report-qa-transcripts";
 import { useReportPitchTranscript } from "./use-report-pitch-transcript";
 
 type TrainingTranscript = {
@@ -214,45 +214,16 @@ export function TrainingReportClient({
   const settledTranscriptsRef = useRef<Set<string>>(new Set());
   // 中止报告 transcript 状态轮询
   const abortPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // QA 转写状态：仅用于 QA Tab 展示，不参与轮询
-  const [qaTranscripts, setQaTranscripts] = useState<
-    Record<string, TrainingTranscript | null>
-  >(
-    () =>
-      Object.fromEntries(
-        qaQuestions
-          .filter((q) => q.answer?.recording?.transcript)
-          .map((q) => [q.answer!.recording!.id, q.answer!.recording!.transcript!]),
-      ),
-  );
-  const [qaTranscribingSet, setQaTranscribingSet] = useState<Set<string>>(
-    new Set(),
-  );
-  // 当 qaQuestions 刷新后（router.refresh），同步 qaTranscripts 状态
-  useEffect(() => {
-    const next = Object.fromEntries(
-      qaQuestions
-        .filter((q) => q.answer?.recording?.transcript)
-        .map((q) => [q.answer!.recording!.id, q.answer!.recording!.transcript!]),
-    );
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- router.refresh() 后同步 props 到派生状态的必要操作
-    setQaTranscripts((prev) => {
-      // 只在有变化时更新，避免不必要的重渲染
-      const prevKeys = Object.keys(prev);
-      const nextKeys = Object.keys(next);
-      if (prevKeys.length !== nextKeys.length) return next;
-      for (const key of nextKeys) {
-        if (prev[key]?.status !== next[key]?.status) return next;
-        if (prev[key]?.text !== next[key]?.text) return next;
-      }
-      return prev;
-    });
-  }, [qaQuestions]);
-  // 长文本展开/收起
-  const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(
-    new Set(),
-  );
+  const {
+    qaTranscripts,
+    qaTranscribingSet,
+    expandedTranscripts,
+    toggleTranscriptExpand,
+    retryQaTranscribe,
+  } = useReportQaTranscripts({
+    sessionId,
+    qaQuestions,
+  });
   const [copySummaryMessage, setCopySummaryMessage] = useState("");
   const [activeTab, setActiveTab] = useState<ReportTabKey>(
     isAborted ? "abort-overview" : "overview",
@@ -502,20 +473,6 @@ export function TrainingReportClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAborted, sessionId]);
 
-  const toggleTranscriptExpand = useCallback((key: string) => {
-    setExpandedTranscripts((prev) => {
-      const next = new Set(prev);
-
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-
-      return next;
-    });
-  }, []);
-
   const strengths = useMemo(
     () => (Array.isArray(analysis?.strengths) ? analysis.strengths : []),
     [analysis?.strengths],
@@ -666,71 +623,6 @@ export function TrainingReportClient({
     } catch {
       setAnalysisMessage(REPORT_GENERATION_FAILURE_MESSAGE);
       setIsAnalysisLoading(false);
-    }
-  }
-
-  async function retryQaTranscribe(recordingId: string) {
-    // 检查当前失败类型是否允许重试
-    const currentTs = qaTranscripts[recordingId];
-    if (currentTs?.status === "FAILED" && !canRetryTranscript(currentTs.errorMessage)) {
-      return;
-    }
-    // 防止重复提交
-    if (qaTranscribingSet.has(recordingId)) return;
-
-    setQaTranscribingSet((prev) => {
-      const next = new Set(prev);
-      next.add(recordingId);
-      return next;
-    });
-
-    try {
-      const response = await fetch(
-        `/training/${sessionId}/recordings/${recordingId}/transcribe`,
-        { method: "POST" },
-      );
-      const body = (await response.json().catch(() => null)) as {
-        transcript?: TrainingTranscript;
-        error?: string;
-        ok?: boolean;
-        message?: string;
-      } | null;
-
-      if (response.ok && body?.transcript) {
-        // 成功或业务失败：都有 transcript 对象
-        setQaTranscripts((prev) => ({
-          ...prev,
-          [recordingId]: body.transcript!,
-        }));
-      } else if (!response.ok && body?.error) {
-        // 系统错误 500：构造 FAILED 状态
-        setQaTranscripts((prev) => ({
-          ...prev,
-          [recordingId]: {
-            id: "",
-            recordingId,
-            sessionId,
-            status: "FAILED" as const,
-            source: "ASR_PROVIDER" as const,
-            language: "zh-CN" as const,
-            text: "",
-            segmentsJson: null,
-            errorMessage: body.error ?? null,
-            startedAt: null,
-            completedAt: null,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          },
-        }));
-      }
-    } catch {
-      // 网络错误，不更新状态
-    } finally {
-      setQaTranscribingSet((prev) => {
-        const next = new Set(prev);
-        next.delete(recordingId);
-        return next;
-      });
     }
   }
 
