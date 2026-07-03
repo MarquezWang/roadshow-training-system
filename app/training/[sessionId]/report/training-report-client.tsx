@@ -16,6 +16,7 @@ import {
 import { ReportOverviewTab } from "./report-overview";
 import { ReportPitchTab } from "./report-pitch";
 import { ReportQaTab } from "./report-qa";
+import { useReportPitchTranscript } from "./use-report-pitch-transcript";
 
 type TrainingTranscript = {
   id: string;
@@ -168,17 +169,23 @@ export function TrainingReportClient({
     sessionStatus === "QA_ENDED" ||
     sessionStatus === "REPORT_READY" ||
     sessionStatus === "FINISHED";
-  const [transcript, setTranscript] = useState<TrainingTranscript | null>(
-    recording?.transcript ?? null,
-  );
-  const [transcriptDraft, setTranscriptDraft] = useState(
-    recording?.transcript?.text ?? "",
-  );
-  const [isTranscriptEditing, setIsTranscriptEditing] = useState(
-    !isAborted && recording !== null && !recording.transcript,
-  );
-  const [isTranscriptSaving, setIsTranscriptSaving] = useState(false);
-  const [transcriptMessage, setTranscriptMessage] = useState("");
+  const {
+    transcript,
+    transcriptDraft,
+    isTranscriptEditing,
+    isTranscriptSaving,
+    transcriptMessage,
+    transcriptExpanded,
+    setTranscriptDraft,
+    startTranscriptEditing,
+    cancelTranscriptEditing,
+    toggleTranscriptExpanded,
+    saveTranscript,
+  } = useReportPitchTranscript({
+    sessionId,
+    recording,
+    isAborted,
+  });
   const [analysis, setAnalysis] = useState<TrainingAnalysis | null>(
     initialAnalysis,
   );
@@ -246,7 +253,6 @@ export function TrainingReportClient({
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(
     new Set(),
   );
-  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [copySummaryMessage, setCopySummaryMessage] = useState("");
   const [activeTab, setActiveTab] = useState<ReportTabKey>(
     isAborted ? "abort-overview" : "overview",
@@ -609,68 +615,6 @@ export function TrainingReportClient({
     }
   }, [buildOnePageSummaryText]);
 
-  async function saveTranscript() {
-    if (isAborted) {
-      setTranscriptMessage("本轮训练已中止，报告页仅支持只读查看。");
-      return;
-    }
-
-    const text = transcriptDraft.trim();
-
-    if (!recording) {
-      setTranscriptMessage("当前没有录音记录，不能保存转写文本。");
-      return;
-    }
-
-    if (!text) {
-      setTranscriptMessage("转写文本不能为空。");
-      return;
-    }
-
-    setIsTranscriptSaving(true);
-    setTranscriptMessage("");
-
-    try {
-      const response = await fetch(
-        `/training/${sessionId}/recordings/${recording.id}/transcript`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text,
-            source: "MANUAL",
-            language: "zh-CN",
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-
-        throw new Error(body?.error ?? "转写文本保存失败。");
-      }
-
-      const body = (await response.json()) as {
-        transcript: TrainingTranscript;
-      };
-
-      setTranscript(body.transcript);
-      setTranscriptDraft(body.transcript.text);
-      setIsTranscriptEditing(false);
-      setTranscriptMessage("转写文本已保存。");
-    } catch (error) {
-      setTranscriptMessage(
-        error instanceof Error ? error.message : "转写文本保存失败。",
-      );
-    } finally {
-      setIsTranscriptSaving(false);
-    }
-  }
-
   async function generateAnalysis() {
     if (isAborted) {
       setAnalysisMessage("本轮训练已中止，不能继续生成训练报告。");
@@ -816,7 +760,7 @@ export function TrainingReportClient({
             recording={recording}
             transcriptExpanded={transcriptExpanded}
             onToggleTranscriptExpanded={() =>
-              setTranscriptExpanded((prev) => !prev)
+              toggleTranscriptExpanded()
             }
           />
         )}
@@ -876,25 +820,10 @@ export function TrainingReportClient({
           transcriptExpanded={transcriptExpanded}
           transcriptMessage={transcriptMessage}
           onToggleShowAllCoverage={() => setShowAllCoverage((p) => !p)}
-          onStartTranscriptEditing={() => {
-            if (!transcript) {
-              return;
-            }
-            setTranscriptDraft(transcript.text);
-            setIsTranscriptEditing(true);
-            setTranscriptMessage("");
-            setTranscriptExpanded(true);
-          }}
-          onToggleTranscriptExpanded={() => setTranscriptExpanded((p) => !p)}
+          onStartTranscriptEditing={startTranscriptEditing}
+          onToggleTranscriptExpanded={toggleTranscriptExpanded}
           onTranscriptDraftChange={setTranscriptDraft}
-          onCancelTranscriptEditing={() => {
-            if (!transcript) {
-              return;
-            }
-            setTranscriptDraft(transcript.text);
-            setIsTranscriptEditing(false);
-            setTranscriptMessage("");
-          }}
+          onCancelTranscriptEditing={cancelTranscriptEditing}
           onSaveTranscript={() => void saveTranscript()}
         />
       )}
