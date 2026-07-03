@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:auth": "node --test tests/auth/auth-route-coverage.test.mjs",
     "test:trl": "node --test tests/trl/trl-assessment.test.mjs",
     "test:stability": "node --test tests/stability/end-pitch-guard.test.mjs tests/stability/report-status-guard.test.mjs tests/stability/qa-answer-idempotency.test.mjs tests/stability/dynamic-followup-preflight.test.mjs",
     "test:stability:end-pitch": "node --test tests/stability/end-pitch-guard.test.mjs",

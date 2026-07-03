@@ -35,6 +35,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Auth boundary tests
+        run: npm run test:auth
+
       - name: Stability tests
         run: npm run test:stability
 
