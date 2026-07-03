@@ -1,7 +1,9 @@
 import { access, mkdir, rm, writeFile } from "fs/promises";
+import { execFile } from "child_process";
 import Link from "next/link";
 import path from "path";
 import type { ReactNode } from "react";
+import { promisify } from "util";
 import { AI_MODEL_FAST, AI_MODEL_STRONG } from "@/lib/ai-models";
 import { requireAdminUser } from "@/lib/auth-server";
 import { readRecentDiagnosticEvents } from "@/lib/diagnostic-log";
@@ -10,6 +12,8 @@ import { prisma } from "@/lib/prisma";
 import { SystemTestPanel } from "./system-test-panel";
 
 export const dynamic = "force-dynamic";
+
+const execFileAsync = promisify(execFile);
 
 function hasValue(value: string | undefined) {
   return Boolean(value?.trim());
@@ -90,6 +94,62 @@ function Section({
   );
 }
 
+function RiskPill({
+  level,
+}: {
+  level: "正常" | "注意" | "风险";
+}) {
+  const className =
+    level === "正常"
+      ? "border-teal-200 bg-teal-50 text-teal-700"
+      : level === "注意"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : "border-rose-200 bg-rose-50 text-rose-700";
+
+  return (
+    <span
+      className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium ${className}`}
+    >
+      {level}
+    </span>
+  );
+}
+
+function RiskRow({
+  title,
+  detail,
+  level,
+}: {
+  title: string;
+  detail: string;
+  level: "正常" | "注意" | "风险";
+}) {
+  return (
+    <div className="grid gap-2 border-b border-slate-100 py-3 last:border-b-0 md:grid-cols-[160px_minmax(0,1fr)_auto] md:items-start md:gap-x-4">
+      <p className="text-sm font-medium text-slate-700">{title}</p>
+      <p className="text-sm leading-6 text-slate-600">{detail}</p>
+      <div className="md:text-right">
+        <RiskPill level={level} />
+      </div>
+    </div>
+  );
+}
+
+function CommandList({ commands }: { commands: string[] }) {
+  return (
+    <div className="grid gap-2">
+      {commands.map((command) => (
+        <code
+          key={command}
+          className="block overflow-x-auto rounded-md border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700"
+        >
+          {command}
+        </code>
+      ))}
+    </div>
+  );
+}
+
 function CollapsibleSection({
   title,
   description,
@@ -155,6 +215,28 @@ async function checkUploadDirectory() {
   }
 }
 
+async function readGitValue(args: string[]) {
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: process.cwd(),
+      timeout: 1500,
+    });
+
+    return stdout.trim() || "未知";
+  } catch {
+    return "不可用";
+  }
+}
+
+async function readRuntimeVersion() {
+  const [branch, commit] = await Promise.all([
+    readGitValue(["rev-parse", "--abbrev-ref", "HEAD"]),
+    readGitValue(["rev-parse", "--short", "HEAD"]),
+  ]);
+
+  return { branch, commit };
+}
+
 export default async function AdminSystemPage() {
   await requireAdminUser();
 
@@ -163,18 +245,35 @@ export default async function AdminSystemPage() {
     databaseCheck,
     uploadDirectoryCheck,
     diagnosticEvents,
+    runtimeVersion,
   ] = await Promise.all([
     checkLibreOfficeAvailability(),
     checkDatabaseConnection(),
     checkUploadDirectory(),
     readRecentDiagnosticEvents(12),
+    readRuntimeVersion(),
   ]);
   const transcriptionProvider =
     process.env.TRANSCRIPTION_PROVIDER?.trim() || "openai";
+  const authEnabled = process.env.AUTH_ENABLED === "true";
   const usesTencentCredential = transcriptionProvider.startsWith("tencent");
   const usesTencentStandardAsr = transcriptionProvider === "tencent";
   const usesTencentFlashAsr = transcriptionProvider === "tencent_flash";
   const usesXfyunProvider = transcriptionProvider === "xfyun";
+  const aiConfigured = hasValue(process.env.AI_API_KEY);
+  const tencentCredentialReady =
+    hasValue(process.env.TENCENT_SECRET_ID) &&
+    hasValue(process.env.TENCENT_SECRET_KEY);
+  const tencentFlashReady =
+    !usesTencentFlashAsr ||
+    (tencentCredentialReady && hasValue(process.env.TENCENT_APP_ID));
+  const asrCredentialReady = usesTencentCredential
+    ? tencentCredentialReady &&
+      (!usesTencentFlashAsr || hasValue(process.env.TENCENT_APP_ID))
+    : usesXfyunProvider
+      ? hasValue(process.env.XFYUN_APP_ID) &&
+        hasValue(process.env.XFYUN_SECRET_KEY)
+      : true;
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
@@ -198,6 +297,86 @@ export default async function AdminSystemPage() {
 
       <div className="mt-6 grid gap-6">
         <SystemTestPanel />
+
+        <Section
+          title="运行版本与上线风险"
+          description="用于快速确认当前运行代码、关键开关和部署前后最容易出问题的点。"
+        >
+          <div className="grid gap-3 border-b border-slate-100 py-3 md:grid-cols-4">
+            <div className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3">
+              <p className="text-xs text-slate-500">当前分支</p>
+              <p className="mt-2 break-all font-mono text-sm font-semibold text-slate-950">
+                {runtimeVersion.branch}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3">
+              <p className="text-xs text-slate-500">当前 Commit</p>
+              <p className="mt-2 break-all font-mono text-sm font-semibold text-slate-950">
+                {runtimeVersion.commit}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3">
+              <p className="text-xs text-slate-500">登录开关</p>
+              <p className="mt-2 font-mono text-sm font-semibold text-slate-950">
+                AUTH_ENABLED={authEnabled ? "true" : "false"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3">
+              <p className="text-xs text-slate-500">转写 Provider</p>
+              <p className="mt-2 break-all font-mono text-sm font-semibold text-slate-950">
+                {transcriptionProvider}
+              </p>
+            </div>
+          </div>
+
+          <RiskRow
+            title="登录保护"
+            level={authEnabled ? "正常" : "风险"}
+            detail={
+              authEnabled
+                ? "已启用登录保护，项目、训练和后台接口会按用户身份校验。"
+                : "当前未启用登录保护，仅适合本地开发；生产环境应设置 AUTH_ENABLED=true。"
+            }
+          />
+          <RiskRow
+            title="AI 调用"
+            level={aiConfigured ? "正常" : "风险"}
+            detail={
+              aiConfigured
+                ? `AI Key 已配置，fast=${AI_MODEL_FAST}，strong=${AI_MODEL_STRONG}。`
+                : "AI Key 未配置，项目识别、问题生成、动态追问和报告生成会失败。"
+            }
+          />
+          <RiskRow
+            title="ASR 转写"
+            level={asrCredentialReady ? "正常" : "风险"}
+            detail={
+              asrCredentialReady
+                ? "当前转写 provider 所需密钥已配置。"
+                : "当前转写 provider 缺少必要密钥；录音可保存，但转写与报告质量会受影响。"
+            }
+          />
+          <RiskRow
+            title="极速版 ASR"
+            level={tencentFlashReady ? "正常" : "注意"}
+            detail={
+              usesTencentFlashAsr
+                ? hasValue(process.env.TENCENT_APP_ID)
+                  ? "已启用腾讯云极速版，并配置 TENCENT_APP_ID。"
+                  : "已启用腾讯云极速版，但缺少 TENCENT_APP_ID；极速版调用可能失败。"
+                : "当前未使用腾讯云极速版；如后续切换为 tencent_flash，需要同时配置 TENCENT_APP_ID。"
+            }
+          />
+          <RiskRow
+            title="PPT 预览"
+            level={libreOffice.available ? "正常" : "注意"}
+            detail={
+              libreOffice.available
+                ? `LibreOffice 可用，命令：${libreOffice.command}。`
+                : "LibreOffice 不可用时，PDF 预览不受影响，但 PPT/PPTX 不会生成展示 PDF。"
+            }
+          />
+        </Section>
 
         <Section
           title="AI 模型与调用配置"
@@ -234,17 +413,18 @@ export default async function AdminSystemPage() {
           <ConfigRow
             label="腾讯云密钥"
             value={
-              hasValue(process.env.TENCENT_SECRET_ID) &&
-              hasValue(process.env.TENCENT_SECRET_KEY)
-                ? "已配置"
-                : "未完整配置"
+              tencentCredentialReady ? "已配置" : "未完整配置"
             }
             ok={
-              !usesTencentCredential ||
-              (hasValue(process.env.TENCENT_SECRET_ID) &&
-                hasValue(process.env.TENCENT_SECRET_KEY))
+              !usesTencentCredential || tencentCredentialReady
             }
             note="仅在 provider 使用 tencent 或 tencent_flash 时需要。"
+          />
+          <ConfigRow
+            label="TENCENT_APP_ID"
+            value={displayValue(process.env.TENCENT_APP_ID)}
+            ok={!usesTencentFlashAsr || hasValue(process.env.TENCENT_APP_ID)}
+            note="仅腾讯云录音文件识别极速版 tencent_flash 需要。"
           />
           <ConfigRow
             label="TENCENT_ASR_REGION"
@@ -343,6 +523,24 @@ export default async function AdminSystemPage() {
               如修改服务器环境变量，需要重启应用并确认 PM2 使用了最新环境。
             </li>
           </ul>
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          title="常用运维命令"
+          description="用于服务器部署、诊断和回滚前检查。只展示命令，不会自动执行。"
+        >
+          <CommandList
+            commands={[
+              "git status -sb",
+              "git pull --ff-only origin internal-test",
+              "npm run lint && npm run build",
+              "pm2 status",
+              "pm2 restart roadshow-training-system --update-env",
+              "pm2 logs roadshow-training-system --lines 120 --nostream",
+              "sudo nginx -t && sudo systemctl reload nginx",
+              "libreoffice --version || soffice --version",
+            ]}
+          />
         </CollapsibleSection>
 
         <CollapsibleSection

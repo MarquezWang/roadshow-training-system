@@ -2,6 +2,17 @@ import Link from "next/link";
 
 const changelogItems = [
   {
+    version: "v0.8.5",
+    date: "2026-07-03",
+    title: "后台上线风险面板",
+    items: [
+      "系统状态页新增运行版本与上线风险面板，集中展示当前分支、Commit、登录开关、转写 provider 和关键依赖状态。",
+      "系统状态页补充腾讯云极速版 ASR 的 TENCENT_APP_ID 检查，避免极速版配置缺项时误判为正常。",
+      "系统状态页新增常用运维命令折叠区，用于部署、重启、Nginx 检查和 LibreOffice 自检。",
+      "继续保持后台状态页只读，不展示密钥明文，也不直接修改服务器配置。",
+    ],
+  },
+  {
     version: "v0.8.4",
     date: "2026-07-02",
     title: "报告生成恢复与备案展示",
