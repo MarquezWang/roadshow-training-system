@@ -10,6 +10,7 @@ import {
   parseJsonObject,
   parseOnePageSummary,
 } from "./report-page-parsers";
+import { isReportAnalysisStale } from "./report-page-staleness";
 import { TrainingReportClient } from "./training-report-client";
 
 type TrainingReportPageProps = Readonly<{
@@ -204,31 +205,13 @@ export default async function TrainingReportPage({
       })()
     : null;
 
-  // 检测 stale analysis：如果 analysis 已完成但存在 transcript 晚于 analysis.updatedAt
-  // 则 analysis 可能使用了旧的/不完整的 transcript 输入，视为 stale
-  let isAnalysisStale = false;
-  if (analysis && analysis.status === "COMPLETED") {
-    const analysisUpdatedAt = session.analyses[0]!.updatedAt.getTime();
-    const allTranscripts = [
-      ...session.recordings
-        .filter((r) => r.transcript?.completedAt)
-        .map((r) => r.transcript!.completedAt!.getTime()),
-      ...session.trainingQuestions
-        .filter((q) => q.answer?.recording?.transcript?.completedAt)
-        .map((q) => q.answer!.recording!.transcript!.completedAt!.getTime()),
-    ];
-    if (allTranscripts.length > 0) {
-      const latestTranscriptTime = Math.max(...allTranscripts);
-      if (latestTranscriptTime > analysisUpdatedAt) {
-        console.log("[report:page] stale analysis detected, will trigger regeneration", {
-          sessionId,
-          analysisUpdatedAt: new Date(analysisUpdatedAt).toISOString(),
-          latestTranscriptTime: new Date(latestTranscriptTime).toISOString(),
-        });
-        isAnalysisStale = true;
-      }
-    }
-  }
+  const isAnalysisStale = isReportAnalysisStale({
+    sessionId,
+    analysisStatus: analysis?.status ?? null,
+    analysisUpdatedAt: session.analyses[0]?.updatedAt ?? null,
+    recordings: session.recordings,
+    trainingQuestions: session.trainingQuestions,
+  });
 
   const initialAnalysis = isAnalysisStale ? null : analysis;
   const qaQuestions = session.trainingQuestions.map((question) => ({
