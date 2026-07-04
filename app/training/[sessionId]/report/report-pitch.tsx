@@ -5,6 +5,7 @@ import {
   ReportPitchCoverage,
   type ContentCoverageItem,
 } from "./report-pitch-coverage";
+import { ReportPitchInsightList } from "./report-pitch-insight-list";
 import {
   ReportPitchRecording,
   type PitchRecording,
@@ -107,62 +108,23 @@ export function ReportPitchTab({
               </div>
             ) : null}
 
-            {strengths.length > 0 ? (
-              <div className="rounded-md border border-emerald-100 bg-emerald-50/50 p-4">
-                <h4 className="text-sm font-semibold text-emerald-800">
-                  路演优势
-                </h4>
-                <ul className="mt-2 space-y-2">
-                  {strengths.map((item, index) => (
-                    <li
-                      key={index}
-                      className="flex gap-2 text-sm leading-6 text-emerald-700/80"
-                    >
-                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+            <ReportPitchInsightList
+              title="路演优势"
+              items={strengths}
+              tone="emerald"
+            />
 
-            {weaknesses.length > 0 ? (
-              <div className="rounded-md border border-amber-100 bg-amber-50/50 p-4">
-                <h4 className="text-sm font-semibold text-amber-800">
-                  路演问题
-                </h4>
-                <ul className="mt-2 space-y-2">
-                  {weaknesses.map((item, index) => (
-                    <li
-                      key={index}
-                      className="flex gap-2 text-sm leading-6 text-amber-700/80"
-                    >
-                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+            <ReportPitchInsightList
+              title="路演问题"
+              items={weaknesses}
+              tone="amber"
+            />
 
-            {suggestions.length > 0 ? (
-              <div className="rounded-md border border-blue-100 bg-blue-50/50 p-4">
-                <h4 className="text-sm font-semibold text-blue-800">
-                  路演改进建议
-                </h4>
-                <ul className="mt-2 space-y-2">
-                  {suggestions.map((item, index) => (
-                    <li
-                      key={index}
-                      className="flex gap-2 text-sm leading-6 text-blue-700/80"
-                    >
-                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400" />
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+            <ReportPitchInsightList
+              title="路演改进建议"
+              items={suggestions}
+              tone="blue"
+            />
 
             <ReportPitchCoverage
               contentCoverage={contentCoverage}
