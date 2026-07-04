@@ -1,8 +1,6 @@
-import {
-  canRetryTranscript,
-  formatTranscriptErrorMessage,
-} from "@/lib/transcript-error-message";
 import type { QaRecording, QaTranscript } from "./report-qa-types";
+import { ReportQaTranscriptErrorBlock } from "./report-qa-transcript-error-block";
+import { ReportQaTranscriptTextBlock } from "./report-qa-transcript-text-block";
 
 type ReportQaRecordingBlockProps = Readonly<{
   recording: QaRecording;
@@ -59,63 +57,23 @@ export function ReportQaRecordingBlock({
       </div>
 
       {hasText ? (
-        <div className="rounded-md border border-slate-100 bg-slate-50/50 p-3">
-          {isExpanded ? (
-            <>
-              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                {fullText}
-              </p>
-              <button
-                type="button"
-                onClick={() => onToggleTranscriptExpand(recording.id)}
-                className="mt-2 text-xs font-medium text-blue-500 transition-colors hover:text-blue-700"
-              >
-                收起
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="text-sm leading-6 text-slate-600">
-                {textPreview}
-                {fullText.length > 150 ? "..." : ""}
-              </p>
-              <button
-                type="button"
-                onClick={() => onToggleTranscriptExpand(recording.id)}
-                className="mt-1 text-xs font-medium text-blue-500 transition-colors hover:text-blue-700"
-              >
-                展开完整转写
-              </button>
-            </>
-          )}
-        </div>
+        <ReportQaTranscriptTextBlock
+          recordingId={recording.id}
+          isExpanded={isExpanded}
+          textPreview={textPreview}
+          fullText={fullText}
+          onToggleTranscriptExpand={onToggleTranscriptExpand}
+        />
       ) : null}
 
       {status === "FAILED" ? (
-        <details className="rounded-md border border-red-100 bg-red-50/30 p-3">
-          <summary className="cursor-pointer text-xs text-red-500">
-            查看错误详情
-          </summary>
-          <p className="mt-1 text-xs text-red-400">
-            {formatTranscriptErrorMessage(transcript?.errorMessage ?? null)}
-          </p>
-          {!isAborted ? (
-            canRetryTranscript(transcript?.errorMessage ?? null) ? (
-              <button
-                type="button"
-                onClick={() => onRetryQaTranscribe(recording.id)}
-                disabled={isTranscribing}
-                className="mt-2 inline-flex h-7 items-center justify-center rounded border border-red-200 bg-white px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400"
-              >
-                {isTranscribing ? "转写中..." : "重试转写"}
-              </button>
-            ) : (
-              <p className="mt-1 text-xs text-slate-400">
-                当前失败类型不建议重试
-              </p>
-            )
-          ) : null}
-        </details>
+        <ReportQaTranscriptErrorBlock
+          recordingId={recording.id}
+          errorMessage={transcript?.errorMessage}
+          isAborted={isAborted}
+          isTranscribing={isTranscribing}
+          onRetryQaTranscribe={onRetryQaTranscribe}
+        />
       ) : null}
 
       {status !== "COMPLETED" && status !== "FAILED" ? (
