@@ -4,6 +4,7 @@ import {
   REPORT_GENERATION_FAILURE_MESSAGE,
   ReportGenerationPanel,
 } from "./report-ui";
+import { ReportOverviewDiagnostics } from "./report-overview-diagnostics";
 import { ReportOverviewSummary } from "./report-overview-summary";
 
 type OverviewAnalysis = {
@@ -76,47 +77,7 @@ export function ReportOverviewTab({
       ) : null}
 
       {analysis?.status === "COMPLETED" ? (
-        <section className="grid gap-4 lg:grid-cols-3">
-          <div className="rounded-lg border border-slate-100 bg-white p-5">
-            <h3 className="text-sm font-semibold text-slate-800">
-              路演内容诊断
-            </h3>
-            <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
-              {(diagnostics.content.length > 0
-                ? diagnostics.content
-                : ["暂无更细的内容诊断，建议查看内容覆盖与证据充分性。"]
-              ).map((item, index) => (
-                <li key={index}>· {item}</li>
-              ))}
-            </ul>
-          </div>
-          <div className="rounded-lg border border-slate-100 bg-white p-5">
-            <h3 className="text-sm font-semibold text-slate-800">
-              表达与节奏诊断
-            </h3>
-            <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
-              {(diagnostics.delivery.length > 0
-                ? diagnostics.delivery
-                : ["暂无更细的表达诊断，建议查看路演表现分析。"]
-              ).map((item, index) => (
-                <li key={index}>· {item}</li>
-              ))}
-            </ul>
-          </div>
-          <div className="rounded-lg border border-slate-100 bg-white p-5">
-            <h3 className="text-sm font-semibold text-slate-800">
-              答辩表现诊断
-            </h3>
-            <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
-              {(diagnostics.qa.length > 0
-                ? diagnostics.qa
-                : ["如本轮已完成答辩，可在答辩表现页查看逐题复盘。"]
-              ).map((item, index) => (
-                <li key={index}>· {item}</li>
-              ))}
-            </ul>
-          </div>
-        </section>
+        <ReportOverviewDiagnostics diagnostics={diagnostics} />
       ) : null}
 
       {analysis?.status === "COMPLETED" && actionItems.length > 0 ? (
