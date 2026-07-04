@@ -1,12 +1,9 @@
 "use client";
 
-import {
-  REPORT_GENERATION_FAILURE_MESSAGE,
-  ReportGenerationPanel,
-} from "./report-ui";
 import { ReportOverviewActionItems } from "./report-overview-action-items";
 import { ReportOverviewDiagnostics } from "./report-overview-diagnostics";
 import { ReportOverviewNextTasks } from "./report-overview-next-tasks";
+import { ReportOverviewStatusPanel } from "./report-overview-status-panel";
 import { ReportOverviewSummary } from "./report-overview-summary";
 
 type OverviewAnalysis = {
@@ -90,75 +87,15 @@ export function ReportOverviewTab({
         <ReportOverviewNextTasks nextTrainingTasks={nextTrainingTasks} />
       ) : null}
 
-      {analysis?.status === "COMPLETED" ? null : isAborted ? (
-        <section className="rounded-lg border border-slate-100 bg-white p-6">
-          <div className="rounded-md border border-red-100 bg-red-50/50 p-5">
-            <p className="text-sm font-medium text-red-700">本轮训练已中止</p>
-            <p className="mt-1 text-sm text-red-600/80">
-              本轮训练在正式流程中被中止，已完成内容会保留，但不能继续本轮路演或答辩。
-            </p>
-          </div>
-        </section>
-      ) : isAnalysisLoading ? (
-        <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
-          <ReportGenerationPanel
-            message={analysisMessage}
-            elapsedMs={reportGenerationElapsedMs}
-            canRetry={canRetryAnalysisGeneration}
-            retryHint={
-              canRetryAnalysisGeneration
-                ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
-                : undefined
-            }
-            onRetry={onRetryAnalysisGeneration}
-          />
-        </section>
-      ) : analysis?.status === "FAILED" ? (
-        <section className="rounded-lg border border-slate-100 bg-white p-6">
-          <div className="py-8 text-center">
-            <p className="text-sm font-medium text-red-600">报告生成失败</p>
-            <p className="mt-1 text-xs text-red-400">
-              {REPORT_GENERATION_FAILURE_MESSAGE}
-            </p>
-            <button
-              type="button"
-              onClick={onRetryAnalysisGeneration}
-              disabled={isAnalysisLoading}
-              className="mt-4 inline-flex h-8 items-center justify-center rounded border border-red-200 bg-white px-3 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              重试生成报告
-            </button>
-          </div>
-        </section>
-      ) : analysis ? (
-        <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
-          <ReportGenerationPanel
-            message={analysisMessage}
-            elapsedMs={reportGenerationElapsedMs}
-            canRetry={canRetryAnalysisGeneration}
-            retryHint={
-              canRetryAnalysisGeneration
-                ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
-                : undefined
-            }
-            onRetry={onRetryAnalysisGeneration}
-          />
-        </section>
-      ) : (
-        <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
-          <ReportGenerationPanel
-            message={analysisMessage || "正在准备报告数据，请稍候……"}
-            elapsedMs={reportGenerationElapsedMs}
-            canRetry={canRetryAnalysisGeneration}
-            retryHint={
-              canRetryAnalysisGeneration
-                ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
-                : undefined
-            }
-            onRetry={onRetryAnalysisGeneration}
-          />
-        </section>
-      )}
+      <ReportOverviewStatusPanel
+        analysis={analysis}
+        isAborted={isAborted}
+        isAnalysisLoading={isAnalysisLoading}
+        analysisMessage={analysisMessage}
+        reportGenerationElapsedMs={reportGenerationElapsedMs}
+        canRetryAnalysisGeneration={canRetryAnalysisGeneration}
+        onRetryAnalysisGeneration={onRetryAnalysisGeneration}
+      />
     </div>
   );
 }
