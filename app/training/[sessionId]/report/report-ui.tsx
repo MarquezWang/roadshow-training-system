@@ -39,6 +39,7 @@ export function ReportGenerationPanel({
   onRetry?: () => void;
 }>) {
   const activeStageIndex = getReportGenerationStageIndex(elapsedMs);
+  const isTakingLongerThanExpected = elapsedMs >= 120_000;
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-950 p-5 text-left shadow-sm">
@@ -74,6 +75,12 @@ export function ReportGenerationPanel({
           <p className="mt-4 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs leading-5 text-slate-400">
             报告生成通常需要 1-3 分钟，请勿刷新页面。完成后页面会自动更新。
           </p>
+          {isTakingLongerThanExpected && !canRetry ? (
+            <p className="mt-3 rounded-md border border-blue-400/20 bg-blue-400/10 px-3 py-2 text-xs leading-5 text-blue-100">
+              当前报告生成耗时较长，系统仍在检查生成结果。如果期间服务被重启，
+              系统会在检测到中断后自动重新生成。
+            </p>
+          ) : null}
           {canRetry ? (
             <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
               <p className="text-xs leading-5 text-amber-100">

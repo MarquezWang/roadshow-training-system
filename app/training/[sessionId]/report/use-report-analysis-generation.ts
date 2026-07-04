@@ -123,7 +123,9 @@ export function useReportAnalysisGeneration({
     return () => window.clearInterval(timer);
   }, [isAnalysisLoading, isAborted]);
 
-  async function generateAnalysis() {
+  async function generateAnalysis(
+    startMessage = "正在生成训练报告……",
+  ) {
     if (isAborted) {
       setAnalysisMessage("本轮训练已中止，不能继续生成训练报告。");
       setIsAnalysisLoading(false);
@@ -133,7 +135,7 @@ export function useReportAnalysisGeneration({
     reportGenerationStartedAtRef.current = Date.now();
     setReportGenerationElapsedMs(0);
     setIsAnalysisLoading(true);
-    setAnalysisMessage("正在生成训练报告……");
+    setAnalysisMessage(startMessage);
 
     try {
       const response = await fetch(`/training/${sessionId}/analysis`, {
@@ -292,14 +294,14 @@ export function useReportAnalysisGeneration({
         ) {
           isGeneratingAnalysisRef.current = true;
           setCanRetryAnalysisGeneration(false);
-          setAnalysisMessage(
+          const nextMessage =
             status.hasStaleAnalysis
               ? "报告正在根据最新转写内容更新……"
               : status.analysisProcessingTimedOut
                 ? "检测到上一次报告生成可能已中断，正在重新生成……"
-              : "正在生成训练报告……",
-          );
-          await generateAnalysis();
+                : "正在生成训练报告……";
+          setAnalysisMessage(nextMessage);
+          await generateAnalysis(nextMessage);
           isGeneratingAnalysisRef.current = false;
         } else if (!status.canGenerateAnalysis && !status.hasStaleAnalysis) {
           // 还不能生成，显示等待状态

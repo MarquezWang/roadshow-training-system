@@ -251,7 +251,7 @@ export function ReportOverviewTab({
           <ReportGenerationPanel
             message={analysisMessage}
             elapsedMs={reportGenerationElapsedMs}
-            canRetry={canRetryAnalysisGeneration || reportGenerationElapsedMs >= 180_000}
+            canRetry={canRetryAnalysisGeneration}
             retryHint={
               canRetryAnalysisGeneration
                 ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
@@ -282,7 +282,7 @@ export function ReportOverviewTab({
           <ReportGenerationPanel
             message={analysisMessage}
             elapsedMs={reportGenerationElapsedMs}
-            canRetry={canRetryAnalysisGeneration || reportGenerationElapsedMs >= 180_000}
+            canRetry={canRetryAnalysisGeneration}
             retryHint={
               canRetryAnalysisGeneration
                 ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
@@ -296,7 +296,7 @@ export function ReportOverviewTab({
           <ReportGenerationPanel
             message={analysisMessage || "正在准备报告数据，请稍候……"}
             elapsedMs={reportGenerationElapsedMs}
-            canRetry={canRetryAnalysisGeneration || reportGenerationElapsedMs >= 180_000}
+            canRetry={canRetryAnalysisGeneration}
             retryHint={
               canRetryAnalysisGeneration
                 ? "系统检测到上一次报告生成可能已中断，可以重新触发生成。"
