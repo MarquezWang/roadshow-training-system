@@ -118,8 +118,12 @@ export function useReportAnalysisGeneration({
   }
 
   function retryAnalysisGeneration() {
+    if (isGeneratingAnalysisRef.current) return;
+    isGeneratingAnalysisRef.current = true;
     setCanRetryAnalysisGeneration(false);
-    void generateAnalysis();
+    void generateAnalysis().finally(() => {
+      isGeneratingAnalysisRef.current = false;
+    });
   }
 
   // 单一 status polling：定期检查 report/status，驱动整个自动生成流程

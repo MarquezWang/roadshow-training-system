@@ -63,6 +63,9 @@ export function ReportPitchTab({
   onCancelTranscriptEditing,
   onSaveTranscript,
 }: ReportPitchTabProps) {
+  const hasTranscriptText = Boolean(transcript?.text.trim());
+  const hasFailedTranscript = transcript?.status === "FAILED";
+
   return (
     <div className="grid gap-6">
       <section className="rounded-lg border border-slate-100 bg-white p-6">
@@ -75,9 +78,11 @@ export function ReportPitchTab({
           <p className="mt-4 rounded-md border border-slate-100 bg-slate-50/50 p-3 text-sm text-slate-600">
             本轮训练已中止，报告不再继续生成。
           </p>
-        ) : !transcript?.text.trim() ? (
+        ) : !hasTranscriptText ? (
           <p className="mt-4 rounded-md border border-slate-100 bg-slate-50/50 p-3 text-sm text-slate-600">
-            请先保存路演转写文本，再生成训练报告。
+            {hasFailedTranscript
+              ? "路演音频转写失败，当前没有可用于分析的转写文本。建议重新录制本轮路演，或在下方手动补充转写文本后再生成训练报告。"
+              : "尚未保存路演转写文本。请在下方“路演录音与转写”中补充并保存文本后，再生成训练报告。"}
           </p>
         ) : !analysis ? (
           <p className="mt-4 rounded-md border border-dashed border-slate-200 p-4 text-sm text-slate-500">

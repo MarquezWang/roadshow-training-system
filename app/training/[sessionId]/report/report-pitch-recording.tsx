@@ -4,6 +4,8 @@ import { ReportPitchTranscriptBlock } from "./report-pitch-transcript-block";
 export type PitchTranscript = {
   text: string;
   source: string;
+  status?: string;
+  errorMessage?: string | null;
 };
 
 export type PitchRecording = {

@@ -187,7 +187,9 @@ test(
         assert.equal(body.canGenerateAnalysis, true);
       });
 
-      await t.test("存在未回答基础题时继续阻塞", async () => {
+      // 与 report/status 路由保持一致：只等待实际进入过的题。
+      // 如果用户在前面题目耗时过长，后续基础题没有机会进入，不应因此卡住报告生成。
+      await t.test("未回答基础题不阻塞报告生成", async () => {
         const sessionId = await createFixture({
           name: "one-unanswered-base-question",
           answeredBaseCount: 2,
@@ -199,7 +201,7 @@ test(
         assert.equal(body.qaAnsweredWithoutRecordingCount, 2);
         assert.equal(body.qaTranscriptMissingCount, 2);
         assert.equal(body.qaUnansweredBaseQuestionCount, 1);
-        assert.equal(body.canGenerateAnalysis, false);
+        assert.equal(body.canGenerateAnalysis, true);
       });
 
       await t.test("未回答动态追问不阻塞基础报告", async () => {
