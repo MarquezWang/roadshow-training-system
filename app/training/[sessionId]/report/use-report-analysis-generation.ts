@@ -3,70 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { REPORT_GENERATION_FAILURE_MESSAGE } from "./report-ui";
-
-type DynamicFollowupReview = {
-  questionId: string;
-  question: string;
-  answerSummary: string;
-  targetWeakness: string;
-  evidenceSupplement: string;
-  improvementAdvice: string;
-};
-
-export type ReportTrainingAnalysis = {
-  id: string;
-  status: string;
-  overallScore: number | null;
-  summary: string;
-  errorMessage: string | null;
-  updatedAt: string;
-  strengths: string[];
-  weaknesses: string[];
-  suggestions: string[];
-  onePageSummary: {
-    conclusion: string;
-    strongestPoint: string;
-    biggestWeakness: string;
-    nextTrainingFocus: string;
-    readinessAdvice: string;
-  } | null;
-  diagnostics: {
-    content: string[];
-    delivery: string[];
-    qa: string[];
-  } | null;
-  actionItems: Array<{
-    issue: string;
-    whyItMatters: string;
-    howToFix: string;
-    sampleWording: string;
-  }>;
-  nextTrainingTasks: string[];
-  contentCoverage: Array<{
-    item: string;
-    covered: string;
-    evidence: string;
-    suggestion: string;
-  }>;
-  timing: Record<string, unknown>;
-  slideSync: Record<string, unknown>;
-  riskQuestions: string[];
-  qaReviews: Array<{
-    questionId: string;
-    questionIndex: number;
-    dimension: string;
-    question: string;
-    judgeIntent: string;
-    answerSummary: string;
-    responseQuality: string;
-    responseQualityLabel: string;
-    missingPoints: string[];
-    evidenceUse: string;
-    improvementAdvice: string;
-    betterAnswerOutline: string[];
-  }>;
-  dynamicFollowupReview: DynamicFollowupReview | null;
-};
+import type { ReportTrainingAnalysis } from "./report-types";
 
 type UseReportAnalysisGenerationOptions = Readonly<{
   sessionId: string;

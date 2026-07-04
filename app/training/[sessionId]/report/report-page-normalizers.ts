@@ -3,7 +3,7 @@ import type {
   TrainingRecording,
   TrainingTranscript,
 } from "./report-types";
-import type { ReportTrainingAnalysis } from "./use-report-analysis-generation";
+import type { ReportTrainingAnalysis } from "./report-types";
 import {
   parseActionItems,
   parseDiagnostics,

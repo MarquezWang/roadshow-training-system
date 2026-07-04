@@ -1,3 +1,5 @@
+import type { DynamicFollowupReview } from "./report-qa-types";
+
 export type TrainingTranscript = {
   id: string;
   recordingId: string;
@@ -57,3 +59,58 @@ export function hasEnteredQaQuestion(question: TrainingQaQuestion) {
       question.answer?.answerText?.trim(),
   );
 }
+
+export type ReportTrainingAnalysis = {
+  id: string;
+  status: string;
+  overallScore: number | null;
+  summary: string;
+  errorMessage: string | null;
+  updatedAt: string;
+  strengths: string[];
+  weaknesses: string[];
+  suggestions: string[];
+  onePageSummary: {
+    conclusion: string;
+    strongestPoint: string;
+    biggestWeakness: string;
+    nextTrainingFocus: string;
+    readinessAdvice: string;
+  } | null;
+  diagnostics: {
+    content: string[];
+    delivery: string[];
+    qa: string[];
+  } | null;
+  actionItems: Array<{
+    issue: string;
+    whyItMatters: string;
+    howToFix: string;
+    sampleWording: string;
+  }>;
+  nextTrainingTasks: string[];
+  contentCoverage: Array<{
+    item: string;
+    covered: string;
+    evidence: string;
+    suggestion: string;
+  }>;
+  timing: Record<string, unknown>;
+  slideSync: Record<string, unknown>;
+  riskQuestions: string[];
+  qaReviews: Array<{
+    questionId: string;
+    questionIndex: number;
+    dimension: string;
+    question: string;
+    judgeIntent: string;
+    answerSummary: string;
+    responseQuality: string;
+    responseQualityLabel: string;
+    missingPoints: string[];
+    evidenceUse: string;
+    improvementAdvice: string;
+    betterAnswerOutline: string[];
+  }>;
+  dynamicFollowupReview: DynamicFollowupReview | null;
+};

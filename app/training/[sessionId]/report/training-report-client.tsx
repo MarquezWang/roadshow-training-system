@@ -10,14 +10,12 @@ import {
 import { ReportOverviewTab } from "./report-overview";
 import { ReportPitchTab } from "./report-pitch";
 import { ReportQaTab } from "./report-qa";
-import {
-  useReportAnalysisGeneration,
-  type ReportTrainingAnalysis as TrainingAnalysis,
-} from "./use-report-analysis-generation";
+import { useReportAnalysisGeneration } from "./use-report-analysis-generation";
 import { useReportAnalysisSummary } from "./use-report-analysis-summary";
 import { useReportQaTranscripts } from "./use-report-qa-transcripts";
 import { useReportPitchTranscript } from "./use-report-pitch-transcript";
 import {
+  type ReportTrainingAnalysis as TrainingAnalysis,
   type TrainingQaQuestion,
   type TrainingRecording,
 } from "./report-types";

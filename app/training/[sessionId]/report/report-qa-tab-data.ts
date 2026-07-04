@@ -3,7 +3,7 @@ import {
   isDynamicFollowupQuestion,
   type TrainingQaQuestion,
 } from "./report-types";
-import type { ReportTrainingAnalysis } from "./use-report-analysis-generation";
+import type { ReportTrainingAnalysis } from "./report-types";
 
 export function getReportQaTabData(
   qaQuestions: TrainingQaQuestion[],
