@@ -3,13 +3,10 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentAccessUserId, withSessionOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import {
-  parseActionItems,
-  parseDiagnostics,
-  parseDynamicFollowupReview,
-  parseJsonArray,
-  parseJsonObject,
-  parseOnePageSummary,
-} from "./report-page-parsers";
+  normalizePitchRecording,
+  normalizeQaQuestions,
+  normalizeReportAnalysis,
+} from "./report-page-normalizers";
 import { isReportAnalysisStale } from "./report-page-staleness";
 import { TrainingReportClient } from "./training-report-client";
 
@@ -145,65 +142,8 @@ export default async function TrainingReportPage({
     redirect(`/training/${session.id}/pitch`);
   }
 
-  const pitchRecording =
-    session.recordings.find(
-      (recording) => recording.phase === "PITCH" && recording.transcript,
-    ) ??
-    session.recordings.find((recording) => recording.phase === "PITCH") ??
-    null;
-  const recording = pitchRecording
-    ? {
-        ...pitchRecording,
-        playbackUrl: `/training/${session.id}/recordings/${pitchRecording.id}`,
-        transcript: pitchRecording.transcript
-          ? {
-              ...pitchRecording.transcript,
-              startedAt:
-                pitchRecording.transcript.startedAt?.toISOString() ??
-                null,
-              completedAt:
-                pitchRecording.transcript.completedAt?.toISOString() ??
-                null,
-              createdAt: pitchRecording.transcript.createdAt.toISOString(),
-              updatedAt: pitchRecording.transcript.updatedAt.toISOString(),
-            }
-          : null,
-      }
-    : null;
-  const analysis = session.analyses[0]
-    ? (() => {
-        const rawResult = parseJsonObject(session.analyses[0].rawResultJson);
-
-        return {
-          id: session.analyses[0].id,
-          status: session.analyses[0].status,
-          overallScore: session.analyses[0].overallScore,
-          summary: session.analyses[0].summary,
-          errorMessage: session.analyses[0].errorMessage,
-          updatedAt: session.analyses[0].updatedAt.toISOString(),
-          strengths: parseJsonArray<string>(session.analyses[0].strengthsJson),
-          weaknesses: parseJsonArray<string>(session.analyses[0].weaknessesJson),
-          suggestions: parseJsonArray<string>(session.analyses[0].suggestionsJson),
-          onePageSummary: parseOnePageSummary(rawResult.onePageSummary),
-          diagnostics: parseDiagnostics(rawResult.diagnostics),
-          actionItems: parseActionItems(rawResult.actionItems),
-          nextTrainingTasks: Array.isArray(rawResult.nextTrainingTasks)
-            ? rawResult.nextTrainingTasks.filter(
-                (item): item is string =>
-                  typeof item === "string" && item.trim().length > 0,
-              )
-            : [],
-          contentCoverage: parseJsonArray<{ item: string; covered: string; evidence: string; suggestion: string }>(session.analyses[0].coverageJson),
-          timing: parseJsonObject(session.analyses[0].timingJson),
-          slideSync: parseJsonObject(session.analyses[0].slideSyncJson),
-          riskQuestions: parseJsonArray<string>(session.analyses[0].riskQuestionsJson),
-          qaReviews: Array.isArray(rawResult.qaReviews) ? rawResult.qaReviews : [],
-          dynamicFollowupReview: parseDynamicFollowupReview(
-            rawResult.dynamicFollowupReview,
-          ),
-        };
-      })()
-    : null;
+  const recording = normalizePitchRecording(session.id, session.recordings);
+  const analysis = normalizeReportAnalysis(session.analyses[0]);
 
   const isAnalysisStale = isReportAnalysisStale({
     sessionId,
@@ -214,47 +154,7 @@ export default async function TrainingReportPage({
   });
 
   const initialAnalysis = isAnalysisStale ? null : analysis;
-  const qaQuestions = session.trainingQuestions.map((question) => ({
-    id: question.id,
-    orderIndex: question.orderIndex,
-    questionText: question.questionText,
-    questionType: question.questionType,
-    source: question.source,
-    basis: question.basis,
-    answer: question.answer
-      ? {
-          id: question.answer.id,
-          answerText: question.answer.answerText,
-          revealedQuestionText: question.answer.revealedQuestionText,
-          startedAt: question.answer.startedAt?.toISOString() ?? null,
-          endedAt: question.answer.endedAt?.toISOString() ?? null,
-          durationSec: question.answer.durationSec,
-          recording: question.answer.recording
-            ? {
-                id: question.answer.recording.id,
-                phase: question.answer.recording.phase,
-                playbackUrl: `/training/${session.id}/recordings/${question.answer.recording.id}`,
-                mimeType: question.answer.recording.mimeType,
-                sizeBytes: question.answer.recording.sizeBytes,
-                durationSec: question.answer.recording.durationSec,
-                transcript: question.answer.recording.transcript
-                  ? {
-                      ...question.answer.recording.transcript,
-                      startedAt:
-                        question.answer.recording.transcript.startedAt?.toISOString() ??
-                        null,
-                      completedAt:
-                        question.answer.recording.transcript.completedAt?.toISOString() ??
-                        null,
-                      createdAt: question.answer.recording.transcript.createdAt.toISOString(),
-                      updatedAt: question.answer.recording.transcript.updatedAt.toISOString(),
-                    }
-                  : null,
-              }
-            : null,
-        }
-      : null,
-  }));
+  const qaQuestions = normalizeQaQuestions(session.id, session.trainingQuestions);
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-5xl flex-1 px-6 py-4 text-[var(--foreground)] sm:px-8 lg:px-10">
