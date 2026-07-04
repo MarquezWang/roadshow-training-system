@@ -116,6 +116,7 @@ export function TrainingReportClient({
     copySummaryMessage,
     copyOnePageSummary,
   } = useReportAnalysisSummary({ analysis });
+  const qaTabData = getReportQaTabData(qaQuestions, analysis);
 
   return (
     <div className="grid gap-5">
@@ -142,9 +143,7 @@ export function TrainingReportClient({
           <ReportAbortPitchTab
             recording={recording}
             transcriptExpanded={transcriptExpanded}
-            onToggleTranscriptExpanded={() =>
-              toggleTranscriptExpanded()
-            }
+            onToggleTranscriptExpanded={() => toggleTranscriptExpanded()}
           />
         )}
 
@@ -182,67 +181,56 @@ export function TrainingReportClient({
           />
         )}
 
-      {/* === 路演表现 Tab === */}
-      {activeTab === "pitch" && (
-        <ReportPitchTab
-          analysis={analysis}
-          transcript={transcript}
-          strengths={strengths}
-          weaknesses={weaknesses}
-          suggestions={suggestions}
-          contentCoverage={contentCoverage}
-          showAllCoverage={showAllCoverage}
-          isAborted={isAborted}
-          recording={recording}
-          isTranscriptEditing={isTranscriptEditing}
-          isTranscriptSaving={isTranscriptSaving}
-          transcriptDraft={transcriptDraft}
-          transcriptExpanded={transcriptExpanded}
-          transcriptMessage={transcriptMessage}
-          onToggleShowAllCoverage={() => setShowAllCoverage((p) => !p)}
-          onStartTranscriptEditing={startTranscriptEditing}
-          onToggleTranscriptExpanded={toggleTranscriptExpanded}
-          onTranscriptDraftChange={setTranscriptDraft}
-          onCancelTranscriptEditing={cancelTranscriptEditing}
-          onSaveTranscript={() => void saveTranscript()}
-        />
-      )}
+        {/* === 路演表现 Tab === */}
+        {activeTab === "pitch" && (
+          <ReportPitchTab
+            analysis={analysis}
+            transcript={transcript}
+            strengths={strengths}
+            weaknesses={weaknesses}
+            suggestions={suggestions}
+            contentCoverage={contentCoverage}
+            showAllCoverage={showAllCoverage}
+            isAborted={isAborted}
+            recording={recording}
+            isTranscriptEditing={isTranscriptEditing}
+            isTranscriptSaving={isTranscriptSaving}
+            transcriptDraft={transcriptDraft}
+            transcriptExpanded={transcriptExpanded}
+            transcriptMessage={transcriptMessage}
+            onToggleShowAllCoverage={() => setShowAllCoverage((p) => !p)}
+            onStartTranscriptEditing={startTranscriptEditing}
+            onToggleTranscriptExpanded={toggleTranscriptExpanded}
+            onTranscriptDraftChange={setTranscriptDraft}
+            onCancelTranscriptEditing={cancelTranscriptEditing}
+            onSaveTranscript={() => void saveTranscript()}
+          />
+        )}
 
-      {/* === 答辩表现 Tab === */}
-      {activeTab === "qa" && (
-        (() => {
-          const {
-            enteredQuestions,
-            dynamicFollowupQuestion,
-            dynamicFollowupReview,
-            enteredQaReviews,
-            skippedCount,
-          } = getReportQaTabData(qaQuestions, analysis);
-
-          return (
-            <ReportQaTab
-              enteredQuestions={enteredQuestions}
-              dynamicFollowupQuestion={dynamicFollowupQuestion}
-              dynamicFollowupReview={dynamicFollowupReview}
-              enteredQaReviews={enteredQaReviews}
-              skippedCount={skippedCount}
-              suggestions={suggestions}
-              qaTranscripts={qaTranscripts}
-              qaTranscribingSet={qaTranscribingSet}
-              expandedTranscripts={expandedTranscripts}
-              isAborted={isAborted}
-              isQaCompleted={isQaCompleted}
-              qaStartedAt={qaStartedAt}
-              qaEndedAt={qaEndedAt}
-              qaDurationSec={qaDurationSec}
-              onToggleTranscriptExpand={toggleTranscriptExpand}
-              onRetryQaTranscribe={(recordingId) => {
-                void retryQaTranscribe(recordingId);
-              }}
-            />
-          );
-        })())}
-    </div>
+        {/* === 答辩表现 Tab === */}
+        {activeTab === "qa" && (
+          <ReportQaTab
+            enteredQuestions={qaTabData.enteredQuestions}
+            dynamicFollowupQuestion={qaTabData.dynamicFollowupQuestion}
+            dynamicFollowupReview={qaTabData.dynamicFollowupReview}
+            enteredQaReviews={qaTabData.enteredQaReviews}
+            skippedCount={qaTabData.skippedCount}
+            suggestions={suggestions}
+            qaTranscripts={qaTranscripts}
+            qaTranscribingSet={qaTranscribingSet}
+            expandedTranscripts={expandedTranscripts}
+            isAborted={isAborted}
+            isQaCompleted={isQaCompleted}
+            qaStartedAt={qaStartedAt}
+            qaEndedAt={qaEndedAt}
+            qaDurationSec={qaDurationSec}
+            onToggleTranscriptExpand={toggleTranscriptExpand}
+            onRetryQaTranscribe={(recordingId) => {
+              void retryQaTranscribe(recordingId);
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }
