@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ReportTabNavigation, type ReportTabKey } from "./report-ui";
+import { ReportTabNavigation } from "./report-ui";
 import {
   ReportAbortOverviewTab,
   ReportAbortPitchTab,
@@ -14,6 +13,7 @@ import { useReportAnalysisGeneration } from "./use-report-analysis-generation";
 import { useReportAnalysisSummary } from "./use-report-analysis-summary";
 import { useReportQaTranscripts } from "./use-report-qa-transcripts";
 import { useReportPitchTranscript } from "./use-report-pitch-transcript";
+import { useReportTabState } from "./use-report-tab-state";
 import {
   type ReportTrainingAnalysis as TrainingAnalysis,
   type TrainingQaQuestion,
@@ -86,22 +86,13 @@ export function TrainingReportClient({
     sessionId,
     qaQuestions,
   });
-  const [activeTab, setActiveTab] = useState<ReportTabKey>(
-    isAborted ? "abort-overview" : "overview",
-  );
-  const contentRef = useRef<HTMLDivElement>(null);
-  // 展开/收起：内容覆盖
-  const [showAllCoverage, setShowAllCoverage] = useState(false);
-
-  // 切换 Tab 时回到内容顶部
-  useEffect(() => {
-    const el = contentRef.current;
-
-    if (el) {
-      el.scrollIntoView({ block: "start" });
-    }
-  }, [activeTab]);
-
+  const {
+    activeTab,
+    setActiveTab,
+    contentRef,
+    showAllCoverage,
+    toggleShowAllCoverage,
+  } = useReportTabState({ isAborted });
   const {
     strengths,
     weaknesses,
@@ -196,7 +187,7 @@ export function TrainingReportClient({
             transcriptDraft={transcriptDraft}
             transcriptExpanded={transcriptExpanded}
             transcriptMessage={transcriptMessage}
-            onToggleShowAllCoverage={() => setShowAllCoverage((p) => !p)}
+            onToggleShowAllCoverage={toggleShowAllCoverage}
             onStartTranscriptEditing={startTranscriptEditing}
             onToggleTranscriptExpanded={toggleTranscriptExpanded}
             onTranscriptDraftChange={setTranscriptDraft}
