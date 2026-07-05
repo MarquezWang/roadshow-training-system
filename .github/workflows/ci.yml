@@ -44,6 +44,7 @@ jobs:
       - name: Stability tests
         env:
           AUTH_ENABLED: "false"
+          DYNAMIC_FOLLOWUP_EXPERIMENT: "true"
           DATABASE_URL: file:./data/ci-stability-test.db
           STABILITY_TEST_DATABASE_URL: file:./data/ci-stability-test.db
           STABILITY_TEST_BASE_URL: http://127.0.0.1:3000
