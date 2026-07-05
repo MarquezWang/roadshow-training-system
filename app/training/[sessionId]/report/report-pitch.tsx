@@ -11,17 +11,19 @@ import {
   type PitchRecording,
   type PitchTranscript,
 } from "./report-pitch-recording";
+import type { ReportScoreDisplayState } from "./report-score-display";
 
 type PitchAnalysis = {
   status: string;
   overallScore: number | null;
+  isFallbackReport: boolean;
   summary: string;
 };
 
 type ReportPitchTabProps = Readonly<{
   analysis: PitchAnalysis | null;
   transcript: PitchTranscript | null;
-  validityMessage: string | null;
+  scoreDisplay: ReportScoreDisplayState;
   strengths: string[];
   weaknesses: string[];
   suggestions: string[];
@@ -45,7 +47,7 @@ type ReportPitchTabProps = Readonly<{
 export function ReportPitchTab({
   analysis,
   transcript,
-  validityMessage,
+  scoreDisplay,
   strengths,
   weaknesses,
   suggestions,
@@ -99,24 +101,45 @@ export function ReportPitchTab({
           </div>
         ) : (
           <div className="mt-4 grid gap-4">
-            <div className="flex items-baseline gap-2">
-              <span className="text-xs font-medium text-slate-500">
-                本轮表现分
-              </span>
-              <span className="text-3xl font-bold text-slate-900">
-                {analysis.overallScore ?? "-"}
-              </span>
-              <span className="text-sm text-slate-400">/ 100</span>
-            </div>
+            {scoreDisplay.showPrimaryScore ? (
+              <div className="flex items-baseline gap-2">
+                <span className="text-xs font-medium text-slate-500">
+                  本轮表现分
+                </span>
+                <span className="text-3xl font-bold text-slate-900">
+                  {analysis.overallScore ?? "-"}
+                </span>
+                <span className="text-sm text-slate-400">/ 100</span>
+              </div>
+            ) : (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-semibold text-amber-900">
+                  {scoreDisplay.title}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-amber-800">
+                  {scoreDisplay.subtitle}
+                </p>
+              </div>
+            )}
             <div className="grid gap-3">
-              <p className="rounded-md border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-                该分数仅基于本次模拟路演与答辩表现生成，不代表项目正式评审结果。
-              </p>
-              {validityMessage ? (
-                <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-                  {validityMessage}
+              {scoreDisplay.showPrimaryScore ? (
+                <p className="rounded-md border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                  {scoreDisplay.subtitle}
                 </p>
               ) : null}
+              {scoreDisplay.weakScoreNote ? (
+                <p className="rounded-md border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                  {scoreDisplay.weakScoreNote}
+                </p>
+              ) : null}
+              {scoreDisplay.messages.map((message) => (
+                <p
+                  key={message}
+                  className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800"
+                >
+                  {message}
+                </p>
+              ))}
             </div>
 
             {analysis.summary ? (

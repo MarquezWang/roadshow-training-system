@@ -5,6 +5,7 @@ import { ReportOverviewDiagnostics } from "./report-overview-diagnostics";
 import { ReportOverviewNextTasks } from "./report-overview-next-tasks";
 import { ReportOverviewStatusPanel } from "./report-overview-status-panel";
 import { ReportOverviewSummary } from "./report-overview-summary";
+import type { ReportScoreDisplayState } from "./report-score-display";
 
 type OverviewAnalysis = {
   status: string;
@@ -39,7 +40,7 @@ type ReportOverviewTabProps = Readonly<{
   diagnostics: Diagnostics;
   actionItems: ActionItem[];
   nextTrainingTasks: string[];
-  validityMessage: string | null;
+  scoreDisplay: ReportScoreDisplayState;
   copySummaryMessage: string;
   isAborted: boolean;
   isAnalysisLoading: boolean;
@@ -56,7 +57,7 @@ export function ReportOverviewTab({
   diagnostics,
   actionItems,
   nextTrainingTasks,
-  validityMessage,
+  scoreDisplay,
   copySummaryMessage,
   isAborted,
   isAnalysisLoading,
@@ -72,7 +73,7 @@ export function ReportOverviewTab({
         <ReportOverviewSummary
           analysis={analysis}
           onePageSummary={onePageSummary}
-          validityMessage={validityMessage}
+          scoreDisplay={scoreDisplay}
           copySummaryMessage={copySummaryMessage}
           onCopyOnePageSummary={onCopyOnePageSummary}
         />

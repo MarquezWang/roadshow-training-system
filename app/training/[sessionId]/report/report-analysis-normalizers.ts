@@ -25,6 +25,24 @@ type SourceAnalysis = Readonly<{
   rawResultJson: string | null;
 }>;
 
+function isFallbackReportAnalysis(
+  analysis: SourceAnalysis,
+  rawResult: Record<string, unknown>,
+) {
+  const rawSummary =
+    typeof rawResult.summary === "string" ? rawResult.summary : "";
+  const fallbackText = [
+    analysis.summary,
+    analysis.errorMessage ?? "",
+    rawSummary,
+    analysis.rawResultJson ?? "",
+  ].join("\n");
+
+  return /降级|基础报告|结构化\s*JSON\s*解析失败|转写文本不可用|fallback/i.test(
+    fallbackText,
+  );
+}
+
 export function normalizeReportAnalysis(
   analysis: SourceAnalysis | null | undefined,
 ): ReportTrainingAnalysis | null {
@@ -38,6 +56,7 @@ export function normalizeReportAnalysis(
     id: analysis.id,
     status: analysis.status,
     overallScore: analysis.overallScore,
+    isFallbackReport: isFallbackReportAnalysis(analysis, rawResult),
     summary: analysis.summary,
     errorMessage: analysis.errorMessage,
     updatedAt: analysis.updatedAt.toISOString(),

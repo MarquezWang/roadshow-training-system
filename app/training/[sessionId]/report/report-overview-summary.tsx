@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReportScoreDisplayState } from "./report-score-display";
+
 type OverviewAnalysis = {
   overallScore: number | null;
   summary: string;
@@ -16,7 +18,7 @@ type OnePageSummary = {
 type ReportOverviewSummaryProps = Readonly<{
   analysis: OverviewAnalysis;
   onePageSummary: OnePageSummary;
-  validityMessage: string | null;
+  scoreDisplay: ReportScoreDisplayState;
   copySummaryMessage: string;
   onCopyOnePageSummary: () => void;
 }>;
@@ -24,7 +26,7 @@ type ReportOverviewSummaryProps = Readonly<{
 export function ReportOverviewSummary({
   analysis,
   onePageSummary,
-  validityMessage,
+  scoreDisplay,
   copySummaryMessage,
   onCopyOnePageSummary,
 }: ReportOverviewSummaryProps) {
@@ -50,15 +52,26 @@ export function ReportOverviewSummary({
           >
             复制复盘摘要
           </button>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4 text-center">
-            <p className="text-xs font-medium text-slate-500">
-              本次训练表现分
-            </p>
-            <p className="mt-1 text-4xl font-semibold text-slate-950">
-              {analysis.overallScore ?? "-"}
-            </p>
-            <p className="text-xs text-slate-400">/ 100</p>
-          </div>
+          {scoreDisplay.showPrimaryScore ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4 text-center">
+              <p className="text-xs font-medium text-slate-500">
+                {scoreDisplay.title}
+              </p>
+              <p className="mt-1 text-4xl font-semibold text-slate-950">
+                {analysis.overallScore ?? "-"}
+              </p>
+              <p className="text-xs text-slate-400">/ 100</p>
+            </div>
+          ) : (
+            <div className="max-w-64 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-left">
+              <p className="text-sm font-semibold text-amber-900">
+                {scoreDisplay.title}
+              </p>
+              <p className="mt-1 text-sm leading-5 text-amber-800">
+                {scoreDisplay.subtitle}
+              </p>
+            </div>
+          )}
           {copySummaryMessage ? (
             <p className="text-xs text-teal-700">{copySummaryMessage}</p>
           ) : null}
@@ -66,14 +79,24 @@ export function ReportOverviewSummary({
       </div>
 
       <div className="mt-4 grid gap-3">
-        <p className="rounded-md border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-          该分数仅基于本次模拟路演与答辩表现生成，不代表项目正式评审结果。
-        </p>
-        {validityMessage ? (
-          <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-            {validityMessage}
+        {scoreDisplay.showPrimaryScore ? (
+          <p className="rounded-md border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+            {scoreDisplay.subtitle}
           </p>
         ) : null}
+        {scoreDisplay.weakScoreNote ? (
+          <p className="rounded-md border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+            {scoreDisplay.weakScoreNote}
+          </p>
+        ) : null}
+        {scoreDisplay.messages.map((message) => (
+          <p
+            key={message}
+            className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800"
+          >
+            {message}
+          </p>
+        ))}
       </div>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-4">

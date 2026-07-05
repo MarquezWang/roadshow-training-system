@@ -8,6 +8,7 @@ import { useReportQaTranscripts } from "./use-report-qa-transcripts";
 import { useReportPitchTranscript } from "./use-report-pitch-transcript";
 import { useReportTabState } from "./use-report-tab-state";
 import { assessTrainingValidity } from "./report-validity";
+import { getReportScoreDisplayState } from "./report-score-display";
 import {
   type ReportTrainingAnalysis as TrainingAnalysis,
   type TrainingQaQuestion,
@@ -87,6 +88,7 @@ export function TrainingReportClient({
     toggleShowAllCoverage,
   } = useReportTabState({ isAborted });
   const trainingValidity = assessTrainingValidity(recording, qaQuestions);
+  const scoreDisplay = getReportScoreDisplayState(analysis, trainingValidity);
   const {
     strengths,
     weaknesses,
@@ -98,7 +100,7 @@ export function TrainingReportClient({
     nextTrainingTasks,
     copySummaryMessage,
     copyOnePageSummary,
-  } = useReportAnalysisSummary({ analysis, trainingValidity });
+  } = useReportAnalysisSummary({ analysis, scoreDisplay });
 
   return (
     <div className="grid gap-5">
@@ -137,7 +139,7 @@ export function TrainingReportClient({
           diagnostics,
           actionItems,
           nextTrainingTasks,
-          validityMessage: trainingValidity.message,
+          scoreDisplay,
           copySummaryMessage,
           isAnalysisLoading,
           analysisMessage,

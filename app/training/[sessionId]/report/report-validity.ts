@@ -13,6 +13,9 @@ export type TrainingValidity = Readonly<{
   level: TrainingValidityLevel;
   pitchTranscriptLength: number;
   effectiveQaAnswerCount: number;
+  isPitchTranscriptInsufficient: boolean;
+  isQaSampleInsufficient: boolean;
+  messages: string[];
   message: string | null;
 }>;
 
@@ -47,30 +50,48 @@ export function assessTrainingValidity(
   ).length;
   const allQaAnswersEmpty =
     regularQaQuestions.length > 0 && effectiveQaAnswerCount === 0;
+  const isPitchTranscriptInvalid =
+    pitchTranscriptLength < INVALID_PITCH_TRANSCRIPT_CHARS;
+  const isPitchTranscriptInsufficient =
+    pitchTranscriptLength < LOW_VALIDITY_PITCH_TRANSCRIPT_CHARS;
+  const isQaSampleInsufficient =
+    effectiveQaAnswerCount < LOW_VALIDITY_MIN_QA_ANSWERS;
+  const messages = [
+    ...(isPitchTranscriptInsufficient
+      ? ["本次训练可能只是流程测试，不建议参考表现分。"]
+      : []),
+    ...(isQaSampleInsufficient
+      ? ["答辩样本不足，答辩表现仅供参考。"]
+      : []),
+  ];
 
-  if (
-    pitchTranscriptLength < INVALID_PITCH_TRANSCRIPT_CHARS ||
-    allQaAnswersEmpty
-  ) {
+  if (isPitchTranscriptInvalid || allQaAnswersEmpty) {
     return {
       level: "INVALID_OR_TEST_ONLY",
       pitchTranscriptLength,
       effectiveQaAnswerCount,
+      isPitchTranscriptInsufficient,
+      isQaSampleInsufficient,
+      messages:
+        messages.length > 0
+          ? messages
+          : ["本次训练样本不足，可能只是流程测试，不建议参考表现分。"],
       message:
-        "本次训练样本不足，可能只是流程测试，不建议将本次分数作为项目真实表现判断依据。",
+        messages.length > 0
+          ? messages.join(" ")
+          : "本次训练样本不足，可能只是流程测试，不建议参考表现分。",
     };
   }
 
-  if (
-    pitchTranscriptLength < LOW_VALIDITY_PITCH_TRANSCRIPT_CHARS ||
-    effectiveQaAnswerCount < LOW_VALIDITY_MIN_QA_ANSWERS
-  ) {
+  if (isPitchTranscriptInsufficient || isQaSampleInsufficient) {
     return {
       level: "LOW_VALIDITY",
       pitchTranscriptLength,
       effectiveQaAnswerCount,
-      message:
-        "本次训练内容较少，分析结果仅供参考。建议完成一次较完整的路演和答辩后，再查看训练表现分。",
+      isPitchTranscriptInsufficient,
+      isQaSampleInsufficient,
+      messages,
+      message: messages.join(" "),
     };
   }
 
@@ -78,6 +99,9 @@ export function assessTrainingValidity(
     level: "NORMAL",
     pitchTranscriptLength,
     effectiveQaAnswerCount,
+    isPitchTranscriptInsufficient,
+    isQaSampleInsufficient,
+    messages: [],
     message: null,
   };
 }

@@ -12,6 +12,7 @@ import { ReportPitchTab } from "./report-pitch";
 import { ReportQaTab } from "./report-qa";
 import type { QaTranscript } from "./report-qa-types";
 import { getReportQaTabData } from "./report-qa-tab-data";
+import type { ReportScoreDisplayState } from "./report-score-display";
 import type { ReportAnalysisSummaryResult } from "./use-report-analysis-summary";
 import type { ReportPitchTranscript } from "./use-report-pitch-transcript";
 import {
@@ -47,7 +48,7 @@ type ReportAnalysisState = Readonly<{
   diagnostics: ReportAnalysisSummaryResult["diagnostics"];
   actionItems: ReportAnalysisSummaryResult["actionItems"];
   nextTrainingTasks: ReportAnalysisSummaryResult["nextTrainingTasks"];
-  validityMessage: string | null;
+  scoreDisplay: ReportScoreDisplayState;
   copySummaryMessage: string;
   isAnalysisLoading: boolean;
   analysisMessage: string;
@@ -139,7 +140,7 @@ export function ReportTabContent({
           diagnostics={analysisState.diagnostics}
           actionItems={analysisState.actionItems}
           nextTrainingTasks={analysisState.nextTrainingTasks}
-          validityMessage={analysisState.validityMessage}
+          scoreDisplay={analysisState.scoreDisplay}
           copySummaryMessage={analysisState.copySummaryMessage}
           isAborted={sessionState.isAborted}
           isAnalysisLoading={analysisState.isAnalysisLoading}
@@ -157,7 +158,7 @@ export function ReportTabContent({
         <ReportPitchTab
           analysis={analysisState.analysis}
           transcript={pitchTranscriptState.transcript}
-          validityMessage={analysisState.validityMessage}
+          scoreDisplay={analysisState.scoreDisplay}
           strengths={analysisState.strengths}
           weaknesses={analysisState.weaknesses}
           suggestions={analysisState.suggestions}

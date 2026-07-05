@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import type { TrainingValidity } from "./report-validity";
+import type { ReportScoreDisplayState } from "./report-score-display";
 
 type ReportAnalysisSummary = {
   overallScore: number | null;
@@ -38,12 +38,12 @@ type ReportAnalysisSummary = {
 
 type UseReportAnalysisSummaryOptions = Readonly<{
   analysis: ReportAnalysisSummary | null;
-  trainingValidity: TrainingValidity;
+  scoreDisplay: ReportScoreDisplayState;
 }>;
 
 export function useReportAnalysisSummary({
   analysis,
-  trainingValidity,
+  scoreDisplay,
 }: UseReportAnalysisSummaryOptions) {
   const [copySummaryMessage, setCopySummaryMessage] = useState("");
 
@@ -100,9 +100,11 @@ export function useReportAnalysisSummary({
 
   const buildOnePageSummaryText = useCallback(() => {
     const score =
-      analysis?.overallScore !== null && analysis?.overallScore !== undefined
+      scoreDisplay.showPrimaryScore &&
+      analysis?.overallScore !== null &&
+      analysis?.overallScore !== undefined
         ? `${analysis.overallScore}/100`
-        : "暂无评分";
+        : "暂不建议参考";
     const taskLines =
       nextTrainingTasks.length > 0
         ? nextTrainingTasks
@@ -115,8 +117,9 @@ export function useReportAnalysisSummary({
       "训练报告摘要",
       "",
       `本次训练表现分：${score}`,
-      "说明：该分数仅基于本次模拟路演与答辩表现生成，不代表项目正式评审结果。",
-      ...(trainingValidity.message ? [trainingValidity.message] : []),
+      `说明：${scoreDisplay.subtitle}`,
+      ...(scoreDisplay.weakScoreNote ? [scoreDisplay.weakScoreNote] : []),
+      ...scoreDisplay.messages,
       "",
       "本次训练结论：",
       onePageSummary.conclusion || analysis?.summary || "暂无结论",
@@ -136,7 +139,7 @@ export function useReportAnalysisSummary({
       "下一轮训练任务：",
       taskLines,
     ].join("\n");
-  }, [analysis, nextTrainingTasks, onePageSummary, trainingValidity.message]);
+  }, [analysis, nextTrainingTasks, onePageSummary, scoreDisplay]);
 
   const copyOnePageSummary = useCallback(async () => {
     try {
