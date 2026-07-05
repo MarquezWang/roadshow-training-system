@@ -147,17 +147,11 @@ export async function POST(
       new URLSearchParams({ scoringStatus: "success" }),
     );
   } catch (error) {
+    const message = error instanceof Error ? error.message : "AI 评分生成失败。";
+    console.error("AI 评分生成失败。", { projectId: id, error: message });
+
     if (error instanceof ProjectContextNotFoundError) {
       return new NextResponse(error.message, { status: 404 });
-    }
-
-    const message = error instanceof Error ? error.message : "AI 评分生成失败。";
-
-    if (
-      message.includes("AI 返回内容不是合法 JSON") ||
-      message.includes("评分 JSON")
-    ) {
-      console.error("AI 评分结果解析或校验失败。", { error: message });
     }
 
     return redirectToProject(

@@ -6,8 +6,8 @@ export type MaterialScoreDetail = Readonly<{
   scoringMethod: typeof MATERIAL_SCORING_METHOD;
   categoryScores: ValidatedScoreResult["categoryScores"];
   scoreItems: ValidatedScoreResult["scoreItems"];
-  scoreWarnings: string[];
-  warnings: string[];
+  scoreWarnings: ValidatedScoreResult["scoreWarnings"];
+  warnings: ValidatedScoreResult["scoreWarnings"];
   normalizedEvidenceItems: string[];
 }>;
 

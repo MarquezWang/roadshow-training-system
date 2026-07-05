@@ -13,6 +13,14 @@ type Evidence = {
 
 type EvidenceStrength = "STRONG" | "PARTIAL" | "MISSING";
 type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN";
+type UnsupportedNumericClaimField = "reason" | "deductionReason" | "suggestion";
+type ValidationWarning =
+  | string
+  | {
+      type: "normalizedUnsupportedNumericClaim";
+      criterion: string;
+      fields: UnsupportedNumericClaimField[];
+    };
 
 export type ValidatedScoreResult = {
   totalScore: number;
@@ -36,7 +44,7 @@ export type ValidatedScoreResult = {
     evidence: Evidence;
   }>;
   overallComment: string;
-  scoreWarnings: string[];
+  scoreWarnings: ValidationWarning[];
   normalizedEvidenceItems: string[];
 };
 
@@ -169,20 +177,54 @@ function parseRiskLevel(value: unknown, fieldName: string): RiskLevel {
   return value;
 }
 
-function assertEvidenceForFacts(
+function hasUnsupportedNumericClaim(evidence: Evidence, text: string) {
+  return (
+    hasSpecificFact(text) &&
+    (isMissingEvidenceText(evidence.evidenceText) ||
+      !hasSpecificFact(evidence.evidenceText))
+  );
+}
+
+function normalizeUnsupportedNumericClaims(
+  criterion: string,
   evidence: Evidence,
-  text: string,
-  fieldName: string,
+  fields: Record<UnsupportedNumericClaimField, string>,
 ) {
-  if (!hasSpecificFact(text)) {
-    return;
+  const unsupportedFields: UnsupportedNumericClaimField[] = [];
+  const normalizedFields = { ...fields };
+
+  for (const field of Object.keys(fields) as UnsupportedNumericClaimField[]) {
+    if (!hasUnsupportedNumericClaim(evidence, fields[field])) {
+      continue;
+    }
+
+    unsupportedFields.push(field);
   }
 
-  if (isMissingEvidenceText(evidence.evidenceText)) {
-    throw new Error(
-      `${fieldName} 包含具体数字或数量，但 evidenceText 未提供材料依据。`,
-    );
+  if (unsupportedFields.includes("reason")) {
+    normalizedFields.reason = "材料证据不足，未采纳无依据的具体数字表述。";
   }
+
+  if (unsupportedFields.includes("deductionReason")) {
+    normalizedFields.deductionReason = "材料未提供可核验的具体数量依据。";
+  }
+
+  if (unsupportedFields.includes("suggestion")) {
+    normalizedFields.suggestion =
+      "补充可核验的数量、指标、客户、案例或测试结果依据。";
+  }
+
+  return {
+    fields: normalizedFields,
+    warning:
+      unsupportedFields.length > 0
+        ? {
+            type: "normalizedUnsupportedNumericClaim" as const,
+            criterion,
+            fields: unsupportedFields,
+          }
+        : null,
+  };
 }
 
 function isMissingEvidenceText(text: string) {
@@ -243,6 +285,7 @@ export function validateScoreResult(
   const criteriaByName = new Map(criteria.map((item) => [item.name, item]));
   const seenCriteria = new Set<string>();
   const normalizedMissingEvidenceTextCriteria: string[] = [];
+  const validationWarnings: ValidationWarning[] = [];
   const scoreItems = scoreJson.scoreItems.map((item, index) => {
     if (!isRecord(item)) {
       throw new Error(`scoreItems[${index}] 必须是对象。`);
@@ -286,12 +329,12 @@ export function validateScoreResult(
       );
     }
 
-    const reason = assertString(item.reason, `scoreItems[${index}].reason`);
-    const deductionReason = assertString(
+    let reason = assertString(item.reason, `scoreItems[${index}].reason`);
+    let deductionReason = assertString(
       item.deductionReason,
       `scoreItems[${index}].deductionReason`,
     );
-    const suggestion = assertString(item.suggestion, `scoreItems[${index}].suggestion`);
+    let suggestion = assertString(item.suggestion, `scoreItems[${index}].suggestion`);
     const evidenceStrength = parseEvidenceStrength(
       item.evidenceStrength,
       `scoreItems[${index}].evidenceStrength`,
@@ -323,12 +366,22 @@ export function validateScoreResult(
       riskLevel,
     }).mappedScore;
 
-    assertEvidenceForFacts(evidence, reason, `scoreItems[${index}].reason`);
-    assertEvidenceForFacts(
+    const numericClaimNormalization = normalizeUnsupportedNumericClaims(
+      criterionName,
       evidence,
-      deductionReason,
-      `scoreItems[${index}].deductionReason`,
+      {
+        reason,
+        deductionReason,
+        suggestion,
+      },
     );
+    reason = numericClaimNormalization.fields.reason;
+    deductionReason = numericClaimNormalization.fields.deductionReason;
+    suggestion = numericClaimNormalization.fields.suggestion;
+
+    if (numericClaimNormalization.warning) {
+      validationWarnings.push(numericClaimNormalization.warning);
+    }
 
     return {
       category,
@@ -374,7 +427,7 @@ export function validateScoreResult(
     }),
   );
 
-  const scoreWarnings = Array.isArray(scoreJson.scoreWarnings)
+  const scoreWarnings: ValidationWarning[] = Array.isArray(scoreJson.scoreWarnings)
     ? assertStringArray(scoreJson.scoreWarnings, "scoreWarnings")
     : [];
 
@@ -385,6 +438,8 @@ export function validateScoreResult(
       )}`,
     );
   }
+
+  scoreWarnings.push(...validationWarnings);
 
   return {
     totalScore: scoreItemsTotal,

@@ -290,6 +290,47 @@ test("validateScoreResult rejects STRONG items with missing evidence text", () =
   );
 });
 
+test("validateScoreResult normalizes unsupported numeric claims instead of throwing", () => {
+  const criterionName = "技术优势";
+  const result = validateScoreResult(
+    createScoreJson({
+      [criterionName]: {
+        evidenceStrength: "PARTIAL",
+        riskLevel: "MEDIUM",
+        reason: "技术指标达到95%，明显领先竞品。",
+        deductionReason: "材料未提供可核验的对比数据。",
+        suggestion: "补充3个客户案例和2组测试结果。",
+        evidence: {
+          evidenceText: "材料描述了项目具有技术优势。",
+        },
+      },
+    }),
+    criteria,
+  );
+  const normalizedItem = result.scoreItems.find(
+    (item) => item.criterion === criterionName,
+  );
+  const warning = result.scoreWarnings.find(
+    (item) =>
+      typeof item === "object" &&
+      item.type === "normalizedUnsupportedNumericClaim" &&
+      item.criterion === criterionName,
+  );
+
+  assert.equal(
+    normalizedItem.reason,
+    "材料证据不足，未采纳无依据的具体数字表述。",
+  );
+  assert.equal(
+    normalizedItem.suggestion,
+    "补充可核验的数量、指标、客户、案例或测试结果依据。",
+  );
+  assert.equal(normalizedItem.evidenceStrength, "PARTIAL");
+  assert.equal(normalizedItem.evidence.evidenceText, "材料描述了项目具有技术优势。");
+  assert.deepEqual(warning.fields, ["reason", "suggestion"]);
+  assert.equal(result.totalScore, sum(result.scoreItems.map((item) => item.score)));
+});
+
 test("validateScoreResult excludes aiSuggestedScore from formal totalScore", () => {
   const result = validateScoreResult(createScoreJson(), criteria);
   const aiSuggestedTotal = sum(
