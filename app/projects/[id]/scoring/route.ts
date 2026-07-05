@@ -10,6 +10,7 @@ import { parseAIJson } from "@/lib/json-utils";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
+import { buildMaterialScoreDetail } from "@/lib/scoring-result-detail";
 import { validateScoreResult } from "@/lib/scoring-validator";
 
 type ScoringRouteContext = Readonly<{
@@ -135,15 +136,7 @@ export async function POST(
         projectId: id,
         ruleId: aiContext.evaluationRule.id,
         totalScore: scoreJson.totalScore,
-        scoreDetail: JSON.stringify(
-          {
-            categoryScores: scoreJson.categoryScores,
-            scoreItems: scoreJson.scoreItems,
-            scoreWarnings: scoreJson.scoreWarnings,
-          },
-          null,
-          2,
-        ),
+        scoreDetail: JSON.stringify(buildMaterialScoreDetail(scoreJson), null, 2),
         comments: scoreJson.overallComment,
       },
     });

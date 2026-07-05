@@ -1,3 +1,5 @@
+import { deriveDeterministicMaterialScore } from "@/lib/scoring-v2";
+
 type CriterionInput = {
   category: string | null;
   name: string;
@@ -8,6 +10,9 @@ type Evidence = {
   evidenceText: string;
   evidenceLocation: string;
 };
+
+type EvidenceStrength = "STRONG" | "PARTIAL" | "MISSING";
+type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN";
 
 export type ValidatedScoreResult = {
   totalScore: number;
@@ -22,17 +27,22 @@ export type ValidatedScoreResult = {
     criterion: string;
     maxScore: number;
     score: number;
+    aiSuggestedScore?: number;
     reason: string;
     deductionReason: string;
     suggestion: string;
+    evidenceStrength: EvidenceStrength;
+    riskLevel: RiskLevel;
     evidence: Evidence;
   }>;
   overallComment: string;
   scoreWarnings: string[];
+  normalizedEvidenceItems: string[];
 };
 
 const factPattern =
   /(\d+(\.\d+)?\s*(年|月|日|万元|亿元|元|%|％|亩|项|件|个|家|省|市|页|轮|次|吨|公斤|kg|KG|m²|㎡|万|亿)?)|([一二三四五六七八九十百千万亿]+(年|月|项|件|个|家|省|市|轮|次))/;
+const normalizedMissingEvidenceText = "材料未提供相关证据。";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -62,6 +72,14 @@ function assertInteger(value: unknown, fieldName: string) {
   }
 
   return value;
+}
+
+function assertOptionalInteger(value: unknown, fieldName: string) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  return assertInteger(value, fieldName);
 }
 
 function assertStringArray(value: unknown, fieldName: string) {
@@ -115,6 +133,42 @@ function parseEvidence(value: unknown, fieldName: string): Evidence {
   };
 }
 
+function parseEvidenceStrength(
+  value: unknown,
+  fieldName: string,
+): EvidenceStrength {
+  if (value === undefined || value === null) {
+    throw new Error(`评分 JSON 字段 ${fieldName} 不能为空。`);
+  }
+
+  if (value !== "STRONG" && value !== "PARTIAL" && value !== "MISSING") {
+    throw new Error(
+      `评分 JSON 字段 ${fieldName} 必须是 STRONG、PARTIAL 或 MISSING。`,
+    );
+  }
+
+  return value;
+}
+
+function parseRiskLevel(value: unknown, fieldName: string): RiskLevel {
+  if (value === undefined || value === null) {
+    throw new Error(`评分 JSON 字段 ${fieldName} 不能为空。`);
+  }
+
+  if (
+    value !== "LOW" &&
+    value !== "MEDIUM" &&
+    value !== "HIGH" &&
+    value !== "UNKNOWN"
+  ) {
+    throw new Error(
+      `评分 JSON 字段 ${fieldName} 必须是 LOW、MEDIUM、HIGH 或 UNKNOWN。`,
+    );
+  }
+
+  return value;
+}
+
 function assertEvidenceForFacts(
   evidence: Evidence,
   text: string,
@@ -124,9 +178,46 @@ function assertEvidenceForFacts(
     return;
   }
 
-  if (evidence.evidenceText === "材料未提供相关证据") {
+  if (isMissingEvidenceText(evidence.evidenceText)) {
     throw new Error(
       `${fieldName} 包含具体数字或数量，但 evidenceText 未提供材料依据。`,
+    );
+  }
+}
+
+function isMissingEvidenceText(text: string) {
+  return /材料未提供|未提供相关证据|未提及|未说明|无法判断|依据不足/.test(text);
+}
+
+function assertMappedScoreInvariants(
+  scoreItems: ValidatedScoreResult["scoreItems"],
+  totalScore: number,
+  criteriaCount: number,
+) {
+  if (scoreItems.length !== criteriaCount) {
+    throw new Error(
+      `mapped scoreItems 数量应为 ${criteriaCount}，当前为 ${scoreItems.length}。`,
+    );
+  }
+
+  const scoreItemsTotal = scoreItems.reduce((sum, item) => sum + item.score, 0);
+
+  if (totalScore !== scoreItemsTotal) {
+    throw new Error(
+      `mapped totalScore 应等于 scoreItems[].score 之和 ${scoreItemsTotal}，当前为 ${totalScore}。`,
+    );
+  }
+
+  const invalidMappedScore = scoreItems.find(
+    (item) =>
+      !Number.isInteger(item.score) ||
+      item.score < 0 ||
+      item.score > item.maxScore,
+  );
+
+  if (invalidMappedScore) {
+    throw new Error(
+      `${invalidMappedScore.criterion} 的 mapped score 必须是 0 到 ${invalidMappedScore.maxScore} 之间的整数。`,
     );
   }
 }
@@ -139,14 +230,8 @@ export function validateScoreResult(
     throw new Error("评分 JSON 顶层结构必须是对象。");
   }
 
-  const totalScore = assertInteger(scoreJson.totalScore, "totalScore");
-
   if (!Array.isArray(scoreJson.scoreItems)) {
     throw new Error("评分 JSON 字段 scoreItems 必须是数组。");
-  }
-
-  if (!Array.isArray(scoreJson.categoryScores)) {
-    throw new Error("评分 JSON 字段 categoryScores 必须是数组。");
   }
 
   if (scoreJson.scoreItems.length !== criteria.length) {
@@ -157,6 +242,7 @@ export function validateScoreResult(
 
   const criteriaByName = new Map(criteria.map((item) => [item.name, item]));
   const seenCriteria = new Set<string>();
+  const normalizedMissingEvidenceTextCriteria: string[] = [];
   const scoreItems = scoreJson.scoreItems.map((item, index) => {
     if (!isRecord(item)) {
       throw new Error(`scoreItems[${index}] 必须是对象。`);
@@ -178,7 +264,10 @@ export function validateScoreResult(
     const category = assertString(item.category, `scoreItems[${index}].category`);
     const expectedCategory = normalizeCategory(criterion.category);
     const maxScore = assertInteger(item.maxScore, `scoreItems[${index}].maxScore`);
-    const score = assertInteger(item.score, `scoreItems[${index}].score`);
+    const aiSuggestedScore = assertOptionalInteger(
+      item.aiSuggestedScore ?? item.score,
+      `scoreItems[${index}].aiSuggestedScore`,
+    );
 
     if (category !== expectedCategory) {
       throw new Error(
@@ -188,9 +277,12 @@ export function validateScoreResult(
 
     assertExactNumber(maxScore, criterion.weight, `scoreItems[${index}].maxScore`);
 
-    if (score < 0 || score > maxScore) {
+    if (
+      aiSuggestedScore !== undefined &&
+      (aiSuggestedScore < 0 || aiSuggestedScore > maxScore)
+    ) {
       throw new Error(
-        `scoreItems[${index}].score 必须在 0 到 ${maxScore} 之间，当前为 ${score}。`,
+        `scoreItems[${index}].aiSuggestedScore 必须在 0 到 ${maxScore} 之间，当前为 ${aiSuggestedScore}。`,
       );
     }
 
@@ -200,10 +292,36 @@ export function validateScoreResult(
       `scoreItems[${index}].deductionReason`,
     );
     const suggestion = assertString(item.suggestion, `scoreItems[${index}].suggestion`);
+    const evidenceStrength = parseEvidenceStrength(
+      item.evidenceStrength,
+      `scoreItems[${index}].evidenceStrength`,
+    );
+    const riskLevel = parseRiskLevel(
+      item.riskLevel,
+      `scoreItems[${index}].riskLevel`,
+    );
     const evidence = parseEvidence(
       item.evidence,
       `scoreItems[${index}].evidence`,
     );
+
+    if (evidenceStrength === "STRONG" && isMissingEvidenceText(evidence.evidenceText)) {
+      throw new Error(
+        `scoreItems[${index}].evidenceStrength 为 STRONG 时，evidenceText 不能是缺失证据描述。`,
+      );
+    }
+
+    if (evidenceStrength === "MISSING" && !isMissingEvidenceText(evidence.evidenceText)) {
+      normalizedMissingEvidenceTextCriteria.push(criterionName);
+      evidence.evidenceText = normalizedMissingEvidenceText;
+    }
+
+    const mappedScore = deriveDeterministicMaterialScore({
+      criterion: criterionName,
+      maxScore,
+      evidenceStrength,
+      riskLevel,
+    }).mappedScore;
 
     assertEvidenceForFacts(evidence, reason, `scoreItems[${index}].reason`);
     assertEvidenceForFacts(
@@ -216,16 +334,27 @@ export function validateScoreResult(
       category,
       criterion: criterionName,
       maxScore,
-      score,
+      score: mappedScore,
+      ...(aiSuggestedScore !== undefined ? { aiSuggestedScore } : {}),
       reason,
       deductionReason,
       suggestion,
+      evidenceStrength,
+      riskLevel,
       evidence,
     };
   });
 
+  const missingCriteria = criteria
+    .map((criterion) => criterion.name)
+    .filter((criterionName) => !seenCriteria.has(criterionName));
+
+  if (missingCriteria.length > 0) {
+    throw new Error(`scoreItems 缺少评分指标：${missingCriteria.join("、")}。`);
+  }
+
   const scoreItemsTotal = scoreItems.reduce((sum, item) => sum + item.score, 0);
-  assertExactNumber(totalScore, scoreItemsTotal, "totalScore");
+  assertMappedScoreInvariants(scoreItems, scoreItemsTotal, criteria.length);
 
   const expectedCategoryMaxScores = sumByCategory(criteria);
   const expectedCategoryScores = scoreItems.reduce<Record<string, number>>(
@@ -236,46 +365,36 @@ export function validateScoreResult(
     {},
   );
 
-  const categoryScores = scoreJson.categoryScores.map((item, index) => {
-    if (!isRecord(item)) {
-      throw new Error(`categoryScores[${index}] 必须是对象。`);
-    }
-
-    const category = assertString(item.category, `categoryScores[${index}].category`);
-    const maxScore = assertInteger(item.maxScore, `categoryScores[${index}].maxScore`);
-    const score = assertInteger(item.score, `categoryScores[${index}].score`);
-    const expectedMaxScore = expectedCategoryMaxScores[category];
-
-    if (expectedMaxScore === undefined) {
-      throw new Error(`categoryScores[${index}].category 无法匹配一级指标：${category}`);
-    }
-
-    assertExactNumber(maxScore, expectedMaxScore, `categoryScores[${index}].maxScore`);
-    assertExactNumber(
-      score,
-      expectedCategoryScores[category] ?? 0,
-      `categoryScores[${index}].score`,
-    );
-
-    return {
+  const categoryScores = Object.entries(expectedCategoryMaxScores).map(
+    ([category, maxScore]) => ({
       category,
       maxScore,
-      score,
-      reason: assertString(item.reason, `categoryScores[${index}].reason`),
-    };
-  });
+      score: expectedCategoryScores[category] ?? 0,
+      reason: "由后端根据 scoreItems 的 evidenceStrength 和 riskLevel 确定性汇总。",
+    }),
+  );
 
-  if (categoryScores.length !== Object.keys(expectedCategoryMaxScores).length) {
-    throw new Error(
-      `categoryScores 数量应为 ${Object.keys(expectedCategoryMaxScores).length}，当前为 ${categoryScores.length}。`,
+  const scoreWarnings = Array.isArray(scoreJson.scoreWarnings)
+    ? assertStringArray(scoreJson.scoreWarnings, "scoreWarnings")
+    : [];
+
+  if (normalizedMissingEvidenceTextCriteria.length > 0) {
+    scoreWarnings.push(
+      `normalizedMissingEvidenceText: ${JSON.stringify(
+        normalizedMissingEvidenceTextCriteria,
+      )}`,
     );
   }
 
   return {
-    totalScore,
+    totalScore: scoreItemsTotal,
     categoryScores,
     scoreItems,
-    overallComment: assertString(scoreJson.overallComment, "overallComment"),
-    scoreWarnings: assertStringArray(scoreJson.scoreWarnings, "scoreWarnings"),
+    overallComment:
+      typeof scoreJson.overallComment === "string"
+        ? scoreJson.overallComment
+        : "材料评分由证据强度和风险等级确定性映射生成。",
+    scoreWarnings,
+    normalizedEvidenceItems: normalizedMissingEvidenceTextCriteria,
   };
 }

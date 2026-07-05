@@ -51,6 +51,7 @@ next-env.d.ts
 
 # xfyun debug
 tmp/xfyun-debug/
+tmp/scoring-v2-stability/
 !/uploads/projects/.gitkeep
 
 # raw knowledge data
