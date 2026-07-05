@@ -47,6 +47,7 @@ type ReportAnalysisState = Readonly<{
   diagnostics: ReportAnalysisSummaryResult["diagnostics"];
   actionItems: ReportAnalysisSummaryResult["actionItems"];
   nextTrainingTasks: ReportAnalysisSummaryResult["nextTrainingTasks"];
+  validityMessage: string | null;
   copySummaryMessage: string;
   isAnalysisLoading: boolean;
   analysisMessage: string;
@@ -138,6 +139,7 @@ export function ReportTabContent({
           diagnostics={analysisState.diagnostics}
           actionItems={analysisState.actionItems}
           nextTrainingTasks={analysisState.nextTrainingTasks}
+          validityMessage={analysisState.validityMessage}
           copySummaryMessage={analysisState.copySummaryMessage}
           isAborted={sessionState.isAborted}
           isAnalysisLoading={analysisState.isAnalysisLoading}
@@ -155,6 +157,7 @@ export function ReportTabContent({
         <ReportPitchTab
           analysis={analysisState.analysis}
           transcript={pitchTranscriptState.transcript}
+          validityMessage={analysisState.validityMessage}
           strengths={analysisState.strengths}
           weaknesses={analysisState.weaknesses}
           suggestions={analysisState.suggestions}

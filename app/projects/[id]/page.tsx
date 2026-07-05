@@ -239,7 +239,7 @@ export default async function ProjectDetailPage({
       <section className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-1 border-b border-slate-100 pb-4">
           <h2 className="text-base font-semibold text-slate-950">
-            训练进步趋势
+            训练表现趋势
           </h2>
           <p className="text-sm text-slate-600">
             基于最近 5 次已完成的路演分析，快速判断训练是否在进步。
@@ -249,7 +249,9 @@ export default async function ProjectDetailPage({
         {latestAnalysis ? (
           <div className="mt-5 grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5">
-              <p className="text-sm font-medium text-slate-500">最近一次评分</p>
+              <p className="text-sm font-medium text-slate-500">
+                最近一次表现分
+              </p>
               <div className="mt-3 flex items-end gap-3">
                 <span className="text-4xl font-semibold text-slate-950">
                   {latestAnalysis.score}
@@ -275,7 +277,7 @@ export default async function ProjectDetailPage({
             <div className="rounded-xl border border-slate-200 p-5">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-medium text-slate-700">
-                  最近得分走势
+                  表现分走势
                 </p>
               </div>
               <div className="mt-5 flex h-32 items-end gap-3">

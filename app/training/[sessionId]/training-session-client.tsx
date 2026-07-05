@@ -1431,7 +1431,7 @@ export function TrainingSessionClient({
                 }
               >
                 <div className="flex items-center justify-between gap-3">
-                  <span className={mutedTextClassName}>总体评分</span>
+                  <span className={mutedTextClassName}>路演表现分</span>
                   <strong
                     className={
                       isBigScreenMode

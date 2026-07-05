@@ -39,6 +39,7 @@ type ReportOverviewTabProps = Readonly<{
   diagnostics: Diagnostics;
   actionItems: ActionItem[];
   nextTrainingTasks: string[];
+  validityMessage: string | null;
   copySummaryMessage: string;
   isAborted: boolean;
   isAnalysisLoading: boolean;
@@ -55,6 +56,7 @@ export function ReportOverviewTab({
   diagnostics,
   actionItems,
   nextTrainingTasks,
+  validityMessage,
   copySummaryMessage,
   isAborted,
   isAnalysisLoading,
@@ -70,6 +72,7 @@ export function ReportOverviewTab({
         <ReportOverviewSummary
           analysis={analysis}
           onePageSummary={onePageSummary}
+          validityMessage={validityMessage}
           copySummaryMessage={copySummaryMessage}
           onCopyOnePageSummary={onCopyOnePageSummary}
         />

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import type { TrainingValidity } from "./report-validity";
 
 type ReportAnalysisSummary = {
   overallScore: number | null;
@@ -37,10 +38,12 @@ type ReportAnalysisSummary = {
 
 type UseReportAnalysisSummaryOptions = Readonly<{
   analysis: ReportAnalysisSummary | null;
+  trainingValidity: TrainingValidity;
 }>;
 
 export function useReportAnalysisSummary({
   analysis,
+  trainingValidity,
 }: UseReportAnalysisSummaryOptions) {
   const [copySummaryMessage, setCopySummaryMessage] = useState("");
 
@@ -111,7 +114,9 @@ export function useReportAnalysisSummary({
     return [
       "训练报告摘要",
       "",
-      `综合评分：${score}`,
+      `本次训练表现分：${score}`,
+      "说明：该分数仅基于本次模拟路演与答辩表现生成，不代表项目正式评审结果。",
+      ...(trainingValidity.message ? [trainingValidity.message] : []),
       "",
       "本次训练结论：",
       onePageSummary.conclusion || analysis?.summary || "暂无结论",
@@ -131,7 +136,7 @@ export function useReportAnalysisSummary({
       "下一轮训练任务：",
       taskLines,
     ].join("\n");
-  }, [analysis, nextTrainingTasks, onePageSummary]);
+  }, [analysis, nextTrainingTasks, onePageSummary, trainingValidity.message]);
 
   const copyOnePageSummary = useCallback(async () => {
     try {

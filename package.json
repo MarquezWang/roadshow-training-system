@@ -18,6 +18,7 @@
     "test:scoring-v2": "node --test tests/scoring-v2/scoring-v2.test.mjs",
     "test:prod-guard": "node --test tests/config/production-auth-guard.test.mjs",
     "check:prod": "node scripts/check-prod-config.mjs",
+    "import:review-rule": "node scripts/import-review-rule.mjs",
     "scoring-v2:measure": "node scripts/measure-scoring-stability.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

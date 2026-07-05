@@ -21,6 +21,7 @@ type PitchAnalysis = {
 type ReportPitchTabProps = Readonly<{
   analysis: PitchAnalysis | null;
   transcript: PitchTranscript | null;
+  validityMessage: string | null;
   strengths: string[];
   weaknesses: string[];
   suggestions: string[];
@@ -44,6 +45,7 @@ type ReportPitchTabProps = Readonly<{
 export function ReportPitchTab({
   analysis,
   transcript,
+  validityMessage,
   strengths,
   weaknesses,
   suggestions,
@@ -98,10 +100,23 @@ export function ReportPitchTab({
         ) : (
           <div className="mt-4 grid gap-4">
             <div className="flex items-baseline gap-2">
+              <span className="text-xs font-medium text-slate-500">
+                本轮表现分
+              </span>
               <span className="text-3xl font-bold text-slate-900">
                 {analysis.overallScore ?? "-"}
               </span>
               <span className="text-sm text-slate-400">/ 100</span>
+            </div>
+            <div className="grid gap-3">
+              <p className="rounded-md border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                该分数仅基于本次模拟路演与答辩表现生成，不代表项目正式评审结果。
+              </p>
+              {validityMessage ? (
+                <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                  {validityMessage}
+                </p>
+              ) : null}
             </div>
 
             {analysis.summary ? (
