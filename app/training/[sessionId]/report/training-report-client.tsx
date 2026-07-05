@@ -1,14 +1,7 @@
 "use client";
 
 import { ReportTabNavigation } from "./report-ui";
-import {
-  ReportAbortOverviewTab,
-  ReportAbortPitchTab,
-  ReportAbortQaTab,
-} from "./report-abort";
-import { ReportOverviewTab } from "./report-overview";
-import { ReportPitchTab } from "./report-pitch";
-import { ReportQaTab } from "./report-qa";
+import { ReportTabContent } from "./report-tab-content";
 import { useReportAnalysisGeneration } from "./use-report-analysis-generation";
 import { useReportAnalysisSummary } from "./use-report-analysis-summary";
 import { useReportQaTranscripts } from "./use-report-qa-transcripts";
@@ -19,7 +12,6 @@ import {
   type TrainingQaQuestion,
   type TrainingRecording,
 } from "./report-types";
-import { getReportQaTabData } from "./report-qa-tab-data";
 
 type TrainingReportClientProps = Readonly<{
   sessionId: string;
@@ -105,7 +97,6 @@ export function TrainingReportClient({
     copySummaryMessage,
     copyOnePageSummary,
   } = useReportAnalysisSummary({ analysis });
-  const qaTabData = getReportQaTabData(qaQuestions, analysis);
 
   return (
     <div className="grid gap-5">
@@ -118,108 +109,55 @@ export function TrainingReportClient({
       />
 
       {/* === Tab 内容区 === */}
-      <div ref={contentRef} className="scroll-mt-14">
-        {/* === 中止态：中止概览 Tab === */}
-        {activeTab === "abort-overview" && (
-          <ReportAbortOverviewTab
-            recording={recording}
-            qaQuestions={qaQuestions}
-          />
-        )}
-
-        {/* === 中止态：路演记录 Tab === */}
-        {activeTab === "abort-pitch" && (
-          <ReportAbortPitchTab
-            recording={recording}
-            transcriptExpanded={transcriptExpanded}
-            onToggleTranscriptExpanded={() => toggleTranscriptExpanded()}
-          />
-        )}
-
-        {/* === 中止态：答辩记录 Tab === */}
-        {activeTab === "abort-qa" && (
-          <ReportAbortQaTab
-            qaQuestions={qaQuestions}
-            expandedTranscripts={expandedTranscripts}
-            qaTranscribingSet={qaTranscribingSet}
-            onToggleTranscriptExpand={toggleTranscriptExpand}
-            onRetryQaTranscribe={(recordingId) => {
-              void retryQaTranscribe(recordingId);
-            }}
-          />
-        )}
-
-        {/* === 总览 Tab === */}
-        {activeTab === "overview" && (
-          <ReportOverviewTab
-            analysis={analysis}
-            onePageSummary={onePageSummary}
-            diagnostics={diagnostics}
-            actionItems={actionItems}
-            nextTrainingTasks={nextTrainingTasks}
-            copySummaryMessage={copySummaryMessage}
-            isAborted={isAborted}
-            isAnalysisLoading={isAnalysisLoading}
-            analysisMessage={analysisMessage}
-            reportGenerationElapsedMs={reportGenerationElapsedMs}
-            canRetryAnalysisGeneration={canRetryAnalysisGeneration}
-            onCopyOnePageSummary={() => {
-              void copyOnePageSummary();
-            }}
-            onRetryAnalysisGeneration={retryAnalysisGeneration}
-          />
-        )}
-
-        {/* === 路演表现 Tab === */}
-        {activeTab === "pitch" && (
-          <ReportPitchTab
-            analysis={analysis}
-            transcript={transcript}
-            strengths={strengths}
-            weaknesses={weaknesses}
-            suggestions={suggestions}
-            contentCoverage={contentCoverage}
-            showAllCoverage={showAllCoverage}
-            isAborted={isAborted}
-            recording={recording}
-            isTranscriptEditing={isTranscriptEditing}
-            isTranscriptSaving={isTranscriptSaving}
-            transcriptDraft={transcriptDraft}
-            transcriptExpanded={transcriptExpanded}
-            transcriptMessage={transcriptMessage}
-            onToggleShowAllCoverage={toggleShowAllCoverage}
-            onStartTranscriptEditing={startTranscriptEditing}
-            onToggleTranscriptExpanded={toggleTranscriptExpanded}
-            onTranscriptDraftChange={setTranscriptDraft}
-            onCancelTranscriptEditing={cancelTranscriptEditing}
-            onSaveTranscript={() => void saveTranscript()}
-          />
-        )}
-
-        {/* === 答辩表现 Tab === */}
-        {activeTab === "qa" && (
-          <ReportQaTab
-            enteredQuestions={qaTabData.enteredQuestions}
-            dynamicFollowupQuestion={qaTabData.dynamicFollowupQuestion}
-            dynamicFollowupReview={qaTabData.dynamicFollowupReview}
-            enteredQaReviews={qaTabData.enteredQaReviews}
-            skippedCount={qaTabData.skippedCount}
-            suggestions={suggestions}
-            qaTranscripts={qaTranscripts}
-            qaTranscribingSet={qaTranscribingSet}
-            expandedTranscripts={expandedTranscripts}
-            isAborted={isAborted}
-            isQaCompleted={isQaCompleted}
-            qaStartedAt={qaStartedAt}
-            qaEndedAt={qaEndedAt}
-            qaDurationSec={qaDurationSec}
-            onToggleTranscriptExpand={toggleTranscriptExpand}
-            onRetryQaTranscribe={(recordingId) => {
-              void retryQaTranscribe(recordingId);
-            }}
-          />
-        )}
-      </div>
+      <ReportTabContent
+        activeTab={activeTab}
+        contentRef={contentRef}
+        isAborted={isAborted}
+        isQaCompleted={isQaCompleted}
+        qaStartedAt={qaStartedAt}
+        qaEndedAt={qaEndedAt}
+        qaDurationSec={qaDurationSec}
+        qaQuestions={qaQuestions}
+        recording={recording}
+        analysis={analysis}
+        strengths={strengths}
+        weaknesses={weaknesses}
+        suggestions={suggestions}
+        contentCoverage={contentCoverage}
+        onePageSummary={onePageSummary}
+        diagnostics={diagnostics}
+        actionItems={actionItems}
+        nextTrainingTasks={nextTrainingTasks}
+        copySummaryMessage={copySummaryMessage}
+        isAnalysisLoading={isAnalysisLoading}
+        analysisMessage={analysisMessage}
+        reportGenerationElapsedMs={reportGenerationElapsedMs}
+        canRetryAnalysisGeneration={canRetryAnalysisGeneration}
+        transcript={transcript}
+        transcriptDraft={transcriptDraft}
+        isTranscriptEditing={isTranscriptEditing}
+        isTranscriptSaving={isTranscriptSaving}
+        transcriptMessage={transcriptMessage}
+        transcriptExpanded={transcriptExpanded}
+        showAllCoverage={showAllCoverage}
+        qaTranscripts={qaTranscripts}
+        qaTranscribingSet={qaTranscribingSet}
+        expandedTranscripts={expandedTranscripts}
+        onCopyOnePageSummary={() => {
+          void copyOnePageSummary();
+        }}
+        onRetryAnalysisGeneration={retryAnalysisGeneration}
+        onToggleShowAllCoverage={toggleShowAllCoverage}
+        onStartTranscriptEditing={startTranscriptEditing}
+        onToggleTranscriptExpanded={toggleTranscriptExpanded}
+        onTranscriptDraftChange={setTranscriptDraft}
+        onCancelTranscriptEditing={cancelTranscriptEditing}
+        onSaveTranscript={() => void saveTranscript()}
+        onToggleTranscriptExpand={toggleTranscriptExpand}
+        onRetryQaTranscribe={(recordingId) => {
+          void retryQaTranscribe(recordingId);
+        }}
+      />
     </div>
   );
 }

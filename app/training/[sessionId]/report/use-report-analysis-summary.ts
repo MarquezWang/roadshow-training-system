@@ -156,3 +156,7 @@ export function useReportAnalysisSummary({
     copyOnePageSummary,
   };
 }
+
+export type ReportAnalysisSummaryResult = ReturnType<
+  typeof useReportAnalysisSummary
+>;
