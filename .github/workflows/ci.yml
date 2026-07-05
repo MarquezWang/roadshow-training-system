@@ -38,6 +38,9 @@ jobs:
       - name: Auth boundary tests
         run: npm run test:auth
 
+      - name: Production auth guard tests
+        run: npm run test:prod-guard
+
       - name: Stability tests
         env:
           AUTH_ENABLED: "false"
