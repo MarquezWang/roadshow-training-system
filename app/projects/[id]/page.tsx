@@ -5,8 +5,10 @@ import {
   getCurrentAuthUser,
   withOwnerFilter,
 } from "@/lib/auth-server";
+import { parseStoredMaterialDiagnosis } from "@/lib/material-diagnosis";
 import { prisma } from "@/lib/prisma";
 import { trainingStatusLabel } from "@/lib/training-status";
+import { MaterialDiagnosisPanel } from "./material-diagnosis-panel";
 
 type ProjectDetailPageProps = Readonly<{
   params: Promise<{
@@ -72,6 +74,20 @@ function parseJsonArray(value: string) {
       : [];
   } catch {
     return [];
+  }
+}
+
+function parseLatestMaterialDiagnosis(
+  diagnosis: Parameters<typeof parseStoredMaterialDiagnosis>[0] | null,
+) {
+  if (!diagnosis) {
+    return null;
+  }
+
+  try {
+    return parseStoredMaterialDiagnosis(diagnosis);
+  } catch {
+    return null;
   }
 }
 
@@ -143,6 +159,22 @@ export default async function ProjectDetailPage({
           },
         },
       },
+      materialDiagnoses: {
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: 1,
+        select: {
+          summary: true,
+          readinessLevel: true,
+          readinessScore: true,
+          strengths: true,
+          weaknesses: true,
+          priorityTasks: true,
+          judgeQuestions: true,
+          criteriaResults: true,
+        },
+      },
     },
   });
 
@@ -179,6 +211,9 @@ export default async function ProjectDetailPage({
   const abortedTrainingCount = project.trainingSessions.filter(
     (session) => session.status === "ABORTED",
   ).length;
+  const latestMaterialDiagnosis = parseLatestMaterialDiagnosis(
+    project.materialDiagnoses[0] ?? null,
+  );
   const sessionsWithDuration = project.trainingSessions.filter(
     (session) => session.pitchDurationSec !== null,
   );
@@ -235,6 +270,11 @@ export default async function ProjectDetailPage({
           </form>
         </div>
       </section>
+
+      <MaterialDiagnosisPanel
+        projectId={project.id}
+        initialDiagnosis={latestMaterialDiagnosis}
+      />
 
       <section className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-1 border-b border-slate-100 pb-4">

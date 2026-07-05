@@ -39,6 +39,7 @@ model Project {
   contactPhone            String               @default("")
   fileAssets              FileAsset[]
   diagnoses               Diagnosis[]
+  materialDiagnoses       MaterialDiagnosis[]
   scoreResults            ScoreResult[]
   questions               Question[]
   reports                 Report[]
@@ -256,6 +257,27 @@ model Diagnosis {
   updatedAt    DateTime @updatedAt
 
   @@index([projectId])
+}
+
+model MaterialDiagnosis {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ruleName        String
+  totalWeight     Int
+  readinessLevel  String
+  readinessScore  Int?
+  summary         String
+  strengths       String
+  weaknesses      String
+  priorityTasks   String
+  judgeQuestions  String
+  criteriaResults String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([createdAt])
 }
 
 model ScoreResult {
