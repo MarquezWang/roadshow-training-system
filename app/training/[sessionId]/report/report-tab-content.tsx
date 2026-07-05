@@ -21,9 +21,13 @@ import {
 } from "./report-types";
 import type { ReportTabKey } from "./report-ui";
 
-type ReportTabContentProps = Readonly<{
+type ReportTabState = Readonly<{
   activeTab: ReportTabKey;
-  contentRef: RefObject<HTMLDivElement | null>;
+  showAllCoverage: boolean;
+  onToggleShowAllCoverage: () => void;
+}>;
+
+type ReportSessionState = Readonly<{
   isAborted: boolean;
   isQaCompleted: boolean;
   qaStartedAt: string | null;
@@ -31,6 +35,9 @@ type ReportTabContentProps = Readonly<{
   qaDurationSec: number | null;
   qaQuestions: TrainingQaQuestion[];
   recording: TrainingRecording | null;
+}>;
+
+type ReportAnalysisState = Readonly<{
   analysis: TrainingAnalysis | null;
   strengths: string[];
   weaknesses: string[];
@@ -45,163 +52,157 @@ type ReportTabContentProps = Readonly<{
   analysisMessage: string;
   reportGenerationElapsedMs: number;
   canRetryAnalysisGeneration: boolean;
+  onCopyOnePageSummary: () => void;
+  onRetryAnalysisGeneration: () => void;
+}>;
+
+type ReportPitchTranscriptState = Readonly<{
   transcript: ReportPitchTranscript | null;
   transcriptDraft: string;
   isTranscriptEditing: boolean;
   isTranscriptSaving: boolean;
   transcriptMessage: string;
   transcriptExpanded: boolean;
-  showAllCoverage: boolean;
-  qaTranscripts: Record<string, QaTranscript | null | undefined>;
-  qaTranscribingSet: Set<string>;
-  expandedTranscripts: Set<string>;
-  onCopyOnePageSummary: () => void;
-  onRetryAnalysisGeneration: () => void;
-  onToggleShowAllCoverage: () => void;
   onStartTranscriptEditing: () => void;
   onToggleTranscriptExpanded: () => void;
   onTranscriptDraftChange: (value: string) => void;
   onCancelTranscriptEditing: () => void;
   onSaveTranscript: () => void;
+}>;
+
+type ReportQaTranscriptState = Readonly<{
+  qaTranscripts: Record<string, QaTranscript | null | undefined>;
+  qaTranscribingSet: Set<string>;
+  expandedTranscripts: Set<string>;
   onToggleTranscriptExpand: (questionId: string) => void;
   onRetryQaTranscribe: (recordingId: string) => void;
 }>;
 
+type ReportTabContentProps = Readonly<{
+  contentRef: RefObject<HTMLDivElement | null>;
+  tabState: ReportTabState;
+  sessionState: ReportSessionState;
+  analysisState: ReportAnalysisState;
+  pitchTranscriptState: ReportPitchTranscriptState;
+  qaTranscriptState: ReportQaTranscriptState;
+}>;
+
 export function ReportTabContent({
-  activeTab,
   contentRef,
-  isAborted,
-  isQaCompleted,
-  qaStartedAt,
-  qaEndedAt,
-  qaDurationSec,
-  qaQuestions,
-  recording,
-  analysis,
-  strengths,
-  weaknesses,
-  suggestions,
-  contentCoverage,
-  onePageSummary,
-  diagnostics,
-  actionItems,
-  nextTrainingTasks,
-  copySummaryMessage,
-  isAnalysisLoading,
-  analysisMessage,
-  reportGenerationElapsedMs,
-  canRetryAnalysisGeneration,
-  transcript,
-  transcriptDraft,
-  isTranscriptEditing,
-  isTranscriptSaving,
-  transcriptMessage,
-  transcriptExpanded,
-  showAllCoverage,
-  qaTranscripts,
-  qaTranscribingSet,
-  expandedTranscripts,
-  onCopyOnePageSummary,
-  onRetryAnalysisGeneration,
-  onToggleShowAllCoverage,
-  onStartTranscriptEditing,
-  onToggleTranscriptExpanded,
-  onTranscriptDraftChange,
-  onCancelTranscriptEditing,
-  onSaveTranscript,
-  onToggleTranscriptExpand,
-  onRetryQaTranscribe,
+  tabState,
+  sessionState,
+  analysisState,
+  pitchTranscriptState,
+  qaTranscriptState,
 }: ReportTabContentProps) {
-  const qaTabData = getReportQaTabData(qaQuestions, analysis);
+  const qaTabData = getReportQaTabData(
+    sessionState.qaQuestions,
+    analysisState.analysis,
+  );
 
   return (
     <div ref={contentRef} className="scroll-mt-14">
-      {activeTab === "abort-overview" && (
-        <ReportAbortOverviewTab recording={recording} qaQuestions={qaQuestions} />
-      )}
-
-      {activeTab === "abort-pitch" && (
-        <ReportAbortPitchTab
-          recording={recording}
-          transcriptExpanded={transcriptExpanded}
-          onToggleTranscriptExpanded={() => onToggleTranscriptExpanded()}
+      {tabState.activeTab === "abort-overview" && (
+        <ReportAbortOverviewTab
+          recording={sessionState.recording}
+          qaQuestions={sessionState.qaQuestions}
         />
       )}
 
-      {activeTab === "abort-qa" && (
+      {tabState.activeTab === "abort-pitch" && (
+        <ReportAbortPitchTab
+          recording={sessionState.recording}
+          transcriptExpanded={pitchTranscriptState.transcriptExpanded}
+          onToggleTranscriptExpanded={() =>
+            pitchTranscriptState.onToggleTranscriptExpanded()
+          }
+        />
+      )}
+
+      {tabState.activeTab === "abort-qa" && (
         <ReportAbortQaTab
-          qaQuestions={qaQuestions}
-          expandedTranscripts={expandedTranscripts}
-          qaTranscribingSet={qaTranscribingSet}
-          onToggleTranscriptExpand={onToggleTranscriptExpand}
+          qaQuestions={sessionState.qaQuestions}
+          expandedTranscripts={qaTranscriptState.expandedTranscripts}
+          qaTranscribingSet={qaTranscriptState.qaTranscribingSet}
+          onToggleTranscriptExpand={qaTranscriptState.onToggleTranscriptExpand}
           onRetryQaTranscribe={(recordingId) => {
-            onRetryQaTranscribe(recordingId);
+            qaTranscriptState.onRetryQaTranscribe(recordingId);
           }}
         />
       )}
 
-      {activeTab === "overview" && (
+      {tabState.activeTab === "overview" && (
         <ReportOverviewTab
-          analysis={analysis}
-          onePageSummary={onePageSummary}
-          diagnostics={diagnostics}
-          actionItems={actionItems}
-          nextTrainingTasks={nextTrainingTasks}
-          copySummaryMessage={copySummaryMessage}
-          isAborted={isAborted}
-          isAnalysisLoading={isAnalysisLoading}
-          analysisMessage={analysisMessage}
-          reportGenerationElapsedMs={reportGenerationElapsedMs}
-          canRetryAnalysisGeneration={canRetryAnalysisGeneration}
-          onCopyOnePageSummary={onCopyOnePageSummary}
-          onRetryAnalysisGeneration={onRetryAnalysisGeneration}
+          analysis={analysisState.analysis}
+          onePageSummary={analysisState.onePageSummary}
+          diagnostics={analysisState.diagnostics}
+          actionItems={analysisState.actionItems}
+          nextTrainingTasks={analysisState.nextTrainingTasks}
+          copySummaryMessage={analysisState.copySummaryMessage}
+          isAborted={sessionState.isAborted}
+          isAnalysisLoading={analysisState.isAnalysisLoading}
+          analysisMessage={analysisState.analysisMessage}
+          reportGenerationElapsedMs={analysisState.reportGenerationElapsedMs}
+          canRetryAnalysisGeneration={
+            analysisState.canRetryAnalysisGeneration
+          }
+          onCopyOnePageSummary={analysisState.onCopyOnePageSummary}
+          onRetryAnalysisGeneration={analysisState.onRetryAnalysisGeneration}
         />
       )}
 
-      {activeTab === "pitch" && (
+      {tabState.activeTab === "pitch" && (
         <ReportPitchTab
-          analysis={analysis}
-          transcript={transcript}
-          strengths={strengths}
-          weaknesses={weaknesses}
-          suggestions={suggestions}
-          contentCoverage={contentCoverage}
-          showAllCoverage={showAllCoverage}
-          isAborted={isAborted}
-          recording={recording}
-          isTranscriptEditing={isTranscriptEditing}
-          isTranscriptSaving={isTranscriptSaving}
-          transcriptDraft={transcriptDraft}
-          transcriptExpanded={transcriptExpanded}
-          transcriptMessage={transcriptMessage}
-          onToggleShowAllCoverage={onToggleShowAllCoverage}
-          onStartTranscriptEditing={onStartTranscriptEditing}
-          onToggleTranscriptExpanded={onToggleTranscriptExpanded}
-          onTranscriptDraftChange={onTranscriptDraftChange}
-          onCancelTranscriptEditing={onCancelTranscriptEditing}
-          onSaveTranscript={onSaveTranscript}
+          analysis={analysisState.analysis}
+          transcript={pitchTranscriptState.transcript}
+          strengths={analysisState.strengths}
+          weaknesses={analysisState.weaknesses}
+          suggestions={analysisState.suggestions}
+          contentCoverage={analysisState.contentCoverage}
+          showAllCoverage={tabState.showAllCoverage}
+          isAborted={sessionState.isAborted}
+          recording={sessionState.recording}
+          isTranscriptEditing={pitchTranscriptState.isTranscriptEditing}
+          isTranscriptSaving={pitchTranscriptState.isTranscriptSaving}
+          transcriptDraft={pitchTranscriptState.transcriptDraft}
+          transcriptExpanded={pitchTranscriptState.transcriptExpanded}
+          transcriptMessage={pitchTranscriptState.transcriptMessage}
+          onToggleShowAllCoverage={tabState.onToggleShowAllCoverage}
+          onStartTranscriptEditing={
+            pitchTranscriptState.onStartTranscriptEditing
+          }
+          onToggleTranscriptExpanded={
+            pitchTranscriptState.onToggleTranscriptExpanded
+          }
+          onTranscriptDraftChange={
+            pitchTranscriptState.onTranscriptDraftChange
+          }
+          onCancelTranscriptEditing={
+            pitchTranscriptState.onCancelTranscriptEditing
+          }
+          onSaveTranscript={pitchTranscriptState.onSaveTranscript}
         />
       )}
 
-      {activeTab === "qa" && (
+      {tabState.activeTab === "qa" && (
         <ReportQaTab
           enteredQuestions={qaTabData.enteredQuestions}
           dynamicFollowupQuestion={qaTabData.dynamicFollowupQuestion}
           dynamicFollowupReview={qaTabData.dynamicFollowupReview}
           enteredQaReviews={qaTabData.enteredQaReviews}
           skippedCount={qaTabData.skippedCount}
-          suggestions={suggestions}
-          qaTranscripts={qaTranscripts}
-          qaTranscribingSet={qaTranscribingSet}
-          expandedTranscripts={expandedTranscripts}
-          isAborted={isAborted}
-          isQaCompleted={isQaCompleted}
-          qaStartedAt={qaStartedAt}
-          qaEndedAt={qaEndedAt}
-          qaDurationSec={qaDurationSec}
-          onToggleTranscriptExpand={onToggleTranscriptExpand}
+          suggestions={analysisState.suggestions}
+          qaTranscripts={qaTranscriptState.qaTranscripts}
+          qaTranscribingSet={qaTranscriptState.qaTranscribingSet}
+          expandedTranscripts={qaTranscriptState.expandedTranscripts}
+          isAborted={sessionState.isAborted}
+          isQaCompleted={sessionState.isQaCompleted}
+          qaStartedAt={sessionState.qaStartedAt}
+          qaEndedAt={sessionState.qaEndedAt}
+          qaDurationSec={sessionState.qaDurationSec}
+          onToggleTranscriptExpand={qaTranscriptState.onToggleTranscriptExpand}
           onRetryQaTranscribe={(recordingId) => {
-            onRetryQaTranscribe(recordingId);
+            qaTranscriptState.onRetryQaTranscribe(recordingId);
           }}
         />
       )}

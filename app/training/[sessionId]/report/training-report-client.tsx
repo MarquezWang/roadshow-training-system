@@ -110,52 +110,62 @@ export function TrainingReportClient({
 
       {/* === Tab 内容区 === */}
       <ReportTabContent
-        activeTab={activeTab}
         contentRef={contentRef}
-        isAborted={isAborted}
-        isQaCompleted={isQaCompleted}
-        qaStartedAt={qaStartedAt}
-        qaEndedAt={qaEndedAt}
-        qaDurationSec={qaDurationSec}
-        qaQuestions={qaQuestions}
-        recording={recording}
-        analysis={analysis}
-        strengths={strengths}
-        weaknesses={weaknesses}
-        suggestions={suggestions}
-        contentCoverage={contentCoverage}
-        onePageSummary={onePageSummary}
-        diagnostics={diagnostics}
-        actionItems={actionItems}
-        nextTrainingTasks={nextTrainingTasks}
-        copySummaryMessage={copySummaryMessage}
-        isAnalysisLoading={isAnalysisLoading}
-        analysisMessage={analysisMessage}
-        reportGenerationElapsedMs={reportGenerationElapsedMs}
-        canRetryAnalysisGeneration={canRetryAnalysisGeneration}
-        transcript={transcript}
-        transcriptDraft={transcriptDraft}
-        isTranscriptEditing={isTranscriptEditing}
-        isTranscriptSaving={isTranscriptSaving}
-        transcriptMessage={transcriptMessage}
-        transcriptExpanded={transcriptExpanded}
-        showAllCoverage={showAllCoverage}
-        qaTranscripts={qaTranscripts}
-        qaTranscribingSet={qaTranscribingSet}
-        expandedTranscripts={expandedTranscripts}
-        onCopyOnePageSummary={() => {
-          void copyOnePageSummary();
+        tabState={{
+          activeTab,
+          showAllCoverage,
+          onToggleShowAllCoverage: toggleShowAllCoverage,
         }}
-        onRetryAnalysisGeneration={retryAnalysisGeneration}
-        onToggleShowAllCoverage={toggleShowAllCoverage}
-        onStartTranscriptEditing={startTranscriptEditing}
-        onToggleTranscriptExpanded={toggleTranscriptExpanded}
-        onTranscriptDraftChange={setTranscriptDraft}
-        onCancelTranscriptEditing={cancelTranscriptEditing}
-        onSaveTranscript={() => void saveTranscript()}
-        onToggleTranscriptExpand={toggleTranscriptExpand}
-        onRetryQaTranscribe={(recordingId) => {
-          void retryQaTranscribe(recordingId);
+        sessionState={{
+          isAborted,
+          isQaCompleted,
+          qaStartedAt,
+          qaEndedAt,
+          qaDurationSec,
+          qaQuestions,
+          recording,
+        }}
+        analysisState={{
+          analysis,
+          strengths,
+          weaknesses,
+          suggestions,
+          contentCoverage,
+          onePageSummary,
+          diagnostics,
+          actionItems,
+          nextTrainingTasks,
+          copySummaryMessage,
+          isAnalysisLoading,
+          analysisMessage,
+          reportGenerationElapsedMs,
+          canRetryAnalysisGeneration,
+          onCopyOnePageSummary: () => {
+            void copyOnePageSummary();
+          },
+          onRetryAnalysisGeneration: retryAnalysisGeneration,
+        }}
+        pitchTranscriptState={{
+          transcript,
+          transcriptDraft,
+          isTranscriptEditing,
+          isTranscriptSaving,
+          transcriptMessage,
+          transcriptExpanded,
+          onStartTranscriptEditing: startTranscriptEditing,
+          onToggleTranscriptExpanded: toggleTranscriptExpanded,
+          onTranscriptDraftChange: setTranscriptDraft,
+          onCancelTranscriptEditing: cancelTranscriptEditing,
+          onSaveTranscript: () => void saveTranscript(),
+        }}
+        qaTranscriptState={{
+          qaTranscripts,
+          qaTranscribingSet,
+          expandedTranscripts,
+          onToggleTranscriptExpand: toggleTranscriptExpand,
+          onRetryQaTranscribe: (recordingId) => {
+            void retryQaTranscribe(recordingId);
+          },
         }}
       />
     </div>
