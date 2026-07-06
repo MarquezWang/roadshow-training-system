@@ -151,6 +151,23 @@ function hasUnsupportedTranscriptClaim(text: string, transcriptText: string) {
   );
 }
 
+const unsupportedExampleLeakMarkers = [
+  "供电所",
+  "线路",
+  "运维人员",
+  "故障点",
+  "天气条件",
+  "识别准确率",
+  "两个县区",
+  "县区",
+] as const;
+
+function hasUnsupportedExampleLeak(text: string, transcriptText: string) {
+  return unsupportedExampleLeakMarkers.some(
+    (marker) => text.includes(marker) && !transcriptText.includes(marker),
+  );
+}
+
 export function validateMainFollowupText({
   text,
   transcriptText,
@@ -162,6 +179,9 @@ export function validateMainFollowupText({
   if (countQuestionMarks(text) > 1) return "main_output_multiple_questions";
   if (hasUnsupportedTranscriptClaim(text, transcriptText)) {
     return "main_output_unsupported_transcript_claim";
+  }
+  if (hasUnsupportedExampleLeak(text, transcriptText)) {
+    return "main_output_unsupported_example_leak";
   }
   if (duplicatesRegularQuestion(text, regularQuestions)) {
     return "main_output_duplicate_regular_question";
@@ -182,6 +202,9 @@ export function validateFallbackFollowupText({
   }
   if (hasUnsupportedTranscriptClaim(text, transcriptText)) {
     return "fallback_output_unsupported_transcript_claim";
+  }
+  if (hasUnsupportedExampleLeak(text, transcriptText)) {
+    return "fallback_output_unsupported_example_leak";
   }
   if (duplicatesRegularQuestion(text, regularQuestions)) {
     return "fallback_output_duplicate_regular_question";
