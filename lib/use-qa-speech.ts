@@ -31,6 +31,7 @@ export const speechUnavailableMessage =
   "题目语音播报暂不可用，已切换为文字提问。你的回答录音不受影响。";
 
 const recoverableSpeechErrorCodes = new Set(["canceled", "interrupted"]);
+const tencentQuestionAudioPlaybackRate = 1.1;
 
 function estimateQuestionSpeechMs(text: string) {
   const chineseCharCount = Array.from(text.trim()).length;
@@ -167,6 +168,24 @@ export function useQaSpeech({
   const speechRunIdRef = useRef(0);
   const preferredJudgeVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const hasMoveOnRef = useRef(false);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const activeAudioUrlRef = useRef<string | null>(null);
+
+  const stopTencentAudio = useCallback(() => {
+    const audio = activeAudioRef.current;
+
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      activeAudioRef.current = null;
+    }
+
+    if (activeAudioUrlRef.current) {
+      URL.revokeObjectURL(activeAudioUrlRef.current);
+      activeAudioUrlRef.current = null;
+    }
+  }, []);
 
   const clearSpeechTimer = useCallback(() => {
     if (speechTimeoutRef.current !== null) {
@@ -176,8 +195,9 @@ export function useQaSpeech({
   }, []);
 
   const cancelSpeech = useCallback(() => {
+    stopTencentAudio();
     window.speechSynthesis?.cancel();
-  }, []);
+  }, [stopTencentAudio]);
 
   const prepareJudgeVoice = useCallback(async () => {
     if (
@@ -290,8 +310,87 @@ export function useQaSpeech({
       const isCurrentSpeechRun = () =>
         speechRunIdRef.current === speechRunId && !hasAutoEndedRef.current;
       const speechStartedRef = { current: false };
+      const playTencentQuestionSpeech = async () => {
+        try {
+          const response = await fetch(
+            `/training/${sessionId}/qa/questions/${question.id}/tts`,
+          );
 
-      const speakQuestion = async (retryCount = 0) => {
+          if (!response.ok) {
+            return false;
+          }
+
+          const blob = await response.blob();
+
+          if (!isCurrentSpeechRun()) {
+            return true;
+          }
+
+          stopTencentAudio();
+          const audioUrl = URL.createObjectURL(blob);
+          const audio = new Audio(audioUrl);
+
+          audio.playbackRate = tencentQuestionAudioPlaybackRate;
+          activeAudioRef.current = audio;
+          activeAudioUrlRef.current = audioUrl;
+          audio.onended = () => {
+            if (!isCurrentSpeechRun()) {
+              return;
+            }
+
+            stopTencentAudio();
+            moveOn();
+          };
+          audio.onerror = () => {
+            if (!isCurrentSpeechRun()) {
+              return;
+            }
+
+            stopTencentAudio();
+            devLog("[QA TTS] 腾讯云音频播放失败，回退浏览器语音", {
+              sessionId,
+              questionId: question.id,
+            });
+            void speakBrowserQuestion();
+            scheduleBrowserFallback();
+          };
+          speechTimeoutRef.current = window.setTimeout(() => {
+            if (
+              hasMoveOnRef.current ||
+              speechRunIdRef.current !== speechRunId
+            ) {
+              return;
+            }
+
+            stopTencentAudio();
+            showQuestionTextFallback(
+              question,
+              speechRunId,
+              "tencent_audio_timeout",
+            );
+          }, estimateQuestionSpeechMs(question.questionText) + 8000);
+          await audio.play();
+          devLog("[QA TTS] 腾讯云语音开始播放", {
+            sessionId,
+            questionId: question.id,
+          });
+
+          return true;
+        } catch (error) {
+          if (isCurrentSpeechRun()) {
+            devLog("[QA TTS] 腾讯云语音不可用，回退浏览器语音", {
+              sessionId,
+              questionId: question.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+
+          stopTencentAudio();
+          return false;
+        }
+      };
+
+      const speakBrowserQuestion = async (retryCount = 0) => {
         const utterance = new SpeechSynthesisUtterance(question.questionText);
 
         utterance.lang = "zh-CN";
@@ -324,10 +423,10 @@ export function useQaSpeech({
           if (recoverableSpeechErrorCodes.has(errorCode) && retryCount < 1) {
             window.setTimeout(() => {
               if (!isCurrentSpeechRun()) {
-                return;
-              }
+              return;
+            }
 
-              void speakQuestion(retryCount + 1);
+              void speakBrowserQuestion(retryCount + 1);
             }, 180);
             return;
           }
@@ -385,15 +484,13 @@ export function useQaSpeech({
         }
       };
 
-      void speakQuestion();
-
-      function scheduleFallback() {
+      function scheduleBrowserFallback() {
         speechTimeoutRef.current = window.setTimeout(() => {
           if (hasMoveOnRef.current || speechRunIdRef.current !== speechRunId) {
             return;
           }
           if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-            scheduleFallback();
+            scheduleBrowserFallback();
             return;
           }
           if (!speechStartedRef.current) {
@@ -408,9 +505,33 @@ export function useQaSpeech({
         }, estimateQuestionSpeechMs(question.questionText));
       }
 
-      scheduleFallback();
+      function fallbackToBrowserSpeech() {
+        if (
+          typeof window === "undefined" ||
+          !("speechSynthesis" in window) ||
+          typeof SpeechSynthesisUtterance === "undefined"
+        ) {
+          showQuestionTextFallback(question, speechRunId, "unsupported");
+          return;
+        }
+
+        void speakBrowserQuestion();
+        scheduleBrowserFallback();
+      }
+
+      void playTencentQuestionSpeech().then((played) => {
+        if (!played && isCurrentSpeechRun()) {
+          fallbackToBrowserSpeech();
+        }
+      });
     },
-    [beginPreAnswerCountdown, hasAutoEndedRef, sessionId, showQuestionTextFallback],
+    [
+      beginPreAnswerCountdown,
+      hasAutoEndedRef,
+      sessionId,
+      showQuestionTextFallback,
+      stopTencentAudio,
+    ],
   );
 
   return {
