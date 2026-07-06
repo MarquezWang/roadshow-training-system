@@ -24,13 +24,13 @@ const readinessClass: Record<ReadinessLevel, string> = {
 
 const criterionCardClass: Record<EvidenceStatus, string> = {
   SUFFICIENT:
-    "border-emerald-300 bg-emerald-100 text-emerald-950 hover:border-emerald-400 hover:bg-emerald-200",
+    "border-emerald-200 bg-emerald-50 text-emerald-950 hover:border-emerald-300 hover:bg-emerald-100/80",
   PARTIAL:
-    "border-amber-300 bg-amber-100 text-amber-950 hover:border-amber-400 hover:bg-amber-200",
+    "border-amber-200 bg-amber-50 text-amber-950 hover:border-amber-300 hover:bg-amber-100/80",
   MISSING:
-    "border-rose-300 bg-rose-100 text-rose-950 hover:border-rose-400 hover:bg-rose-200",
+    "border-rose-200 bg-rose-50 text-rose-950 hover:border-rose-300 hover:bg-rose-100/80",
   UNKNOWN:
-    "border-sky-300 bg-sky-100 text-sky-950 hover:border-sky-400 hover:bg-sky-200",
+    "border-sky-200 bg-sky-50 text-sky-950 hover:border-sky-300 hover:bg-sky-100/80",
 };
 
 const criterionDetailClass: Record<EvidenceStatus, string> = {
@@ -41,10 +41,10 @@ const criterionDetailClass: Record<EvidenceStatus, string> = {
 };
 
 const evidencePillClass: Record<EvidenceStatus, string> = {
-  SUFFICIENT: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  PARTIAL: "border-amber-200 bg-amber-50 text-amber-800",
-  MISSING: "border-rose-200 bg-rose-50 text-rose-800",
-  UNKNOWN: "border-slate-200 bg-slate-50 text-slate-700",
+  SUFFICIENT: "border-emerald-700 bg-emerald-700 text-white",
+  PARTIAL: "border-amber-700 bg-amber-700 text-white",
+  MISSING: "border-rose-700 bg-rose-700 text-white",
+  UNKNOWN: "border-sky-700 bg-sky-700 text-white",
 };
 
 async function readErrorMessage(response: Response) {
@@ -181,7 +181,7 @@ export function MaterialDiagnosisPanel({
       ) : (
         <div className="mt-5 space-y-5">
           <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-5">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="text-sm font-medium text-slate-500">
@@ -211,11 +211,11 @@ export function MaterialDiagnosisPanel({
                 ) : null}
               </div>
 
-              <div className="grid shrink-0 grid-cols-3 gap-2 lg:w-80">
-                <MetricTile label="准备度" value={readinessScoreText} suffix="/100" />
-                <MetricTile label="优先任务" value={String(taskCount)} />
-                <MetricTile label="风险指标" value={String(riskCount)} />
-              </div>
+              <ReadinessSnapshot
+                score={readinessScoreText}
+                taskCount={taskCount}
+                riskCount={riskCount}
+              />
             </div>
           </div>
 
@@ -266,12 +266,11 @@ export function MaterialDiagnosisPanel({
               {diagnosis.priorityTasks.length > 0 ? (
                 <div className="mt-4 divide-y divide-slate-100 rounded-lg border border-slate-200">
                   {diagnosis.priorityTasks.map((task, index) => (
-                    <details
+                    <article
                       key={`${task.title}-${index}`}
-                      className="group bg-white p-4 open:bg-slate-50/70"
-                      open
+                      className="grid gap-4 bg-white p-4 lg:grid-cols-[minmax(180px,0.32fr)_minmax(0,1fr)]"
                     >
-                      <summary className="flex cursor-pointer list-none items-start gap-3">
+                      <div className="flex items-start gap-3">
                         <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-900 text-xs font-medium text-white">
                           {index + 1}
                         </span>
@@ -279,23 +278,32 @@ export function MaterialDiagnosisPanel({
                           <span className="block text-sm font-semibold text-slate-950">
                             {task.title}
                           </span>
-                          <span className="mt-1 block text-sm leading-6 text-slate-600">
+                          {task.relatedCriteria.length > 0 ? (
+                            <span className="mt-2 block text-xs leading-5 text-slate-500">
+                              关联指标：{task.relatedCriteria.join("、")}
+                            </span>
+                          ) : null}
+                        </span>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div>
+                          <p className="text-xs font-medium text-slate-400">
+                            诊断原因
+                          </p>
+                          <p className="mt-1 text-sm leading-6 text-slate-600">
                             {task.reason}
-                          </span>
-                        </span>
-                        <span className="text-xs font-medium text-slate-400 group-open:hidden">
-                          展开
-                        </span>
-                      </summary>
-                      <p className="mt-3 text-sm leading-6 text-slate-600">
-                        {task.action}
-                      </p>
-                      {task.relatedCriteria.length > 0 ? (
-                        <p className="mt-2 text-xs text-slate-500">
-                          关联指标：{task.relatedCriteria.join("、")}
-                        </p>
-                      ) : null}
-                    </details>
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-medium text-slate-400">
+                            建议动作
+                          </p>
+                          <p className="mt-1 text-sm leading-6 text-slate-800">
+                            {task.action}
+                          </p>
+                        </div>
+                      </div>
+                    </article>
                   ))}
                 </div>
               ) : (
@@ -336,7 +344,7 @@ export function MaterialDiagnosisPanel({
                           {selectedCriterion.weight}
                         </span>
                         <span
-                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${evidencePillClass[selectedCriterion.evidenceStatus]}`}
+                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium shadow-sm ${evidencePillClass[selectedCriterion.evidenceStatus]}`}
                         >
                           {evidenceStatusLabel[selectedCriterion.evidenceStatus]}
                         </span>
@@ -395,7 +403,7 @@ export function MaterialDiagnosisPanel({
               ) : (
                 <div
                   ref={criteriaGridRef}
-                  className="mt-4 grid gap-1 sm:grid-cols-2 lg:grid-cols-4"
+                  className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4"
                 >
                   {diagnosis.criteriaResults.map((criterion) => (
                     <button
@@ -406,7 +414,7 @@ export function MaterialDiagnosisPanel({
                           `${criterion.category}-${criterion.criterionName}`,
                         )
                       }
-                      className={`min-h-28 cursor-pointer border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${criterionCardClass[criterion.evidenceStatus]}`}
+                      className={`min-h-28 cursor-pointer border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm ${criterionCardClass[criterion.evidenceStatus]}`}
                     >
                       <div className="flex h-full flex-col justify-between gap-4">
                         <p className="text-xs font-medium opacity-80">
@@ -415,7 +423,9 @@ export function MaterialDiagnosisPanel({
                         <h4 className="text-sm font-semibold leading-6">
                           {criterion.criterionName}
                         </h4>
-                        <span className="w-fit border border-current px-2.5 py-1 text-xs font-medium">
+                        <span
+                          className={`w-fit border px-2.5 py-1 text-xs font-medium shadow-sm ${evidencePillClass[criterion.evidenceStatus]}`}
+                        >
                           {evidenceStatusLabel[criterion.evidenceStatus]}
                         </span>
                       </div>
@@ -431,26 +441,38 @@ export function MaterialDiagnosisPanel({
   );
 }
 
-function MetricTile({
-  label,
-  value,
-  suffix,
+function ReadinessSnapshot({
+  score,
+  taskCount,
+  riskCount,
 }: Readonly<{
-  label: string;
-  value: string;
-  suffix?: string;
+  score: string;
+  taskCount: number;
+  riskCount: number;
 }>) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3">
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className="mt-2 text-xl font-semibold text-slate-950">
-        {value}
-        {suffix ? (
-          <span className="ml-1 text-xs font-medium text-slate-400">
-            {suffix}
-          </span>
-        ) : null}
-      </p>
+    <div className="flex rounded-lg border border-slate-200 bg-white p-4">
+      <div className="my-auto w-full">
+        <p className="text-xs font-medium text-slate-500">诊断快照</p>
+        <p className="mt-2 text-3xl font-semibold tracking-normal text-slate-950">
+          {score}
+          <span className="ml-1 text-sm font-medium text-slate-400">/100</span>
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4">
+          <div>
+            <p className="text-xs font-medium text-slate-500">优先任务</p>
+            <p className="mt-1 text-lg font-semibold text-slate-950">
+              {taskCount}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs font-medium text-slate-500">风险指标</p>
+            <p className="mt-1 text-lg font-semibold text-slate-950">
+              {riskCount}
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
