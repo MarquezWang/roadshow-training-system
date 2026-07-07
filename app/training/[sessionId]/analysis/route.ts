@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { callAI } from "@/lib/ai";
+import { AIEmptyContentError, callAI } from "@/lib/ai";
 import {
   buildProjectAIContext,
   ProjectContextNotFoundError,
@@ -8,7 +8,8 @@ import {
 import { AIJsonParseError, parseAIJson } from "@/lib/json-utils";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
-import { devLog, devError } from "@/lib/dev-log";
+import { devLog, devWarn, devError } from "@/lib/dev-log";
+import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { prisma } from "@/lib/prisma";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
@@ -29,12 +30,20 @@ type TrainingAnalysisRecord = NonNullable<
 >;
 
 const PITCH_ANALYSIS_TYPE = "PITCH";
-const PITCH_ANALYSIS_MAX_OUTPUT_TOKENS = 6_000;
+const PITCH_ANALYSIS_MAX_OUTPUT_TOKENS = readPositiveIntegerEnv(
+  "PITCH_ANALYSIS_MAX_OUTPUT_TOKENS",
+  12_000,
+);
+const PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS = readPositiveIntegerEnv(
+  "PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS",
+  16_000,
+);
 const PROCESSING_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1_000;
 const TRANSCRIPT_WAIT_TIMEOUT_MS = 90_000;
 const CONTEXT_EXPERT_COMMENT_LIMIT = 10;
 const CONTEXT_HISTORICAL_QUESTION_LIMIT = 10;
 const FALLBACK_ANALYSIS_SCORE = 15;
+const DEBUG_RAW_AI_OUTPUT_LIMIT = 4_000;
 const activeAnalysisGenerationLocks = new Set<string>();
 const COVERAGE_ITEMS = [
   "项目背景",
@@ -62,6 +71,85 @@ type AnalysisQuestionData = {
   transcribePending: boolean;
   transcribeNote: string | null;
 };
+
+type JsonParseFailureDetails = {
+  message: string;
+  originalLength?: number;
+  extractedLength?: number;
+  parsePosition?: number | null;
+};
+
+type EmptyContentDetails = {
+  message: string;
+  responseFormat: "json_object" | null;
+  finishReason: string | null;
+};
+
+type RetryWithoutJsonModeDebug = {
+  attempted: true;
+  rawAiOutputLength: number;
+  rawAiOutput: string;
+  emptyContent: boolean;
+  finishReason: string | null;
+};
+
+type AnalysisParseFailureDebug = {
+  reason: "AI_JSON_PARSE_FAILED" | "AI_EMPTY_CONTENT";
+  finalFallbackReason:
+    | "JSON_PARSE_FAILED_AFTER_REPAIR"
+    | "RETRY_WITHOUT_JSON_MODE_EMPTY_CONTENT";
+  generatedAt: string;
+  initialParseError?: JsonParseFailureDetails;
+  repairError?: JsonParseFailureDetails;
+  callError?: JsonParseFailureDetails;
+  rawAiOutputLength: number;
+  rawAiOutput: string;
+  emptyContent?: true;
+  responseFormat?: "json_object" | null;
+  finishReason?: string | null;
+  jsonModeEmptyContent?: EmptyContentDetails;
+  retryWithoutJsonMode?: RetryWithoutJsonModeDebug;
+};
+type AnalysisJsonParseFailureDebug = AnalysisParseFailureDebug & {
+  reason: "AI_JSON_PARSE_FAILED";
+  finalFallbackReason: "JSON_PARSE_FAILED_AFTER_REPAIR";
+  initialParseError: JsonParseFailureDetails;
+  repairError: JsonParseFailureDetails;
+};
+type AnalysisEmptyContentDebug = AnalysisParseFailureDebug & {
+  reason: "AI_EMPTY_CONTENT";
+  finalFallbackReason: "RETRY_WITHOUT_JSON_MODE_EMPTY_CONTENT";
+  callError: JsonParseFailureDetails;
+  emptyContent: true;
+};
+
+class AnalysisJsonRepairError extends Error {
+  debug: AnalysisParseFailureDebug;
+
+  constructor(message: string, debug: AnalysisParseFailureDebug) {
+    super(message);
+    this.name = "AnalysisJsonRepairError";
+    this.debug = debug;
+  }
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+
+  if (!Number.isInteger(value) || value <= 0) {
+    return fallback;
+  }
+
+  return value;
+}
+
+function truncateDebugText(text: string) {
+  if (text.length <= DEBUG_RAW_AI_OUTPUT_LIMIT) {
+    return text;
+  }
+
+  return `${text.slice(0, DEBUG_RAW_AI_OUTPUT_LIMIT)}...[truncated]`;
+}
 
 function parseStoredJson<T>(value: string, fallback: T): T {
   try {
@@ -255,7 +343,7 @@ function buildFallbackAnalysis(input: {
   const fallbackAnalysis = {
     overallScore: FALLBACK_ANALYSIS_SCORE,
     summary:
-      "报告生成时 AI 结构化 JSON 解析失败，系统已基于可用转写和答辩数据降级生成基础报告；该结果用于避免报告中断，建议重新生成以获得更完整分析。",
+      "报告生成时 AI 结构化 JSON 解析失败，系统已基于可用转写和答辩数据降级生成基础报告，并保留排查信息。",
     strengths: [],
     weaknesses: [
       "结构化报告生成失败，当前报告为降级版本，细节判断可能不完整。",
@@ -265,10 +353,10 @@ function buildFallbackAnalysis(input: {
       "答辩复盘仅基于已有问题、回答文本和转写状态生成，建议人工复核关键判断。",
     ],
     suggestions: [
-      "建议重新生成报告，获取完整的路演表现、答辩表现和改进建议。",
+      "本次报告为降级版本，建议先结合录音回放人工复核关键判断。",
       "下一轮路演中请用数字、客户案例、测试结果或合同订单支撑关键结论。",
       "答辩时先直接回应评委问题，再补充证据和下一步计划。",
-      "如再次生成失败，请缩短输入材料或减少长文本后重试。",
+      "如系统持续生成降级报告，请由管理员查看诊断信息并调整分析配置。",
     ],
     contentCoverage: COVERAGE_ITEMS.map((item) => ({
       item,
@@ -443,7 +531,121 @@ function buildRepairPrompt(rawText: string, error: AIJsonParseError) {
   );
 }
 
-async function parseAnalysisJsonWithRepair(rawText: string) {
+function getJsonParseFailureDetails(error: unknown): JsonParseFailureDetails {
+  if (error instanceof AIJsonParseError) {
+    return {
+      message: error.message,
+      originalLength: error.originalLength,
+      extractedLength: error.extractedLength,
+      parsePosition: error.parsePosition,
+    };
+  }
+
+  return {
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function formatJsonParseFailure(details: JsonParseFailureDetails) {
+  return JSON.stringify({
+    message: details.message,
+    originalLength: details.originalLength ?? null,
+    extractedLength: details.extractedLength ?? null,
+    parsePosition: details.parsePosition ?? null,
+  });
+}
+
+function buildAnalysisParseFailureDebug({
+  rawText,
+  initialError,
+  repairError,
+  jsonModeEmptyContent,
+  retryWithoutJsonMode,
+}: {
+  rawText: string;
+  initialError: AIJsonParseError;
+  repairError: unknown;
+  jsonModeEmptyContent?: EmptyContentDetails | null;
+  retryWithoutJsonMode?: RetryWithoutJsonModeDebug | null;
+}): AnalysisJsonParseFailureDebug {
+  return {
+    reason: "AI_JSON_PARSE_FAILED",
+    finalFallbackReason: "JSON_PARSE_FAILED_AFTER_REPAIR",
+    generatedAt: new Date().toISOString(),
+    initialParseError: getJsonParseFailureDetails(initialError),
+    repairError: getJsonParseFailureDetails(repairError),
+    rawAiOutputLength: rawText.length,
+    rawAiOutput: truncateDebugText(rawText),
+    ...(jsonModeEmptyContent ? { jsonModeEmptyContent } : {}),
+    ...(retryWithoutJsonMode ? { retryWithoutJsonMode } : {}),
+  };
+}
+
+function getEmptyContentDetails(
+  error: AIEmptyContentError,
+): EmptyContentDetails {
+  return {
+    message: error.message,
+    responseFormat: error.responseFormat,
+    finishReason: error.finishReason,
+  };
+}
+
+function buildAnalysisEmptyContentDebug({
+  error,
+  jsonModeEmptyContent,
+}: {
+  error: AIEmptyContentError;
+  jsonModeEmptyContent?: EmptyContentDetails | null;
+}): AnalysisEmptyContentDebug {
+  return {
+    reason: "AI_EMPTY_CONTENT",
+    finalFallbackReason: "RETRY_WITHOUT_JSON_MODE_EMPTY_CONTENT",
+    generatedAt: new Date().toISOString(),
+    callError: {
+      message: error.message,
+    },
+    rawAiOutputLength: 0,
+    rawAiOutput: truncateDebugText(""),
+    emptyContent: true,
+    responseFormat: error.responseFormat,
+    finishReason: error.finishReason,
+    ...(jsonModeEmptyContent ? { jsonModeEmptyContent } : {}),
+    retryWithoutJsonMode: {
+      attempted: true,
+      rawAiOutputLength: 0,
+      rawAiOutput: truncateDebugText(""),
+      emptyContent: true,
+      finishReason: error.finishReason,
+    },
+  };
+}
+
+function buildStoredAnalysisResult(
+  analysisJson: TrainingAnalysisResult,
+  debug: AnalysisParseFailureDebug | null,
+) {
+  if (!debug) {
+    return JSON.stringify(analysisJson, null, 2);
+  }
+
+  return JSON.stringify(
+    {
+      ...analysisJson,
+      _debug: debug,
+    },
+    null,
+    2,
+  );
+}
+
+async function parseAnalysisJsonWithRepair(
+  rawText: string,
+  debugContext?: {
+    jsonModeEmptyContent?: EmptyContentDetails | null;
+    retryWithoutJsonMode?: RetryWithoutJsonModeDebug | null;
+  },
+) {
   try {
     return validateTrainingAnalysisResult(parseAIJson(rawText));
   } catch (error) {
@@ -451,12 +653,11 @@ async function parseAnalysisJsonWithRepair(rawText: string) {
       throw error;
     }
 
-    devError("路演表现分析 JSON 解析失败，开始一次修复重试。", {
-      error: error.message,
-      originalLength: error.originalLength,
-      extractedLength: error.extractedLength,
-      parsePosition: error.parsePosition,
-    });
+    devError(
+      `路演表现分析 JSON 解析失败，开始一次修复重试。${formatJsonParseFailure(
+        getJsonParseFailureDetails(error),
+      )}`,
+    );
 
     try {
       const repairResult = await callAI({
@@ -465,7 +666,7 @@ async function parseAnalysisJsonWithRepair(rawText: string) {
           "你是严格的 JSON 修复器。只输出合法 JSON，不输出 Markdown 或解释。",
         userPrompt: buildRepairPrompt(rawText, error),
         temperature: 0,
-        maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
+        maxOutputTokens: PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS,
       });
 
       const repairedAnalysis = validateTrainingAnalysisResult(
@@ -474,10 +675,33 @@ async function parseAnalysisJsonWithRepair(rawText: string) {
       devLog("路演表现分析 JSON 修复重试成功。");
       return repairedAnalysis;
     } catch (repairError) {
-      devError("路演表现分析 JSON 修复重试失败。", {
-        error: repairError instanceof Error ? repairError.message : String(repairError),
+      const debug = buildAnalysisParseFailureDebug({
+        rawText,
+        initialError: error,
+        repairError,
+        jsonModeEmptyContent: debugContext?.jsonModeEmptyContent,
+        retryWithoutJsonMode: debugContext?.retryWithoutJsonMode,
       });
-      throw repairError;
+      devError(
+        `路演表现分析 JSON 修复重试失败。${formatJsonParseFailure(
+          debug.repairError,
+        )}`,
+      );
+      void writeDiagnosticEvent({
+        type: "REPORT_ERROR",
+        message: "Pitch analysis JSON parse and repair failed",
+        meta: {
+          initialError: debug.initialParseError.message,
+          repairError: debug.repairError.message,
+          rawAiOutputLength: debug.rawAiOutputLength,
+          initialParsePosition: debug.initialParseError.parsePosition ?? null,
+          repairParsePosition: debug.repairError.parsePosition ?? null,
+        },
+      });
+      throw new AnalysisJsonRepairError(
+        "路演表现分析 JSON 解析失败，修复重试后仍无法解析。",
+        debug,
+      );
     }
   }
 }
@@ -1024,25 +1248,116 @@ export async function POST(
       qaData,
       dynamicFollowupData,
     });
-    const aiResult = await callAI({
-      task: "pitchAnalysis",
-      systemPrompt:
-        "你是严格遵守 JSON 输出约束的专业路演训练教练。只输出合法 JSON，不输出 Markdown 或额外解释。",
-      userPrompt,
-      temperature: 0.2,
-      maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
-    });
     let analysisJson: TrainingAnalysisResult;
+    let analysisParseFailureDebug: AnalysisParseFailureDebug | null = null;
+    let aiResult: Awaited<ReturnType<typeof callAI>> | null = null;
+    let jsonModeEmptyContent: EmptyContentDetails | null = null;
+    let retryWithoutJsonMode: RetryWithoutJsonModeDebug | null = null;
+
     try {
-      analysisJson = await parseAnalysisJsonWithRepair(aiResult.text);
-    } catch (analysisParseError) {
-      devError("路演表现分析 JSON 修复后仍失败，使用降级 fallback。", {
-        sessionId,
-        error:
-          analysisParseError instanceof Error
-            ? analysisParseError.message
-            : String(analysisParseError),
+      aiResult = await callAI({
+        task: "pitchAnalysis",
+        systemPrompt:
+          "你是严格遵守 JSON 输出约束的专业路演训练教练。只输出合法 JSON，不输出 Markdown 或额外解释。",
+        userPrompt,
+        temperature: 0.2,
+        maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
       });
+    } catch (aiCallError) {
+      if (!(aiCallError instanceof AIEmptyContentError)) {
+        throw aiCallError;
+      }
+
+      jsonModeEmptyContent = getEmptyContentDetails(aiCallError);
+      devWarn(
+        `路演表现分析 JSON mode 返回空内容，开始普通模式重试。${JSON.stringify({
+          sessionId,
+          responseFormat: jsonModeEmptyContent.responseFormat,
+          finishReason: jsonModeEmptyContent.finishReason,
+        })}`,
+      );
+      void writeDiagnosticEvent({
+        type: "REPORT_ERROR",
+        message:
+          "Pitch analysis JSON mode returned empty content; retrying without response_format",
+        meta: {
+          responseFormat: jsonModeEmptyContent.responseFormat,
+          finishReason: jsonModeEmptyContent.finishReason,
+        },
+      });
+
+      try {
+        aiResult = await callAI({
+          task: "pitchAnalysis",
+          systemPrompt:
+            "你是严格遵守 JSON 输出约束的专业路演训练教练。只输出合法 JSON，不输出 Markdown 或额外解释。",
+          userPrompt,
+          temperature: 0.2,
+          maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
+          disableJsonResponseFormat: true,
+        });
+        retryWithoutJsonMode = {
+          attempted: true,
+          rawAiOutputLength: aiResult.text.length,
+          rawAiOutput: truncateDebugText(aiResult.text),
+          emptyContent: false,
+          finishReason: null,
+        };
+      } catch (retryError) {
+        if (!(retryError instanceof AIEmptyContentError)) {
+          throw retryError;
+        }
+
+        analysisParseFailureDebug = buildAnalysisEmptyContentDebug({
+          error: retryError,
+          jsonModeEmptyContent,
+        });
+        devError(
+          `路演表现分析普通模式重试仍返回空内容，使用降级 fallback。${JSON.stringify({
+            sessionId,
+            finishReason: retryError.finishReason,
+          })}`,
+        );
+        void writeDiagnosticEvent({
+          type: "REPORT_ERROR",
+          message: "Pitch analysis retry without response_format returned empty content",
+          meta: {
+            finishReason: retryError.finishReason,
+          },
+        });
+      }
+    }
+
+    try {
+      if (aiResult) {
+        analysisJson = await parseAnalysisJsonWithRepair(aiResult.text, {
+          jsonModeEmptyContent,
+          retryWithoutJsonMode,
+        });
+      } else {
+        analysisJson = buildFallbackAnalysis({
+          durationSec,
+          pageCount,
+          slideEventCount: session.slideEvents.length,
+          transcriptMissing,
+          qaData,
+          dynamicFollowupData,
+        });
+      }
+    } catch (analysisParseError) {
+      if (analysisParseError instanceof AnalysisJsonRepairError) {
+        analysisParseFailureDebug = analysisParseError.debug;
+      }
+      devError(
+        `路演表现分析 JSON 修复后仍失败，使用降级 fallback。${JSON.stringify({
+          sessionId,
+          error:
+            analysisParseError instanceof Error
+              ? analysisParseError.message
+              : String(analysisParseError),
+          rawAiOutputLength: analysisParseFailureDebug?.rawAiOutputLength ?? null,
+        })}`,
+      );
       analysisJson = buildFallbackAnalysis({
         durationSec,
         pageCount,
@@ -1194,8 +1509,15 @@ export async function POST(
           null,
           2,
         ),
-        rawResultJson: JSON.stringify(analysisJson, null, 2),
-        errorMessage: null,
+        rawResultJson: buildStoredAnalysisResult(
+          analysisJson,
+          analysisParseFailureDebug,
+        ),
+        errorMessage: analysisParseFailureDebug
+          ? analysisParseFailureDebug.reason === "AI_EMPTY_CONTENT"
+            ? "AI 返回内容为空，已生成降级报告。详情见 rawResultJson._debug。"
+            : "AI JSON 解析失败，已生成降级报告。详情见 rawResultJson._debug。"
+          : null,
       },
     });
 

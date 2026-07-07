@@ -9,12 +9,37 @@ type CallAIOptions = {
   temperature?: number;
   maxOutputTokens?: number;
   seed?: number;
+  disableJsonResponseFormat?: boolean;
 };
 
 type CallAIResult = {
   text: string;
   raw?: unknown;
 };
+
+export class AIEmptyContentError extends Error {
+  task: AiModelTask;
+  model: string;
+  responseFormat: "json_object" | null;
+  finishReason: string | null;
+
+  constructor(
+    message: string,
+    details: {
+      task: AiModelTask;
+      model: string;
+      responseFormat: "json_object" | null;
+      finishReason: string | null;
+    },
+  ) {
+    super(message);
+    this.name = "AIEmptyContentError";
+    this.task = details.task;
+    this.model = details.model;
+    this.responseFormat = details.responseFormat;
+    this.finishReason = details.finishReason;
+  }
+}
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 3_000;
@@ -66,6 +91,10 @@ function summarizeAILogError(error: unknown) {
   return sanitizeAIError(error).replace(/\s+/g, " ").slice(0, 120);
 }
 
+function isReportJsonTask(task: AiModelTask) {
+  return task === "pitchAnalysis" || task === "reportGeneration";
+}
+
 function logAICall({
   task,
   model,
@@ -89,7 +118,7 @@ function logAICall({
   } else {
     console.warn(message);
     void writeDiagnosticEvent({
-      type: task === "reportGeneration" ? "REPORT_ERROR" : "AI_ERROR",
+      type: isReportJsonTask(task) ? "REPORT_ERROR" : "AI_ERROR",
       message: error ? `AI call failed: ${error}` : "AI call failed",
       meta: {
         task,
@@ -129,6 +158,9 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
   let completed = false;
 
   try {
+    const responseFormat = isReportJsonTask(task) && !options.disableJsonResponseFormat
+      ? ({ type: "json_object" } as const)
+      : undefined;
     const completion = await client.chat.completions.create(
       {
         model: config.model,
@@ -145,6 +177,7 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
         temperature: options.temperature ?? 0.2,
         max_tokens: options.maxOutputTokens ?? config.maxOutputTokens,
         seed: options.seed,
+        ...(responseFormat ? { response_format: responseFormat } : {}),
       },
       {
         signal: controller.signal,
@@ -153,7 +186,12 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     const text = completion.choices[0]?.message?.content?.trim();
 
     if (!text) {
-      throw new Error("AI 返回内容为空。");
+      throw new AIEmptyContentError("AI 返回内容为空。", {
+        task,
+        model: config.model,
+        responseFormat: responseFormat?.type ?? null,
+        finishReason: completion.choices[0]?.finish_reason ?? null,
+      });
     }
 
     completed = true;
@@ -170,6 +208,10 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
       ok: false,
       error: isTimeout ? "timeout" : summarizeAILogError(error),
     });
+
+    if (error instanceof AIEmptyContentError) {
+      throw error;
+    }
 
     if (isTimeout) {
       throw new Error(`AI 调用超时，已超过 ${config.timeoutMs}ms。`);
