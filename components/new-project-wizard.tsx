@@ -1023,7 +1023,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
         <div className={profileVisible ? "hidden" : ""}>
           <h2 className="text-lg font-semibold text-slate-950">上传项目材料</h2>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            请上传 1 个 PPTX 或 PDF 文件。系统将从材料中识别项目名称、所属领域、应用场景、技术关键词和 TRL 成熟度。建议文件大小 20MB 以内，最大不超过 30MB。
+            请上传 1 个 PPTX 或 PDF 文件。系统将从材料中识别项目名称、所属领域、应用场景、技术关键词和 TRL 成熟度。建议文件大小 20MB 以内，最大不超过 50MB。
           </p>
           <label className="mt-5 block rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
           <span className="block text-sm font-medium text-slate-900">
@@ -1063,8 +1063,8 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
                 extension !== ".pdf"
               ) {
                 error = "仅支持上传 1 个 PPT、PPTX 或 PDF 文件。";
-              } else if (file.size > 30 * 1024 * 1024) {
-                error = "文件大小不能超过 30MB，请压缩后重新上传。";
+              } else if (file.size > 50 * 1024 * 1024) {
+                error = "文件大小不能超过 50MB，请压缩后重新上传。";
               }
 
               if (error) {

@@ -54,6 +54,11 @@ type QaPhase = "READY" | "ASKING" | "COUNTDOWN" | "ANSWERING" | "SAVING" | "DONE
 const qaLimitSec = 3 * 60;
 const dynamicFollowupAnswerLimitSec = 60;
 
+type SaveAndContinueOptions = Readonly<{
+  targetQuestionIndex?: number;
+  forceFinish?: boolean;
+}>;
+
 function formatDuration(totalSec: number) {
   const normalizedSec = Math.max(0, totalSec);
   const minutes = Math.floor(normalizedSec / 60)
@@ -155,13 +160,23 @@ export function TrainingQaClient({
     currentQuestionLimitSec - currentQuestionUsedSec,
   );
   const isLastQuestion = currentQuestionIndex >= questions.length - 1;
+  const nextDynamicFollowupIndex = questions.findIndex(
+    (question, index) =>
+      index > currentQuestionIndex &&
+      isDynamicFollowupQuestion(question) &&
+      !question.answer?.endedAt,
+  );
+  const shouldSkipToDynamicFollowup =
+    !isCurrentDynamicFollowup &&
+    remainingSec <= 30 &&
+    nextDynamicFollowupIndex >= 0;
   const hasNextBaseQuestion = questions
     .slice(currentQuestionIndex + 1)
     .some((question) => !isDynamicFollowupQuestion(question));
   const shouldFinishAfterCurrent =
     isCurrentDynamicFollowup ||
     isLastQuestion ||
-    (remainingSec < 30 && hasNextBaseQuestion);
+    (!shouldSkipToDynamicFollowup && remainingSec <= 30 && hasNextBaseQuestion);
   const {
     canvasRef,
     previewContainerRef,
@@ -277,6 +292,16 @@ export function TrainingQaClient({
       answerElapsedBeforePhaseRef.current + elapsedInPhase,
     );
   }, [currentQuestion, dynamicFollowupUsedSec, qaPhase, usedAnswerSec]);
+
+  const getSessionQaDurationSec = useCallback(() => {
+    const currentUsedSec = getCurrentUsedAnswerSec();
+
+    if (!isDynamicFollowupQuestion(currentQuestion)) {
+      return currentUsedSec;
+    }
+
+    return Math.min(qaLimitSec, usedAnswerSec) + currentUsedSec;
+  }, [currentQuestion, getCurrentUsedAnswerSec, usedAnswerSec]);
 
   const beginAnswering = useCallback(async () => {
     clearCountdownTimer();
@@ -407,7 +432,7 @@ export function TrainingQaClient({
               ? revealedQuestionIds.has(question.id)
               : false,
             recordingId,
-            qaDurationSec: getCurrentUsedAnswerSec(),
+            qaDurationSec: getSessionQaDurationSec(),
           }),
         });
 
@@ -433,10 +458,120 @@ export function TrainingQaClient({
     [
       cancelSpeech,
       clearSpeechTimer,
-      getCurrentUsedAnswerSec,
+      getSessionQaDurationSec,
       revealedQuestionIds,
       router,
       sessionId,
+      stopAndUploadCurrentRecording,
+    ],
+  );
+
+  const saveAndContinue = useCallback(
+    async (options: SaveAndContinueOptions = {}) => {
+      if (!currentQuestion || qaPhase !== "ANSWERING") {
+        return;
+      }
+
+      const targetQuestion =
+        typeof options.targetQuestionIndex === "number"
+          ? questions[options.targetQuestionIndex] ?? null
+          : null;
+      const shouldFinish =
+        options.forceFinish ?? (targetQuestion ? false : shouldFinishAfterCurrent);
+
+      setIsSaving(true);
+      setMessage("");
+
+      try {
+        const currentUsedAnswerSec = getCurrentUsedAnswerSec();
+
+        setQaPhase("SAVING");
+        const recordingId = await stopAndUploadCurrentRecording();
+        const response = await fetch(
+          `/training/${sessionId}/qa/questions/${currentQuestion.id}/answer`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              answerStartedAt: currentAnswerStartedAtRef.current?.toISOString(),
+              revealedQuestionText: revealedQuestionIds.has(currentQuestion.id),
+              recordingId,
+              qaDurationSec: getSessionQaDurationSec(),
+              finish: shouldFinish,
+              preferredNextQuestionId: targetQuestion?.id,
+            }),
+          },
+        );
+        const body = (await response.json().catch(() => null)) as {
+          completed?: boolean;
+          nextQuestionId?: string;
+          answer?: TrainingQaQuestion["answer"] & { questionId?: string };
+          error?: string;
+        } | null;
+
+        if (!response.ok) {
+          throw new Error(body?.error ?? "保存本题回答失败。");
+        }
+
+        if (body?.answer?.questionId) {
+          const savedAnswer = body.answer;
+
+          setQuestions((currentQuestions) =>
+            currentQuestions.map((question) =>
+              question.id === savedAnswer.questionId
+                ? {
+                    ...question,
+                    answer: {
+                      id: savedAnswer.id,
+                      answerText: savedAnswer.answerText,
+                      revealedQuestionText: savedAnswer.revealedQuestionText,
+                      startedAt: savedAnswer.startedAt,
+                      endedAt: savedAnswer.endedAt,
+                      durationSec: savedAnswer.durationSec,
+                    },
+                  }
+                : question,
+            ),
+          );
+        }
+
+        if (body?.completed) {
+          setQaPhase("DONE");
+          isCompletingNormallyRef.current = true;
+          router.push(`/training/${sessionId}/report`);
+          return;
+        }
+
+        const nextIndex = questions.findIndex(
+          (question) => question.id === body?.nextQuestionId,
+        );
+        const resolvedNextIndex =
+          nextIndex >= 0 ? nextIndex : currentQuestionIndex;
+
+        setUsedAnswerSec(currentUsedAnswerSec);
+        answerElapsedBeforePhaseRef.current = currentUsedAnswerSec;
+        beginJudgeQuestion(resolvedNextIndex);
+      } catch (error) {
+        setQaPhase("ANSWERING");
+        setMessage(error instanceof Error ? error.message : "保存本题回答失败。");
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [
+      beginJudgeQuestion,
+      currentQuestion,
+      currentQuestionIndex,
+      getCurrentUsedAnswerSec,
+      getSessionQaDurationSec,
+      qaPhase,
+      questions,
+      revealedQuestionIds,
+      router,
+      sessionId,
+      shouldFinishAfterCurrent,
       stopAndUploadCurrentRecording,
     ],
   );
@@ -484,12 +619,26 @@ export function TrainingQaClient({
 
       if (nextUsedSec >= qaLimitSec) {
         window.clearInterval(timer);
-        void finishQaWithCurrentQuestion(currentQuestion);
+        if (nextDynamicFollowupIndex >= 0) {
+          void saveAndContinue({
+            targetQuestionIndex: nextDynamicFollowupIndex,
+            forceFinish: false,
+          });
+        } else {
+          void finishQaWithCurrentQuestion(currentQuestion);
+        }
       }
     }, 500);
 
     return () => window.clearInterval(timer);
-  }, [currentQuestion, finishQaWithCurrentQuestion, isQaing, qaPhase]);
+  }, [
+    currentQuestion,
+    finishQaWithCurrentQuestion,
+    isQaing,
+    nextDynamicFollowupIndex,
+    qaPhase,
+    saveAndContinue,
+  ]);
 
   useEffect(() => {
     if (
@@ -559,69 +708,6 @@ export function TrainingQaClient({
     }
   }
 
-  async function saveAndContinue() {
-    if (!currentQuestion || qaPhase !== "ANSWERING") {
-      return;
-    }
-
-    setIsSaving(true);
-    setMessage("");
-
-    try {
-      const currentUsedAnswerSec = getCurrentUsedAnswerSec();
-
-      setQaPhase("SAVING");
-      const recordingId = await stopAndUploadCurrentRecording();
-      const response = await fetch(
-        `/training/${sessionId}/qa/questions/${currentQuestion.id}/answer`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            answerStartedAt: currentAnswerStartedAtRef.current?.toISOString(),
-            revealedQuestionText: revealedQuestionIds.has(currentQuestion.id),
-            recordingId,
-            qaDurationSec: currentUsedAnswerSec,
-            finish: shouldFinishAfterCurrent,
-          }),
-        },
-      );
-      const body = (await response.json().catch(() => null)) as {
-        completed?: boolean;
-        nextQuestionId?: string;
-        error?: string;
-      } | null;
-
-      if (!response.ok) {
-        throw new Error(body?.error ?? "保存本题回答失败。");
-      }
-
-      if (body?.completed) {
-        setQaPhase("DONE");
-        isCompletingNormallyRef.current = true;
-        router.push(`/training/${sessionId}/report`);
-        return;
-      }
-
-      const nextIndex = questions.findIndex(
-        (question) => question.id === body?.nextQuestionId,
-      );
-      const resolvedNextIndex =
-        nextIndex >= 0 ? nextIndex : currentQuestionIndex;
-
-      setUsedAnswerSec(currentUsedAnswerSec);
-      answerElapsedBeforePhaseRef.current = currentUsedAnswerSec;
-      beginJudgeQuestion(resolvedNextIndex);
-    } catch (error) {
-      setQaPhase("ANSWERING");
-      setMessage(error instanceof Error ? error.message : "保存本题回答失败。");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   function revealQuestionText() {
     if (!currentQuestion) {
       return;
@@ -646,9 +732,11 @@ export function TrainingQaClient({
               : qaPhase === "DONE"
                 ? "答辩已完成"
                 : "答辩准备";
-  const mainButtonLabel = shouldFinishAfterCurrent
-    ? "完成答辩"
-    : "回答完毕，进入下一题";
+  const mainButtonLabel = shouldSkipToDynamicFollowup
+    ? "进入动态追问"
+    : shouldFinishAfterCurrent
+      ? "完成答辩"
+      : "回答完毕，进入下一题";
 
   return (
     <>
@@ -992,7 +1080,16 @@ export function TrainingQaClient({
             ) : isQaing && qaPhase === "ANSWERING" ? (
               <button
                 type="button"
-                onClick={() => void saveAndContinue()}
+                onClick={() =>
+                  void saveAndContinue(
+                    shouldSkipToDynamicFollowup
+                      ? {
+                          targetQuestionIndex: nextDynamicFollowupIndex,
+                          forceFinish: false,
+                        }
+                      : undefined,
+                  )
+                }
                 disabled={isSaving}
                 className="inline-flex h-10 items-center justify-center rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
               >

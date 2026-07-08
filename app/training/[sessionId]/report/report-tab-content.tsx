@@ -24,6 +24,7 @@ import type { ReportTabKey } from "./report-ui";
 
 type ReportTabState = Readonly<{
   activeTab: ReportTabKey;
+  onChange: (tab: ReportTabKey) => void;
   showAllCoverage: boolean;
   onToggleShowAllCoverage: () => void;
 }>;
@@ -150,6 +151,8 @@ export function ReportTabContent({
             analysisState.canRetryAnalysisGeneration
           }
           onCopyOnePageSummary={analysisState.onCopyOnePageSummary}
+          onOpenPitchTab={() => tabState.onChange("pitch")}
+          onOpenQaTab={() => tabState.onChange("qa")}
           onRetryAnalysisGeneration={analysisState.onRetryAnalysisGeneration}
         />
       )}

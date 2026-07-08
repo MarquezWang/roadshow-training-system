@@ -38,21 +38,23 @@ export function ReportTabNavigation({
   }
 
   return (
-    <nav className="sticky top-0 z-10 -mx-6 border-b border-[var(--border)] bg-[var(--surface)]/95 px-6 backdrop-blur sm:-mx-8 sm:px-8 lg:-mx-10 lg:px-10">
-      {tabs.map((tab) => (
-        <button
-          key={tab.key}
-          type="button"
-          onClick={() => onChange(tab.key)}
-          className={`relative -mb-px px-4 py-2.5 text-sm font-medium transition-colors ${
-            activeTab === tab.key
-              ? "border-b-2 border-teal-300 text-[var(--surface-foreground)]"
-              : "text-[var(--muted-foreground)] hover:text-[var(--surface-foreground)]"
-          }`}
-        >
-          {tab.label}
-        </button>
-      ))}
+    <nav className="sticky top-0 z-10 rounded-lg border border-slate-800 bg-slate-950/75 px-4 shadow-sm backdrop-blur">
+      <div className="flex h-12 gap-6 overflow-x-auto">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => onChange(tab.key)}
+            className={`h-12 shrink-0 border-b-2 px-1 text-sm font-medium transition-colors ${
+              activeTab === tab.key
+                ? "border-teal-300 text-white"
+                : "border-transparent text-slate-400 hover:text-slate-100"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
     </nav>
   );
 }

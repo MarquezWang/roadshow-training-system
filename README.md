@@ -35,7 +35,7 @@ npx prisma studio
 
 ## 项目材料上传与解析
 
-项目详情页支持上传 `.pdf`、`.pptx`、`.docx`、`.txt`，单个文件最大 30MB。文件保存到本地：
+项目详情页支持上传 `.pdf`、`.pptx`、`.docx`、`.txt`，单个文件最大 50MB。文件保存到本地：
 
 ```text
 uploads/projects/{projectId}/{timestamp}-{safeFileName}
@@ -182,6 +182,8 @@ AI_MODEL_FAST=deepseek-v4-flash
 AI_MODEL_STRONG=deepseek-v4-pro
 AI_TIMEOUT_MS=60000
 AI_MAX_OUTPUT_TOKENS=3000
+PITCH_ANALYSIS_MAX_OUTPUT_TOKENS=12000
+PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS=16000
 DIAGNOSIS_MOCK_MODE=false
 ```
 
@@ -408,6 +410,8 @@ AI_MODEL_FAST=deepseek-v4-flash
 AI_MODEL_STRONG=deepseek-v4-pro
 AI_TIMEOUT_MS=60000
 AI_MAX_OUTPUT_TOKENS=3000
+PITCH_ANALYSIS_MAX_OUTPUT_TOKENS=12000
+PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS=16000
 ```
 
 `.env.local` 示例：

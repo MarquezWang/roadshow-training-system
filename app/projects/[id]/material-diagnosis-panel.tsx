@@ -24,13 +24,13 @@ const readinessClass: Record<ReadinessLevel, string> = {
 
 const criterionCardClass: Record<EvidenceStatus, string> = {
   SUFFICIENT:
-    "border-emerald-200 bg-emerald-50 text-emerald-950 hover:border-emerald-300 hover:bg-emerald-100/80",
+    "border-emerald-200/80 bg-emerald-50/55 text-emerald-950 hover:border-emerald-300/80 hover:bg-emerald-50/80",
   PARTIAL:
-    "border-amber-200 bg-amber-50 text-amber-950 hover:border-amber-300 hover:bg-amber-100/80",
+    "border-amber-200/80 bg-amber-50/55 text-amber-950 hover:border-amber-300/80 hover:bg-amber-50/80",
   MISSING:
-    "border-rose-200 bg-rose-50 text-rose-950 hover:border-rose-300 hover:bg-rose-100/80",
+    "border-rose-200/80 bg-rose-50/55 text-rose-950 hover:border-rose-300/80 hover:bg-rose-50/80",
   UNKNOWN:
-    "border-sky-200 bg-sky-50 text-sky-950 hover:border-sky-300 hover:bg-sky-100/80",
+    "border-sky-200/80 bg-sky-50/55 text-sky-950 hover:border-sky-300/80 hover:bg-sky-50/80",
 };
 
 const criterionDetailClass: Record<EvidenceStatus, string> = {
@@ -41,10 +41,10 @@ const criterionDetailClass: Record<EvidenceStatus, string> = {
 };
 
 const evidencePillClass: Record<EvidenceStatus, string> = {
-  SUFFICIENT: "border-emerald-700 bg-emerald-700 text-white",
-  PARTIAL: "border-amber-700 bg-amber-700 text-white",
-  MISSING: "border-rose-700 bg-rose-700 text-white",
-  UNKNOWN: "border-sky-700 bg-sky-700 text-white",
+  SUFFICIENT: "border-emerald-600/80 bg-emerald-600/90 text-white",
+  PARTIAL: "border-amber-600/80 bg-amber-600/90 text-white",
+  MISSING: "border-rose-600/80 bg-rose-600/90 text-white",
+  UNKNOWN: "border-sky-600/80 bg-sky-600/90 text-white",
 };
 
 async function readErrorMessage(response: Response) {
@@ -424,7 +424,7 @@ export function MaterialDiagnosisPanel({
                           {criterion.criterionName}
                         </h4>
                         <span
-                          className={`w-fit border px-2.5 py-1 text-xs font-medium shadow-sm ${evidencePillClass[criterion.evidenceStatus]}`}
+                          className={`w-fit border px-2.5 py-1 text-xs font-medium ${evidencePillClass[criterion.evidenceStatus]}`}
                         >
                           {evidenceStatusLabel[criterion.evidenceStatus]}
                         </span>

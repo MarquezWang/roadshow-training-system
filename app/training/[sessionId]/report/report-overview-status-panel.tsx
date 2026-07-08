@@ -37,7 +37,7 @@ function ReportGenerationSection({
   onRetry: () => void;
 }>) {
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
+    <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4 shadow-sm">
       <ReportGenerationPanel
         message={message}
         elapsedMs={elapsedMs}
@@ -64,8 +64,8 @@ export function ReportOverviewStatusPanel({
 
   if (isAborted) {
     return (
-      <section className="rounded-lg border border-slate-100 bg-white p-6">
-        <div className="rounded-md border border-red-100 bg-red-50/50 p-5">
+      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="rounded-md border border-red-100 bg-red-50 p-5">
           <p className="text-sm font-medium text-red-700">本轮训练已中止</p>
           <p className="mt-1 text-sm text-red-600/80">
             本轮训练在正式流程中被中止，已完成内容会保留，但不能继续本轮路演或答辩。
@@ -88,7 +88,7 @@ export function ReportOverviewStatusPanel({
 
   if (analysis?.status === "FAILED") {
     return (
-      <section className="rounded-lg border border-slate-100 bg-white p-6">
+      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <div className="py-8 text-center">
           <p className="text-sm font-medium text-red-600">报告生成失败</p>
           <p className="mt-1 text-xs text-red-400">

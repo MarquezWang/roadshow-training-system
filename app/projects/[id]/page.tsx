@@ -173,6 +173,7 @@ export default async function ProjectDetailPage({
     pageText: `第 ${Math.max(1, session.currentPageIndex)} 页`,
     trainingHref: `/training/${session.id}`,
     replayHref: `/training/${session.id}/replay`,
+    deleteUrl: `/projects/${project.id}/training-sessions/${session.id}`,
   }));
 
   return (

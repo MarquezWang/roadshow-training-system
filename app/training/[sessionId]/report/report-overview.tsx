@@ -48,6 +48,8 @@ type ReportOverviewTabProps = Readonly<{
   reportGenerationElapsedMs: number;
   canRetryAnalysisGeneration: boolean;
   onCopyOnePageSummary: () => void;
+  onOpenPitchTab: () => void;
+  onOpenQaTab: () => void;
   onRetryAnalysisGeneration: () => void;
 }>;
 
@@ -65,6 +67,8 @@ export function ReportOverviewTab({
   reportGenerationElapsedMs,
   canRetryAnalysisGeneration,
   onCopyOnePageSummary,
+  onOpenPitchTab,
+  onOpenQaTab,
   onRetryAnalysisGeneration,
 }: ReportOverviewTabProps) {
   return (
@@ -80,7 +84,11 @@ export function ReportOverviewTab({
       ) : null}
 
       {analysis?.status === "COMPLETED" ? (
-        <ReportOverviewDiagnostics diagnostics={diagnostics} />
+        <ReportOverviewDiagnostics
+          diagnostics={diagnostics}
+          onOpenPitchTab={onOpenPitchTab}
+          onOpenQaTab={onOpenQaTab}
+        />
       ) : null}
 
       {analysis?.status === "COMPLETED" && actionItems.length > 0 ? (

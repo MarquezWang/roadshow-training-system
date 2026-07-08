@@ -108,6 +108,7 @@ export async function POST(
     revealedQuestionText?: unknown;
     qaDurationSec?: unknown;
     recordingId?: unknown;
+    preferredNextQuestionId?: unknown;
   };
   const answerText = readAnswerText(body.answerText);
   const shouldFinish = body.finish === true;
@@ -115,6 +116,7 @@ export async function POST(
   const revealedQuestionText = body.revealedQuestionText === true;
   const clientQaDurationSec = readOptionalDuration(body.qaDurationSec);
   const recordingId = readOptionalId(body.recordingId);
+  const preferredNextQuestionId = readOptionalId(body.preferredNextQuestionId);
   const session = await prisma.trainingSession.findUnique({
     where: {
       id: sessionId,
@@ -258,23 +260,48 @@ export async function POST(
     });
   });
 
-  const nextQuestion = shouldFinish
-    ? null
-    : await prisma.trainingQuestion.findFirst({
-        where: {
-          sessionId,
-          orderIndex: {
-            gt: question.orderIndex,
-          },
+  let nextQuestion: { id: string; orderIndex: number } | null = null;
+
+  if (!shouldFinish && preferredNextQuestionId) {
+    nextQuestion = await prisma.trainingQuestion.findFirst({
+      where: {
+        id: preferredNextQuestionId,
+        sessionId,
+        orderIndex: {
+          gt: question.orderIndex,
         },
-        orderBy: {
-          orderIndex: "asc",
+      },
+      select: {
+        id: true,
+        orderIndex: true,
+      },
+    });
+
+    if (!nextQuestion) {
+      return NextResponse.json(
+        { error: "指定的下一题不存在或不能进入。" },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (!shouldFinish && !nextQuestion) {
+    nextQuestion = await prisma.trainingQuestion.findFirst({
+      where: {
+        sessionId,
+        orderIndex: {
+          gt: question.orderIndex,
         },
-        select: {
-          id: true,
-          orderIndex: true,
-        },
-      });
+      },
+      orderBy: {
+        orderIndex: "asc",
+      },
+      select: {
+        id: true,
+        orderIndex: true,
+      },
+    });
+  }
 
   if (!nextQuestion) {
     const updatedSession = await finishQa(sessionId, now, clientQaDurationSec);

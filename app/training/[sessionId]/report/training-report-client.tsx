@@ -117,6 +117,7 @@ export function TrainingReportClient({
         contentRef={contentRef}
         tabState={{
           activeTab,
+          onChange: setActiveTab,
           showAllCoverage,
           onToggleShowAllCoverage: toggleShowAllCoverage,
         }}

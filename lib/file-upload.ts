@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 
-export const MAX_UPLOAD_SIZE = 30 * 1024 * 1024;
+export const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
 
 const ALLOWED_EXTENSIONS = new Set([".pdf", ".ppt", ".pptx", ".docx", ".txt"]);
 const INITIAL_MATERIAL_EXTENSIONS = new Set([".pdf", ".ppt", ".pptx"]);
@@ -31,7 +31,7 @@ export function validateProjectUpload(file: File) {
   }
 
   if (file.size > MAX_UPLOAD_SIZE) {
-    throw new Error("文件大小不能超过 30MB。");
+    throw new Error("文件大小不能超过 50MB。");
   }
 
   if (!isSupportedUploadFile(file.name)) {
@@ -64,7 +64,7 @@ export function validateInitialProjectMaterial(files: File[]) {
 
   if (file.size > MAX_UPLOAD_SIZE) {
     throw new InitialProjectMaterialValidationError(
-      "文件大小不能超过 30MB，请压缩后重新上传。",
+      "文件大小不能超过 50MB，请压缩后重新上传。",
     );
   }
 
