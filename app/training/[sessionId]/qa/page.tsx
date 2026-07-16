@@ -1,5 +1,8 @@
 import { notFound, redirect } from "next/navigation";
-import { getCurrentAccessUserId, withSessionOwnerFilter } from "@/lib/auth-server";
+import {
+  getCurrentAccessUserId,
+  withSessionOwnerFilter,
+} from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { devLog } from "@/lib/dev-log";
 import {
@@ -111,12 +114,6 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
         )
       : 0;
   const initialRemainingSec = Math.max(0, qaLimitSec - qaElapsedSec);
-  const aiContextFiles = session.project.fileAssets.filter(
-    (file) =>
-      file.parseStatus === "SUCCESS" &&
-      file.includeInAIContext &&
-      Boolean(file.extractedText),
-  );
   const previewFile = selectDisplayablePdf(session.project.fileAssets);
   const previewNotice = previewFile
     ? null
@@ -128,7 +125,6 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
         sessionId={session.id}
         projectName={session.project.name}
         initialStatus={session.status}
-        initialQaStartedAt={session.qaStartedAt?.toISOString() ?? null}
         initialRemainingSec={initialRemainingSec}
         initialQuestions={session.trainingQuestions.map((question) => ({
           id: question.id,
@@ -150,7 +146,6 @@ export default async function TrainingQaPage({ params }: TrainingQaPageProps) {
         }))}
         previewFile={previewFile}
         previewNotice={previewNotice}
-        files={aiContextFiles}
         dynamicFollowupExperiment={
           process.env.DYNAMIC_FOLLOWUP_EXPERIMENT === "true"
         }
