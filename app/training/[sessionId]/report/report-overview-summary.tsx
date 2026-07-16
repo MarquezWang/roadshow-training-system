@@ -94,9 +94,20 @@ export function ReportOverviewSummary({
   copySummaryMessage,
   onCopyOnePageSummary,
 }: ReportOverviewSummaryProps) {
-  const scoreValue = clampScore(analysis.overallScore);
-  const scoreLabel = analysis.overallScore ?? "-";
-  const scoreTone = getScoreTone(analysis.overallScore);
+  const shouldShowScore = scoreDisplay.showPrimaryScore;
+  const scoreValue = shouldShowScore ? clampScore(analysis.overallScore) : 0;
+  const scoreLabel = shouldShowScore ? (analysis.overallScore ?? "-") : "—";
+  const scoreTone = shouldShowScore
+    ? getScoreTone(analysis.overallScore)
+    : {
+        label: "分数已隐藏",
+        textClassName: "text-slate-300",
+        borderClassName: "border-slate-500/40",
+        gaugeColor: "#64748b",
+      };
+  const scoreAriaLabel = shouldShowScore
+    ? `${scoreDisplay.title} ${scoreLabel}/100`
+    : `${scoreDisplay.title}，分数已隐藏`;
   const gaugeBackground = `conic-gradient(${scoreTone.gaugeColor} ${
     scoreValue * 3.6
   }deg, rgba(255,255,255,0.11) 0deg)`;
@@ -139,7 +150,7 @@ export function ReportOverviewSummary({
             <div
               className="grid h-40 w-40 place-items-center rounded-full p-2"
               style={{ background: gaugeBackground }}
-              aria-label={`${scoreDisplay.title} ${scoreLabel}/100`}
+              aria-label={scoreAriaLabel}
             >
               <div className="grid h-full w-full place-items-center rounded-full bg-[#071512] text-center">
                 <div>
@@ -149,7 +160,9 @@ export function ReportOverviewSummary({
                   <p className="mt-1 text-5xl font-semibold leading-none tabular-nums text-white">
                     {scoreLabel}
                   </p>
-                  <p className="mt-1 text-xs text-slate-400">/100</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {shouldShowScore ? "/100" : "分数已隐藏"}
+                  </p>
                 </div>
               </div>
             </div>
