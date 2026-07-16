@@ -181,12 +181,6 @@ export default async function TrainingSessionPage({
         )
       : 0);
   const initialRemainingSec = Math.max(0, pitchLimitSec - initialElapsedSec);
-  const aiContextFiles = session.project.fileAssets.filter(
-    (file) =>
-      file.parseStatus === "SUCCESS" &&
-      file.includeInAIContext &&
-      Boolean(file.extractedText),
-  );
   const previewFile = selectDisplayablePdf(session.project.fileAssets);
   const previewNotice = previewFile
     ? null
@@ -273,7 +267,6 @@ export default async function TrainingSessionPage({
       <div className="mt-6">
         <TrainingSessionClient
           sessionId={session.id}
-          projectId={session.project.id}
           projectName={session.project.name}
           initialStatus={session.status}
           initialPageIndex={Math.max(0, session.currentPageIndex - 1)}
@@ -281,7 +274,6 @@ export default async function TrainingSessionPage({
           initialElapsedSec={initialElapsedSec}
           initialRemainingSec={initialRemainingSec}
           initialPitchDurationSec={session.pitchDurationSec}
-          files={aiContextFiles}
           previewFile={previewFile}
           previewNotice={previewNotice}
           initialRecording={initialRecording}

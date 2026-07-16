@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { devLog, devWarn } from "@/lib/dev-log";
 import { useTrainingAbortGuard } from "@/lib/use-training-abort-guard";
 import { getTrainingFlowPath } from "@/lib/training-status";
-import { MicrophoneStatusBar } from "@/components/microphone-status-bar";
 import {
   usePitchPdfPreview,
   type PreviewNotice,
@@ -21,12 +20,14 @@ import { usePitchTranscript } from "@/lib/use-pitch-transcript";
 import {
   usePitchAnalysis,
   type TrainingAnalysis,
-  type TrainingCoverageItem,
 } from "@/lib/use-pitch-analysis";
+import { TrainingPitchSidebar } from "./training-session/training-pitch-sidebar";
+import { TrainingPitchStage } from "./training-session/training-pitch-stage";
+import { TrainingRecordingDialogs } from "./training-session/training-recording-dialogs";
+import { TrainingSessionOverlays } from "./training-session/training-session-overlays";
 
 type TrainingSessionClientProps = Readonly<{
   sessionId: string;
-  projectId: string;
   projectName: string;
   initialStatus: string;
   initialPageIndex: number;
@@ -34,7 +35,6 @@ type TrainingSessionClientProps = Readonly<{
   initialElapsedSec: number;
   initialRemainingSec: number;
   initialPitchDurationSec: number | null;
-  files: TrainingFile[];
   previewFile: TrainingFile | null;
   previewNotice: PreviewNotice | null;
   initialRecording: TrainingRecording | null;
@@ -45,15 +45,6 @@ type TrainingSessionClientProps = Readonly<{
 }>;
 
 const pitchLimitSec = 9 * 60;
-
-function formatDuration(totalSec: number) {
-  const minutes = Math.floor(totalSec / 60)
-    .toString()
-    .padStart(2, "0");
-  const seconds = (totalSec % 60).toString().padStart(2, "0");
-
-  return `${minutes}:${seconds}`;
-}
 
 function getElapsedSec(startedAt: string | null, fallback: number) {
   if (!startedAt) {
@@ -76,28 +67,6 @@ function isEditableOrClickableTarget(target: EventTarget | null) {
       'input, textarea, select, button, a, [contenteditable="true"], [role="button"]',
     ),
   );
-}
-
-function stringifyAnalysisValue(value: unknown) {
-  if (value === null || value === undefined || value === "") {
-    return "暂无";
-  }
-
-  if (typeof value === "string" || typeof value === "number") {
-    return String(value);
-  }
-
-  return JSON.stringify(value);
-}
-
-function getCoverageLabel(value: TrainingCoverageItem["covered"]) {
-  const labels: Record<TrainingCoverageItem["covered"], string> = {
-    true: "已覆盖",
-    false: "未覆盖",
-    partial: "部分覆盖",
-  };
-
-  return labels[value] ?? value;
 }
 
 export function TrainingSessionClient({
@@ -153,18 +122,14 @@ export function TrainingSessionClient({
     recordingId: initialRecording?.id ?? "",
     initialTranscript: initialRecording?.transcript ?? null,
   });
-  const {
-    analysis,
-    isAnalysisLoading,
-    analysisMessage,
-    generateAnalysis,
-  } = usePitchAnalysis({
-    sessionId,
-    isEnded,
-    transcript,
-    transcribeStatus,
-    initialAnalysis,
-  });
+  const { analysis, isAnalysisLoading, analysisMessage, generateAnalysis } =
+    usePitchAnalysis({
+      sessionId,
+      isEnded,
+      transcript,
+      transcribeStatus,
+      initialAnalysis,
+    });
   const {
     recordingStatus,
     recordingMessage,
@@ -531,10 +496,7 @@ export function TrainingSessionClient({
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for future use
   function beginPrepCountdown() {
-    if (
-      status === "CREATED" &&
-      recordingStatus === "UNDECIDED"
-    ) {
+    if (status === "CREATED" && recordingStatus === "UNDECIDED") {
       openRecordingPrepDialog();
       setMessage("请先开启麦克风，或明确选择暂不录音后再开始路演。");
       return;
@@ -568,10 +530,7 @@ export function TrainingSessionClient({
   }
 
   async function startPitch() {
-    if (
-      status === "CREATED" &&
-      recordingStatus === "UNDECIDED"
-    ) {
+    if (status === "CREATED" && recordingStatus === "UNDECIDED") {
       openRecordingPrepDialog();
       setMessage("请先开启麦克风，或明确选择暂不录音后再开始路演。");
       return;
@@ -641,7 +600,6 @@ export function TrainingSessionClient({
             error: err instanceof Error ? err.message : String(err),
           });
         });
-
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "开始路演失败。");
     } finally {
@@ -742,908 +700,123 @@ export function TrainingSessionClient({
     void endPitch();
   }, [endPitch, isPitching, remainingSec]);
 
+  const handleStartTranscriptEditing = useCallback(() => {
+    if (!transcript) {
+      return;
+    }
+
+    setTranscriptDraft(transcript.text);
+    setIsTranscriptEditing(true);
+    setTranscriptMessage("");
+  }, [
+    setIsTranscriptEditing,
+    setTranscriptDraft,
+    setTranscriptMessage,
+    transcript,
+  ]);
+
+  const handleCancelTranscriptEditing = useCallback(() => {
+    if (!transcript) {
+      return;
+    }
+
+    setTranscriptDraft(transcript.text);
+    setIsTranscriptEditing(false);
+    setTranscriptMessage("");
+  }, [
+    setIsTranscriptEditing,
+    setTranscriptDraft,
+    setTranscriptMessage,
+    transcript,
+  ]);
+
   const shellClassName = isBigScreenMode
     ? "fixed inset-0 z-50 grid h-screen w-screen gap-3 overflow-hidden bg-slate-950 p-3 text-white"
     : "grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]";
-  const mainPanelClassName = isBigScreenMode
-    ? "flex min-h-0 flex-col rounded-lg border border-slate-700 bg-slate-900/95 p-3 shadow-2xl"
-    : "rounded-lg border border-slate-200 bg-white p-6 shadow-sm";
-  const headerClassName = isBigScreenMode
-    ? "flex flex-col gap-3 border-b border-slate-700 pb-3 sm:flex-row sm:items-start sm:justify-between"
-    : "flex flex-col gap-4 border-b border-slate-200 pb-5 sm:flex-row sm:items-start sm:justify-between";
-  const timerClassName =
-    remainingSec <= 60
-      ? isBigScreenMode
-        ? "mt-1 text-5xl font-semibold text-red-300"
-        : "mt-2 text-4xl font-semibold text-red-700"
-      : isBigScreenMode
-        ? "mt-1 text-5xl font-semibold text-white"
-        : "mt-2 text-4xl font-semibold text-slate-950";
-  const previewPanelClassName = isBigScreenMode
-    ? "mt-3 grid min-h-0 flex-1 place-items-center rounded-lg border border-slate-700 bg-slate-950 p-2 text-center"
-    : "mt-5 grid min-h-[calc(100vh-310px)] place-items-center rounded-lg border border-slate-200 bg-slate-100 p-4 text-center";
-  const previewScrollerClassName = isBigScreenMode
-    ? "grid h-full min-h-0 place-items-center overflow-hidden rounded-md border border-slate-700 bg-slate-950 p-2"
-    : "grid h-[calc(100vh-390px)] min-h-96 place-items-center overflow-hidden rounded-md border border-slate-200 bg-slate-200 p-4";
-  const secondaryPanelClassName = isBigScreenMode
-    ? "rounded-lg border border-slate-700 bg-slate-900/90 p-4 shadow-sm"
-    : "rounded-lg border border-slate-200 bg-white p-5 shadow-sm";
-  const secondaryTitleClassName = isBigScreenMode
-    ? "text-sm font-semibold text-white"
-    : "text-base font-semibold text-slate-950";
-  const mutedTextClassName = isBigScreenMode
-    ? "text-slate-300"
-    : "text-slate-500";
-  const valueTextClassName = isBigScreenMode
-    ? "font-medium text-white"
-    : "font-medium text-slate-950";
-  const canShowTranscriptEditor =
-    isEnded && recordingStatus === "SAVED" && Boolean(recordingId);
-  const transcriptBoxClassName = isBigScreenMode
-    ? "mt-4 rounded-md border border-slate-700 bg-slate-950/60 p-3"
-    : "mt-4 rounded-md border border-slate-200 bg-slate-50 p-3";
-  const transcriptTextClassName = isBigScreenMode
-    ? "whitespace-pre-wrap text-sm leading-6 text-slate-100"
-    : "whitespace-pre-wrap text-sm leading-6 text-slate-700";
 
   return (
     <>
-      {!isGuardResolved ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <p className="text-xl font-semibold text-white">正在结束训练...</p>
-        </div>
-      ) : null}
-      {isGuardResolved && prepCountdown !== null ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <p className="text-6xl font-bold text-white">
-            {prepCountdown >= 4
-              ? "请准备"
-              : prepCountdown >= 1
-                ? String(prepCountdown)
-                : "开始路演"}
-          </p>
-        </div>
-      ) : null}
+      <TrainingSessionOverlays
+        isGuardResolved={isGuardResolved}
+        prepCountdown={prepCountdown}
+      />
       <div ref={trainingShellRef} className={shellClassName}>
-      <section className={mainPanelClassName}>
-        <div className={headerClassName}>
-          <div>
-            {isBigScreenMode ? (
-              <p className="text-xs font-medium text-slate-400">
-                {projectName}
-              </p>
-            ) : null}
-            <p
-              className={
-                isBigScreenMode
-                  ? "hidden"
-                  : `text-xs font-medium ${mutedTextClassName}`
-              }
-            >
-              训练状态
-            </p>
-            <h2
-              className={
-                isBigScreenMode
-                  ? "mt-1 text-2xl font-semibold text-white"
-                  : "mt-2 text-xl font-semibold text-slate-950"
-              }
-            >
-              {statusLabel}
-            </h2>
-            <p
-              className={
-                isBigScreenMode
-                  ? "hidden"
-                  : "mt-2 text-sm text-slate-600"
-              }
-            >
-              {statusHint}
-            </p>
-            <div
-              className={
-                isBigScreenMode
-                  ? "hidden"
-                  : "mt-3 inline-flex rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700"
-              }
-            >
-              {recordingStatusLabel}
-            </div>
-          </div>
-          <div className="text-left sm:text-right">
-            <p className={`text-xs font-medium ${mutedTextClassName}`}>
-              9 分钟倒计时
-            </p>
-            <p className={timerClassName}>
-              {formatDuration(remainingSec)}
-            </p>
-            {isBigScreenMode ? (
-              <p className="mt-1 text-sm text-slate-300">{pageLabel}</p>
-            ) : null}
-          </div>
-        </div>
+        <TrainingPitchStage
+          projectName={projectName}
+          status={status}
+          statusLabel={statusLabel}
+          statusHint={statusHint}
+          recordingStatus={recordingStatus}
+          recordingStatusLabel={recordingStatusLabel}
+          remainingSec={remainingSec}
+          pageLabel={pageLabel}
+          message={message}
+          fullscreenMessage={fullscreenMessage}
+          previewFile={previewFile}
+          previewNotice={previewNotice}
+          compatiblePreviewUrl={compatiblePreviewUrl}
+          previewMode={previewMode}
+          previewContainerRef={previewContainerRef}
+          canvasRef={canvasRef}
+          isPdfLoading={isPdfLoading}
+          pdfError={pdfError}
+          currentPageNumber={currentPageNumber}
+          isBigScreenMode={isBigScreenMode}
+          isSubmitting={isSubmitting}
+          isPitching={isPitching}
+          canGoPrev={canGoPrev}
+          canGoNext={canGoNext}
+          onPreviewModeChange={setPreviewMode}
+          onOpenRecordingReenableConfirm={openRecordingReenableConfirm}
+          onPrepareRecording={prepareRecording}
+          onEndPitch={endPitch}
+          onChangePage={changePage}
+        />
 
-        {message ? (
-          <p className="mt-5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {message}
-          </p>
+        {!isBigScreenMode ? (
+          <TrainingPitchSidebar
+            elapsedSec={elapsedSec}
+            pageLabel={pageLabel}
+            recordingStatus={recordingStatus}
+            recordingStatusLabel={recordingStatusLabel}
+            recordingMessage={recordingMessage}
+            recordingPlaybackUrl={recordingPlaybackUrl}
+            recordingId={recordingId}
+            isEnded={isEnded}
+            transcript={transcript}
+            transcriptDraft={transcriptDraft}
+            isTranscriptEditing={isTranscriptEditing}
+            isTranscriptSaving={isTranscriptSaving}
+            transcriptMessage={transcriptMessage}
+            transcribeStatus={transcribeStatus}
+            transcribeErrorMessage={transcribeErrorMessage}
+            showAnalysisPanel={showAnalysisPanel}
+            analysis={analysis}
+            analysisMessage={analysisMessage}
+            isAnalysisLoading={isAnalysisLoading}
+            onRetryTranscribe={triggerTranscribe}
+            onStartTranscriptEditing={handleStartTranscriptEditing}
+            onCancelTranscriptEditing={handleCancelTranscriptEditing}
+            onTranscriptDraftChange={setTranscriptDraft}
+            onSaveTranscript={saveTranscript}
+            onGenerateAnalysis={generateAnalysis}
+          />
         ) : null}
 
-        {fullscreenMessage ? (
-          <p
-            className={
-              isBigScreenMode
-                ? "mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100"
-                : "mt-5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-            }
-          >
-            {fullscreenMessage}
-          </p>
-        ) : null}
-
-        <div className={previewPanelClassName}>
-          {previewFile ? (
-            <div className="grid h-full min-h-0 w-full grid-rows-[auto_minmax(0,1fr)] gap-3">
-              <div className="flex flex-col gap-2 text-left sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p
-                    className={
-                      isBigScreenMode
-                        ? "text-sm font-medium text-white"
-                        : "text-sm font-medium text-slate-950"
-                    }
-                  >
-                    {previewFile.originalName}
-                  </p>
-                  <p
-                    className={
-                      isBigScreenMode
-                        ? "mt-1 text-xs text-slate-300"
-                        : "mt-1 text-xs text-slate-500"
-                    }
-                  >
-                    {previewFile.displaySource === "POWERPOINT_PREVIEW"
-                      ? "路演展示材料：PPT/PPTX 已生成展示 PDF"
-                      : "路演展示材料：PDF 原文件"}
-                  </p>
-                  <p
-                    className={
-                      isBigScreenMode
-                        ? "mt-1 text-xs text-slate-300"
-                        : "mt-1 text-xs text-slate-500"
-                    }
-                  >
-                    PDF 单页预览，当前 {pageLabel}
-                  </p>
-                  <p
-                    className={
-                      isBigScreenMode
-                        ? "mt-1 text-xs text-slate-400"
-                        : "mt-1 text-xs text-slate-500"
-                    }
-                  >
-                    如预览仍异常，可使用原始 PDF 打开检查。
-                  </p>
-                </div>
-                <div className="hidden">
-                  <div
-                    className={
-                      isBigScreenMode
-                        ? "inline-flex rounded-md border border-slate-700 bg-slate-900 p-1"
-                        : "inline-flex rounded-md border border-slate-200 bg-white p-1"
-                    }
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setPreviewMode("standard")}
-                      className={
-                        previewMode === "standard"
-                          ? "rounded px-2.5 py-1 text-xs font-medium text-white bg-slate-950"
-                          : isBigScreenMode
-                            ? "rounded px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
-                            : "rounded px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
-                      }
-                    >
-                      标准预览
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPreviewMode("compatible")}
-                      className={
-                        previewMode === "compatible"
-                          ? "rounded px-2.5 py-1 text-xs font-medium text-white bg-slate-950"
-                          : isBigScreenMode
-                            ? "rounded px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
-                            : "rounded px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
-                      }
-                    >
-                      兼容预览
-                    </button>
-                  </div>
-                  <span className="inline-flex w-fit rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-800">
-                    PDF
-                  </span>
-                </div>
-              </div>
-              <div
-                ref={previewContainerRef}
-                className={previewScrollerClassName}
-              >
-                {previewMode === "compatible" && compatiblePreviewUrl ? (
-                  <div className="grid h-full min-h-0 w-full grid-rows-[minmax(0,1fr)_auto]">
-                    <iframe
-                      title={`${previewFile.originalName} 兼容预览`}
-                      src={compatiblePreviewUrl}
-                      className="h-full min-h-0 w-full border-0 bg-white"
-                    />
-                    <p
-                      className={
-                        isBigScreenMode
-                          ? "px-3 py-2 text-left text-xs text-slate-300"
-                          : "bg-white px-3 py-2 text-left text-xs text-slate-600"
-                      }
-                    >
-                      兼容模式主要用于查看显示效果；系统页码和训练事件仍以外层按钮、键盘和翻页笔为准。
-                    </p>
-                  </div>
-                ) : isPdfLoading ? (
-                  <p className="rounded-md bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
-                    PDF 加载中...
-                  </p>
-                ) : pdfError ? (
-                  <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    {pdfError}
-                  </p>
-                ) : (
-                  <canvas
-                    ref={canvasRef}
-                    className="max-w-full rounded-sm bg-white shadow"
-                  />
-                )}
-              </div>
-            </div>
-          ) : previewNotice ? (
-            <div>
-              <p
-                className={`rounded-md border px-4 py-3 text-sm leading-6 ${
-                  previewNotice.type === "failed"
-                    ? isBigScreenMode
-                      ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
-                      : "border-amber-200 bg-amber-50 text-amber-800"
-                    : isBigScreenMode
-                      ? "border-slate-700 bg-slate-900 text-slate-300"
-                      : "border-dashed border-slate-300 text-slate-600"
-                }`}
-              >
-                {previewNotice.message}
-              </p>
-              <p className="mt-4 text-6xl font-semibold text-slate-950">
-                {currentPageNumber}
-              </p>
-              <p className="mt-3 text-sm text-slate-600">当前页码</p>
-            </div>
-          ) : (
-            <div>
-              <p className="text-sm font-medium text-slate-500">
-                当前暂无可预览 PDF，已显示页码占位
-              </p>
-              <p className="mt-4 text-6xl font-semibold text-slate-950">
-                {currentPageNumber}
-              </p>
-              <p className="mt-3 text-sm text-slate-600">当前页码</p>
-            </div>
-          )}
-        </div>
-
-        <div
-          className={
-            isBigScreenMode
-              ? "mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
-              : "mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
-          }
-        >
-          <div className="flex flex-wrap gap-2">
-            {status === "CREATED" && recordingStatus === "OPTED_OUT" ? (
-              <button
-                type="button"
-                onClick={openRecordingReenableConfirm}
-                disabled={isSubmitting}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                重新启用录音
-              </button>
-            ) : status === "CREATED" ? (
-              <button
-                type="button"
-                onClick={() => void prepareRecording()}
-                disabled={isSubmitting || recordingStatus === "READY_TO_RECORD"}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                {recordingStatus === "READY_TO_RECORD"
-                  ? "麦克风已就绪"
-                  : "准备录音"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={endPitch}
-              disabled={!isPitching || isSubmitting}
-              className="inline-flex h-10 items-center justify-center rounded-md border border-red-200 bg-red-50 px-4 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              结束路演
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <MicrophoneStatusBar />
-            <button
-              type="button"
-              onClick={() => void changePage("PREV")}
-              disabled={!canGoPrev || isSubmitting}
-              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              上一页
-            </button>
-            <button
-              type="button"
-              onClick={() => void changePage("NEXT")}
-              disabled={!canGoNext || isSubmitting}
-              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              下一页
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {!isBigScreenMode ? (
-      <aside
-        className={
-          isBigScreenMode
-            ? "grid min-h-0 gap-3 overflow-hidden lg:grid-rows-[auto_minmax(0,1fr)]"
-            : "grid gap-4"
-        }
-      >
-        <section className={secondaryPanelClassName}>
-          <h2 className={secondaryTitleClassName}>路演信息</h2>
-          <dl className="mt-4 grid gap-3 text-sm">
-            <div
-              className={
-                isBigScreenMode
-                  ? "flex items-center justify-between border-b border-slate-700 pb-3"
-                  : "flex items-center justify-between border-b border-slate-100 pb-3"
-              }
-            >
-              <dt className={mutedTextClassName}>路演用时</dt>
-              <dd className={valueTextClassName}>
-                {formatDuration(elapsedSec)}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between">
-              <dt className={mutedTextClassName}>当前页码</dt>
-              <dd className={valueTextClassName}>
-                {pageLabel}
-              </dd>
-            </div>
-            <div
-              className={
-                isBigScreenMode
-                  ? "flex items-center justify-between border-t border-slate-700 pt-3"
-                  : "flex items-center justify-between border-t border-slate-100 pt-3"
-              }
-            >
-              <dt className={mutedTextClassName}>录音状态</dt>
-              <dd className={valueTextClassName}>{recordingStatusLabel}</dd>
-            </div>
-          </dl>
-          {recordingMessage ? (
-            <p
-              className={
-                isBigScreenMode
-                  ? "mt-3 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-xs leading-5 text-slate-300"
-                  : "mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600"
-              }
-            >
-              {recordingMessage}
-            </p>
-          ) : null}
-          {recordingPlaybackUrl ? (
-            <audio
-              controls
-              src={recordingPlaybackUrl}
-              className="mt-3 w-full"
-            >
-              <track kind="captions" />
-            </audio>
-          ) : null}
-          {transcribeStatus !== "idle" ? (
-            <div className={transcriptBoxClassName}>
-              <div className="flex items-center justify-between">
-                <h3
-                  className={
-                    isBigScreenMode
-                      ? "text-sm font-semibold text-white"
-                      : "text-sm font-semibold text-slate-950"
-                  }
-                >
-                  自动转写
-                </h3>
-                {transcribeStatus === "transcribing" ? (
-                  <span
-                    className={
-                      isBigScreenMode
-                        ? "text-xs text-blue-300"
-                        : "text-xs text-blue-600"
-                    }
-                  >
-                    转写中…
-                  </span>
-                ) : transcribeStatus === "completed" ? (
-                  <span
-                    className={
-                      isBigScreenMode
-                        ? "text-xs text-green-300"
-                        : "text-xs text-green-600"
-                    }
-                  >
-                    转写完成
-                  </span>
-                ) : (
-                  <span
-                    className={
-                      isBigScreenMode
-                        ? "text-xs text-red-300"
-                        : "text-xs text-red-600"
-                    }
-                  >
-                    转写失败
-                  </span>
-                )}
-              </div>
-              {transcribeStatus === "transcribing" ? (
-                <p
-                  className={
-                    isBigScreenMode
-                      ? "mt-2 text-xs leading-5 text-slate-300"
-                      : "mt-2 text-xs leading-5 text-slate-600"
-                  }
-                >
-                  正在自动转写路演语音内容，请稍候…
-                </p>
-              ) : transcribeStatus === "failed" ? (
-                <div className="mt-2">
-                  <p
-                    className={
-                      isBigScreenMode
-                        ? "text-xs leading-5 text-red-300"
-                        : "text-xs leading-5 text-red-600"
-                    }
-                  >
-                    {transcribeErrorMessage || "自动转写失败，可重试。"}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => void triggerTranscribe()}
-                    className={
-                      isBigScreenMode
-                        ? "mt-2 rounded-md border border-blue-500 bg-blue-500/20 px-3 py-1 text-xs text-blue-300 hover:bg-blue-500/30"
-                        : "mt-2 rounded-md border border-blue-300 bg-blue-50 px-3 py-1 text-xs text-blue-700 hover:bg-blue-100"
-                    }
-                  >
-                    重试转写
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {canShowTranscriptEditor ? (
-            <div className={transcriptBoxClassName}>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <h3
-                  className={
-                    isBigScreenMode
-                      ? "text-sm font-semibold text-white"
-                      : "text-sm font-semibold text-slate-950"
-                  }
-                >
-                  转写文本
-                </h3>
-                {transcript && !isTranscriptEditing ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTranscriptDraft(transcript.text);
-                      setIsTranscriptEditing(true);
-                      setTranscriptMessage("");
-                    }}
-                    className={
-                      isBigScreenMode
-                        ? "inline-flex h-8 items-center justify-center rounded-md border border-slate-600 px-3 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-800"
-                        : "inline-flex h-8 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                    }
-                  >
-                    编辑转写文本
-                  </button>
-                ) : null}
-              </div>
-              {isTranscriptEditing ? (
-                <div className="mt-3 grid gap-3">
-                  {!transcript ? (
-                    <p
-                      className={
-                        isBigScreenMode
-                          ? "text-xs leading-5 text-slate-300"
-                          : "text-xs leading-5 text-slate-600"
-                      }
-                    >
-                      当前暂未接入自动转写，可先粘贴人工整理文本。
-                    </p>
-                  ) : null}
-                  <textarea
-                    value={transcriptDraft}
-                    onChange={(event) => setTranscriptDraft(event.target.value)}
-                    rows={isBigScreenMode ? 5 : 7}
-                    className={
-                      isBigScreenMode
-                        ? "w-full resize-y rounded-md border border-slate-600 bg-slate-950 p-3 text-sm leading-6 text-white outline-none transition-colors placeholder:text-slate-500 focus:border-slate-300"
-                        : "w-full resize-y rounded-md border border-slate-300 bg-white p-3 text-sm leading-6 text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-slate-500"
-                    }
-                    placeholder="粘贴或编辑人工整理后的路演转写文本"
-                  />
-                  <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                    {transcript ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTranscriptDraft(transcript.text);
-                          setIsTranscriptEditing(false);
-                          setTranscriptMessage("");
-                        }}
-                        disabled={isTranscriptSaving}
-                        className={
-                          isBigScreenMode
-                            ? "inline-flex h-9 items-center justify-center rounded-md border border-slate-600 px-3 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-500"
-                            : "inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-                        }
-                      >
-                        取消编辑
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => void saveTranscript()}
-                      disabled={isTranscriptSaving}
-                      className="inline-flex h-9 items-center justify-center rounded-md bg-slate-950 px-3 text-xs font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                    >
-                      {isTranscriptSaving ? "保存中..." : "保存转写文本"}
-                    </button>
-                  </div>
-                </div>
-              ) : transcript ? (
-                <p className={`${transcriptTextClassName} mt-3`}>
-                  {transcript.text}
-                </p>
-              ) : null}
-              {transcriptMessage ? (
-                <p
-                  className={
-                    isBigScreenMode
-                      ? "mt-3 text-xs leading-5 text-slate-300"
-                      : "mt-3 text-xs leading-5 text-slate-600"
-                  }
-                >
-                  {transcriptMessage}
-                </p>
-              ) : null}
-            </div>
-          ) : isEnded &&
-            (recordingStatus === "OPTED_OUT" ||
-              recordingStatus === "PERMISSION_DENIED" ||
-              recordingStatus === "UNSUPPORTED") ? (
-            <p
-              className={
-                isBigScreenMode
-                  ? "mt-3 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-xs leading-5 text-slate-300"
-                  : "mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600"
-              }
-            >
-              本次未启用录音，暂无转写文本。
-            </p>
-          ) : null}
-        </section>
-
-        {showAnalysisPanel ? (
-        <section className={secondaryPanelClassName}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h2 className={secondaryTitleClassName}>路演表现分析</h2>
-              <p
-                className={
-                  isBigScreenMode
-                    ? "mt-1 text-xs leading-5 text-slate-300"
-                    : "mt-1 text-xs leading-5 text-slate-600"
-                }
-              >
-                基于本轮转写文本、翻页事件和项目上下文生成。
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void generateAnalysis()}
-              disabled={isAnalysisLoading || !isEnded || !transcript?.text.trim()}
-              className="inline-flex h-9 items-center justify-center rounded-md bg-slate-950 px-3 text-xs font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {isAnalysisLoading
-                ? "分析中..."
-                : analysis
-                  ? "重新生成分析"
-                  : "生成路演表现分析"}
-            </button>
-          </div>
-
-          {!isEnded ? (
-            <p
-              className={
-                isBigScreenMode
-                  ? "mt-3 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-xs leading-5 text-slate-300"
-                  : "mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600"
-              }
-            >
-              结束路演后可生成分析。
-            </p>
-          ) : !transcript?.text.trim() ? (
-            <p
-              className={
-                isBigScreenMode
-                  ? "mt-3 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-xs leading-5 text-slate-300"
-                  : "mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600"
-              }
-            >
-              请先保存转写文本，再生成路演表现分析。
-            </p>
-          ) : null}
-
-          {analysisMessage ? (
-            <p
-              className={
-                isBigScreenMode
-                  ? "mt-3 text-xs leading-5 text-slate-300"
-                  : "mt-3 text-xs leading-5 text-slate-600"
-              }
-            >
-              {analysisMessage}
-            </p>
-          ) : null}
-
-          {analysis?.status === "FAILED" ? (
-            <p className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-700">
-              {analysis.errorMessage ?? "路演表现分析生成失败。"}
-            </p>
-          ) : null}
-
-          {analysis?.status === "COMPLETED" ? (
-            <div className="mt-4 grid gap-4 text-sm">
-              <div
-                className={
-                  isBigScreenMode
-                    ? "rounded-md border border-slate-700 bg-slate-950/60 p-3"
-                    : "rounded-md border border-slate-200 bg-slate-50 p-3"
-                }
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className={mutedTextClassName}>路演表现分</span>
-                  <strong
-                    className={
-                      isBigScreenMode
-                        ? "text-xl font-semibold text-white"
-                        : "text-xl font-semibold text-slate-950"
-                    }
-                  >
-                    {analysis.overallScore ?? "-"} / 100
-                  </strong>
-                </div>
-                <p
-                  className={
-                    isBigScreenMode
-                      ? "mt-3 leading-6 text-slate-100"
-                      : "mt-3 leading-6 text-slate-700"
-                  }
-                >
-                  {analysis.summary}
-                </p>
-              </div>
-
-              <div className="grid gap-3">
-                <h3 className={secondaryTitleClassName}>优点</h3>
-                <ul className="grid gap-2">
-                  {analysis.strengths.map((item) => (
-                    <li key={item} className={transcriptTextClassName}>
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="grid gap-3">
-                <h3 className={secondaryTitleClassName}>问题</h3>
-                <ul className="grid gap-2">
-                  {analysis.weaknesses.map((item) => (
-                    <li key={item} className={transcriptTextClassName}>
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="grid gap-3">
-                <h3 className={secondaryTitleClassName}>改进建议</h3>
-                <ul className="grid gap-2">
-                  {analysis.suggestions.map((item) => (
-                    <li key={item} className={transcriptTextClassName}>
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="grid gap-3">
-                <h3 className={secondaryTitleClassName}>内容覆盖情况</h3>
-                <div className="grid gap-2">
-                  {analysis.coverage.map((item) => (
-                    <div
-                      key={item.item}
-                      className={
-                        isBigScreenMode
-                          ? "rounded-md border border-slate-700 bg-slate-950/60 p-3"
-                          : "rounded-md border border-slate-200 bg-white p-3"
-                      }
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className={valueTextClassName}>{item.item}</span>
-                        <span className={mutedTextClassName}>
-                          {getCoverageLabel(item.covered)}
-                        </span>
-                      </div>
-                      <p className={`${transcriptTextClassName} mt-2`}>
-                        证据：{item.evidence}
-                      </p>
-                      <p className={`${transcriptTextClassName} mt-1`}>
-                        建议：{item.suggestion}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid gap-3">
-                <h3 className={secondaryTitleClassName}>时间节奏</h3>
-                <p className={transcriptTextClassName}>
-                  {stringifyAnalysisValue(analysis.timing.assessment)}
-                </p>
-                <p className={transcriptTextClassName}>
-                  建议：{stringifyAnalysisValue(analysis.timing.suggestion)}
-                </p>
-              </div>
-
-              <div className="grid gap-3">
-                <h3 className={secondaryTitleClassName}>翻页节奏</h3>
-                <p className={transcriptTextClassName}>
-                  {stringifyAnalysisValue(analysis.slideSync.assessment)}
-                </p>
-                <p className={transcriptTextClassName}>
-                  建议：{stringifyAnalysisValue(analysis.slideSync.suggestion)}
-                </p>
-              </div>
-
-              <div className="grid gap-3">
-                <h3 className={secondaryTitleClassName}>可能被追问的问题</h3>
-                <ul className="grid gap-2">
-                  {analysis.riskQuestions.map((item) => (
-                    <li key={item} className={transcriptTextClassName}>
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          ) : null}
-        </section>
-        ) : null}
-
-      </aside>
-      ) : null}
-
-      {showRecordingPrepDialog && status === "CREATED" ? (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/70 px-4">
-          <section className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-6 shadow-2xl">
-            <p className="text-xs font-medium text-slate-500">录音准备</p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-950">
-              开始前请确认麦克风
-            </h2>
-            {showRecordingOptOutConfirm ? (
-              <>
-                <p className="mt-4 text-sm leading-6 text-slate-600">
-                  确认不启用录音？本次路演将无法生成语音转写和表达分析，仅记录翻页和用时。
-                </p>
-                <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    onClick={closeRecordingOptOutConfirm}
-                    className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                  >
-                    返回开启麦克风
-                  </button>
-                  <button
-                    type="button"
-                    onClick={confirmRecordingOptOut}
-                    className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800"
-                  >
-                    确认不录音
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="mt-4 text-sm leading-6 text-slate-600">
-                  为保证训练顺利进行，本次路演建议开启麦克风录音。请先允许麦克风权限，系统将在正式开始路演后自动录制。
-                </p>
-                {recordingMessage ? (
-                  <p className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">
-                    {recordingMessage}
-                  </p>
-                ) : null}
-                <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    onClick={openRecordingOptOutConfirm}
-                    className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                  >
-                    暂不录音，继续训练
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void prepareRecording()}
-                    className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800"
-                  >
-                    开启麦克风并准备训练
-                  </button>
-                </div>
-              </>
-            )}
-          </section>
-        </div>
-      ) : null}
-
-      {showRecordingReenableConfirm && status === "CREATED" ? (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/70 px-4">
-          <section className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-6 shadow-2xl">
-            <p className="text-xs font-medium text-slate-500">重新启用录音</p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-950">
-              本轮将启用录音
-            </h2>
-            <p className="mt-4 text-sm leading-6 text-slate-600">
-              启用后，本轮路演将进行录音并在结束后保存。是否继续？
-            </p>
-            <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={closeRecordingReenableConfirm}
-                className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={reenableRecording}
-                className="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800"
-              >
-                继续启用录音
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
-    </div>
+        <TrainingRecordingDialogs
+          status={status}
+          recordingMessage={recordingMessage}
+          showRecordingPrepDialog={showRecordingPrepDialog}
+          showRecordingOptOutConfirm={showRecordingOptOutConfirm}
+          showRecordingReenableConfirm={showRecordingReenableConfirm}
+          onOpenRecordingOptOutConfirm={openRecordingOptOutConfirm}
+          onCloseRecordingOptOutConfirm={closeRecordingOptOutConfirm}
+          onConfirmRecordingOptOut={confirmRecordingOptOut}
+          onPrepareRecording={prepareRecording}
+          onCloseRecordingReenableConfirm={closeRecordingReenableConfirm}
+          onReenableRecording={reenableRecording}
+        />
+      </div>
     </>
   );
 }
