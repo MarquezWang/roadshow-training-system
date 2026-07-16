@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PREFERRED_DEVICE_KEY } from "@/lib/use-audio-input";
+import { createUploadIdempotencyKey } from "@/lib/client-upload-idempotency";
 import type { TrainingTranscript } from "@/lib/use-pitch-transcript";
 
 export type TrainingRecording = {
@@ -126,6 +127,7 @@ export function usePitchRecording({
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingStartedAtRef = useRef<Date | null>(null);
   const recordingMimeTypeRef = useRef("");
+  const recordingUploadKeyRef = useRef("");
   const hasHandledPitchRecordingPreferenceRef = useRef(false);
 
   const stopMediaStream = useCallback(() => {
@@ -188,6 +190,7 @@ export function usePitchRecording({
     recordingChunksRef.current = [];
     recordingStartedAtRef.current = null;
     recordingMimeTypeRef.current = "";
+    recordingUploadKeyRef.current = "";
     setRecordingStatus("OPTED_OUT");
     setRecordingPlaybackUrl("");
     setRecordingMessage("本轮未启用录音，仅记录翻页和用时。");
@@ -204,7 +207,6 @@ export function usePitchRecording({
         return;
       }
 
-      const formData = new FormData();
       const mimeType =
         blob.type || recordingMimeTypeRef.current || "audio/webm";
       const extension = getRecordingFileExtension(mimeType);
@@ -214,18 +216,10 @@ export function usePitchRecording({
             Math.round((endedAt.getTime() - startedAt.getTime()) / 1000),
           )
         : null;
-
-      formData.append("file", blob, `pitch-recording.${extension}`);
-      formData.append("phase", "PITCH");
-      formData.append("endedAt", endedAt.toISOString());
-
-      if (startedAt) {
-        formData.append("startedAt", startedAt.toISOString());
-      }
-
-      if (durationSec !== null) {
-        formData.append("durationSec", String(durationSec));
-      }
+      const uploadKey =
+        recordingUploadKeyRef.current ||
+        createUploadIdempotencyKey("pitch-recording");
+      recordingUploadKeyRef.current = uploadKey;
 
       setRecordingStatus("SAVING");
       setRecordingMessage("录音上传保存中...");
@@ -233,7 +227,23 @@ export function usePitchRecording({
       try {
         const response = await fetch(`/training/${sessionId}/recordings`, {
           method: "POST",
-          body: formData,
+          headers: {
+            "Content-Type": mimeType,
+            "Idempotency-Key": uploadKey,
+            "X-Recording-Upload": "raw-v1",
+            "X-Recording-Phase": "PITCH",
+            "X-Recording-Name": encodeURIComponent(
+              `pitch-recording.${extension}`,
+            ),
+            "X-Recording-Ended-At": endedAt.toISOString(),
+            ...(startedAt
+              ? { "X-Recording-Started-At": startedAt.toISOString() }
+              : {}),
+            ...(durationSec !== null
+              ? { "X-Recording-Duration-Sec": String(durationSec) }
+              : {}),
+          },
+          body: blob,
         });
 
         if (!response.ok) {
@@ -252,6 +262,7 @@ export function usePitchRecording({
         setRecordingMessage("录音已保存。");
         setRecordingId(body.recording.id);
         setRecordingPlaybackUrl(body.recording.playbackUrl);
+        recordingUploadKeyRef.current = "";
         onRecordingSaved?.(body.recording);
         return body.recording.id;
       } catch (error) {
@@ -314,6 +325,8 @@ export function usePitchRecording({
       recordingStartedAtRef.current = new Date();
       recordingMimeTypeRef.current =
         recorder.mimeType || mimeType || "audio/webm";
+      recordingUploadKeyRef.current =
+        createUploadIdempotencyKey("pitch-recording");
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {

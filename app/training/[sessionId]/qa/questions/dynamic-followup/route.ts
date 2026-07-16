@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { callAI } from "@/lib/ai";
-import { buildProjectAIContext } from "@/lib/project-context";
+import {
+  buildProjectAIContext,
+  parseProjectAIContextSnapshot,
+} from "@/lib/project-context";
 import { devLog, devWarn } from "@/lib/dev-log";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
   createOrReturnDynamicQuestion,
+  DynamicFollowupSessionClosedError,
   DYNAMIC_FOLLOWUP_SOURCE,
   findExistingDynamicQuestion,
   serializeDynamicQuestion,
   type SerializedDynamicQuestion,
 } from "@/lib/dynamic-followup-question";
+import { dynamicQuestionTrainingStatuses } from "@/lib/training-status";
+import { acquireAsyncJob, releaseAsyncJob } from "@/lib/async-job";
 import {
   buildDynamicFollowupProjectContext,
   evaluateDynamicFollowupPreflight,
@@ -87,7 +93,8 @@ interface DebugInfo {
   usedStage?: "main" | "mismatch" | "content";
 }
 
-const dynamicFollowupInFlightSessionIds = new Set<string>();
+const dynamicFollowupJobKey = (sessionId: string) =>
+  `dynamic-followup:${sessionId}`;
 
 export async function POST(
   request: NextRequest,
@@ -100,6 +107,8 @@ export async function POST(
   const debugInfo: DebugInfo = {};
   let debug = false;
   let hasGenerationLock = false;
+  let jobOwnerToken: string | null = null;
+  let jobFailed = false;
 
   try {
     // 实验开关
@@ -162,7 +171,12 @@ export async function POST(
     // 校验 session
     const session = await prisma.trainingSession.findUnique({
       where: { id: sessionId },
-      select: { id: true, projectId: true },
+      select: {
+        id: true,
+        projectId: true,
+        status: true,
+        projectContextSnapshot: true,
+      },
     });
 
     if (!session) {
@@ -193,7 +207,13 @@ export async function POST(
     }
 
     // 查询 Pitch 转写
-    if (dynamicFollowupInFlightSessionIds.has(sessionId)) {
+    const acquiredJob = await acquireAsyncJob({
+      jobKey: dynamicFollowupJobKey(sessionId),
+      jobType: "DYNAMIC_FOLLOWUP",
+      resourceId: sessionId,
+      leaseMs: 10 * 60_000,
+    });
+    if (!acquiredJob) {
       devLog("[dynamic-followup:POST] dynamic followup already in progress", {
         sessionId,
       });
@@ -202,7 +222,7 @@ export async function POST(
       );
     }
 
-    dynamicFollowupInFlightSessionIds.add(sessionId);
+    jobOwnerToken = acquiredJob.ownerToken;
     hasGenerationLock = true;
 
     const pitchTranscript = await prisma.trainingTranscript.findFirst({
@@ -299,12 +319,25 @@ export async function POST(
 
     let aiContext;
     try {
-      aiContext = await buildProjectAIContext(projectId);
+      aiContext =
+        parseProjectAIContextSnapshot(session.projectContextSnapshot) ??
+        (await buildProjectAIContext(projectId));
     } catch {
       devLog("[dynamic-followup:POST] project context not found, using minimal", {
         sessionId,
       });
       aiContext = null;
+    }
+
+    if (
+      !dynamicQuestionTrainingStatuses.includes(
+        session.status as (typeof dynamicQuestionTrainingStatuses)[number],
+      )
+    ) {
+      return NextResponse.json(
+        buildDebugResponse({ reason: "session_not_open_for_followup" }),
+        { status: 409 },
+      );
     }
 
     // 填充项目上下文 debug 信息
@@ -772,6 +805,25 @@ ${otherQuestionsText.slice(0, 800)}`;
       buildSuccessResponse(createdQuestion),
     );
   } catch (error) {
+    if (error instanceof DynamicFollowupSessionClosedError) {
+      return NextResponse.json(
+        debug
+          ? {
+              ok: false,
+              skipped: true,
+              reason: "session_not_open_for_followup",
+              debug: debugInfo,
+            }
+          : {
+              ok: false,
+              skipped: true,
+              reason: "session_not_open_for_followup",
+            },
+        { status: 409 },
+      );
+    }
+
+    jobFailed = true;
     devWarn("[dynamic-followup:POST] unexpected error", {
       sessionId,
       error: String(error),
@@ -787,7 +839,11 @@ ${otherQuestionsText.slice(0, 800)}`;
     );
   } finally {
     if (hasGenerationLock) {
-      dynamicFollowupInFlightSessionIds.delete(sessionId);
+      await releaseAsyncJob({
+        jobKey: dynamicFollowupJobKey(sessionId),
+        ownerToken: jobOwnerToken,
+        status: jobFailed ? "FAILED" : "COMPLETED",
+      });
     }
   }
 }

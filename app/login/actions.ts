@@ -1,6 +1,6 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   authCookieName,
@@ -8,27 +8,23 @@ import {
   createAuthCookieValue,
   getLoginConfigError,
   isAuthEnabled,
+} from "@/lib/auth";
+import {
+  hashPassword,
+  passwordHashNeedsUpgrade,
   verifyAdminCredentials,
   verifyPasswordHash,
-} from "@/lib/auth";
+} from "@/lib/password";
 import { prisma } from "@/lib/prisma";
-
-function getSafeNext(value: FormDataEntryValue | null) {
-  const next = String(value ?? "/projects").trim();
-
-  if (!next.startsWith("/") || next.startsWith("//")) {
-    return "/projects";
-  }
-
-  if (next.startsWith("/login") || next.startsWith("/logout")) {
-    return "/projects";
-  }
-
-  return next;
-}
+import { getSafeInternalPath } from "@/lib/safe-redirect.mjs";
+import {
+  clearFailedLogins,
+  getLoginLock,
+  recordFailedLogin,
+} from "@/lib/login-throttle";
 
 export async function loginAction(formData: FormData) {
-  const next = getSafeNext(formData.get("next"));
+  const next = getSafeInternalPath(formData.get("next"));
 
   if (!isAuthEnabled()) {
     redirect(next);
@@ -49,6 +45,15 @@ export async function loginAction(formData: FormData) {
 
   const username = String(formData.get("username") ?? "").trim();
   const password = String(formData.get("password") ?? "");
+  const requestHeaders = await headers();
+  const clientAddress =
+    requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    requestHeaders.get("x-real-ip")?.trim() ||
+    "unknown";
+  const lockedUntil = await getLoginLock(username, clientAddress);
+  if (lockedUntil) {
+    redirect(`/login?error=rate_limited&next=${encodeURIComponent(next)}`);
+  }
   let user = await prisma.user.findUnique({
     where: {
       email: username,
@@ -57,6 +62,8 @@ export async function loginAction(formData: FormData) {
       id: true,
       email: true,
       passwordHash: true,
+      sessionVersion: true,
+      disabledAt: true,
     },
   });
 
@@ -68,48 +75,77 @@ export async function loginAction(formData: FormData) {
         email: username,
         name: username,
         role: "ADMIN",
-        passwordHash: process.env.ADMIN_PASSWORD_HASH?.trim(),
+        passwordHash: await hashPassword(password),
       },
       select: {
         id: true,
         email: true,
         passwordHash: true,
+        sessionVersion: true,
+        disabledAt: true,
       },
     });
   }
 
-  if (user && !user.passwordHash && isBootstrapAdmin) {
+  if (user && !user.disabledAt && !user.passwordHash && isBootstrapAdmin) {
     user = await prisma.user.update({
       where: {
         id: user.id,
       },
       data: {
-        passwordHash: process.env.ADMIN_PASSWORD_HASH?.trim(),
+        passwordHash: await hashPassword(password),
       },
       select: {
         id: true,
         email: true,
         passwordHash: true,
+        sessionVersion: true,
+        disabledAt: true,
       },
     });
   }
 
   const isValid =
     Boolean(user?.passwordHash) &&
+    !user?.disabledAt &&
     (await verifyPasswordHash(password, user!.passwordHash!));
 
   if (!isValid) {
+    const nextLock = await recordFailedLogin(username, clientAddress);
+    if (nextLock) {
+      redirect(`/login?error=rate_limited&next=${encodeURIComponent(next)}`);
+    }
     redirect(`/login?error=invalid&next=${encodeURIComponent(next)}`);
   }
 
+  await clearFailedLogins(username, clientAddress);
+
+  if (passwordHashNeedsUpgrade(user!.passwordHash!)) {
+    user = await prisma.user.update({
+      where: { id: user!.id },
+      data: { passwordHash: await hashPassword(password) },
+      select: {
+        id: true,
+        email: true,
+        passwordHash: true,
+        sessionVersion: true,
+        disabledAt: true,
+      },
+    });
+  }
+
   const cookieStore = await cookies();
-  cookieStore.set(authCookieName, await createAuthCookieValue(user!.id, username), {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: authSessionMaxAgeSec,
-  });
+  cookieStore.set(
+    authCookieName,
+    await createAuthCookieValue(user!.id, username, user!.sessionVersion),
+    {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: authSessionMaxAgeSec,
+    },
+  );
 
   redirect(next);
 }

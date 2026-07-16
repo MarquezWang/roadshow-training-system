@@ -1,7 +1,7 @@
-import { rm } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
 import { getCurrentAccessUserId } from "@/lib/auth-server";
+import { stageUploadEntries } from "@/lib/file-lifecycle.mjs";
 import { prisma } from "@/lib/prisma";
 
 type TrainingSessionDeleteRouteContext = Readonly<{
@@ -18,8 +18,14 @@ function resolveStoredUploadPath(filePath: string) {
     return null;
   }
 
-  const uploadRoot = path.resolve(process.cwd(), "uploads");
-  const absolutePath = path.resolve(process.cwd(), normalizedPath);
+  const uploadRoot = path.resolve(
+    /* turbopackIgnore: true */ process.cwd(),
+    "uploads",
+  );
+  const absolutePath = path.resolve(
+    /* turbopackIgnore: true */ uploadRoot,
+    normalizedPath.slice("uploads/".length),
+  );
   const relativeToUploads = path.relative(uploadRoot, absolutePath);
 
   if (
@@ -69,17 +75,48 @@ export async function DELETE(
     .map((recording) => resolveStoredUploadPath(recording.filePath))
     .filter((filePath): filePath is string => filePath !== null);
 
-  await prisma.trainingSession.delete({
-    where: {
-      id: session.id,
-    },
-  });
+  const safeSessionId = session.id.replace(/[^a-zA-Z0-9_-]/g, "");
+  const sessionDirectory =
+    safeSessionId && safeSessionId === session.id
+      ? path.resolve(
+          /* turbopackIgnore: true */ process.cwd(),
+          "uploads",
+          "training",
+          safeSessionId,
+        )
+      : null;
+  let staged: Awaited<ReturnType<typeof stageUploadEntries>>;
+  try {
+    staged = await stageUploadEntries({
+      workspaceRoot: /* turbopackIgnore: true */ process.cwd(),
+      paths: [sessionDirectory, ...recordingPaths].filter(
+        (value): value is string => Boolean(value),
+      ),
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "训练记录删除失败。" },
+      { status: 500 },
+    );
+  }
+  if (staged.contendedCount > 0) {
+    await staged.rollback();
+    return NextResponse.json(
+      { error: "该训练记录正在被其他删除请求处理。" },
+      { status: 409 },
+    );
+  }
 
-  await Promise.all(
-    recordingPaths.map((filePath) =>
-      rm(filePath, { force: true }).catch(() => undefined),
-    ),
-  );
+  try {
+    await prisma.trainingSession.deleteMany({ where: { id: session.id } });
+  } catch (error) {
+    await staged.rollback();
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "训练记录删除失败。" },
+      { status: 500 },
+    );
+  }
 
+  await staged.commit();
   return NextResponse.json({ deleted: true });
 }

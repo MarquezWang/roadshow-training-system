@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { abortableTrainingStatuses } from "@/lib/training-status";
+import { buildProjectAIContext } from "@/lib/project-context";
 
 type TrainingSessionRouteContext = Readonly<{
   params: Promise<{
@@ -25,6 +26,7 @@ export async function POST(
   if (!project) {
     return NextResponse.json({ error: "项目不存在。" }, { status: 404 });
   }
+  const projectContextSnapshot = JSON.stringify(await buildProjectAIContext(id));
 
   const [, session] = await prisma.$transaction([
     prisma.trainingSession.updateMany({
@@ -42,6 +44,7 @@ export async function POST(
       data: {
         projectId: id,
         status: "CREATED",
+        projectContextSnapshot,
       },
       select: {
         id: true,

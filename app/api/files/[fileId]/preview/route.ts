@@ -55,7 +55,7 @@ async function resolveUploadFilePath(filePath: string) {
     throw new Error("INVALID_UPLOAD_PATH");
   }
 
-  const fileStat = await stat(absolutePath);
+  const fileStat = await stat(/* turbopackIgnore: true */ absolutePath);
 
   if (!fileStat.isFile()) {
     throw new Error("FILE_NOT_FOUND");
@@ -72,7 +72,7 @@ async function isValidPdfFile(absolutePath: string, size: number) {
     return false;
   }
 
-  const file = await open(absolutePath, "r");
+  const file = await open(/* turbopackIgnore: true */ absolutePath, "r");
 
   try {
     const header = Buffer.alloc(5);
@@ -227,7 +227,9 @@ async function buildPreviewResponse(
   if (!isOriginalPdf && !isConvertedPowerPoint) {
     const isPowerPoint = isPowerPointFile(fileAsset);
     const error =
-      isPowerPoint && fileAsset.previewStatus === "PENDING"
+      isPowerPoint &&
+        (fileAsset.previewStatus === "PENDING" ||
+          fileAsset.previewStatus === "FINALIZING")
         ? "正在生成路演展示预览，请稍后刷新。"
         : isPowerPoint && fileAsset.previewStatus === "FAILED"
           ? "PPT 展示预览生成失败，但该材料仍可用于 AI 分析。"
@@ -309,8 +311,8 @@ async function buildPreviewResponse(
 
     if (range?.valid) {
       const stream = includeBody
-        ? Readable.toWeb(
-            createReadStream(absolutePath, {
+          ? Readable.toWeb(
+            createReadStream(/* turbopackIgnore: true */ absolutePath, {
               start: range.start,
               end: range.end,
             }),
@@ -328,7 +330,9 @@ async function buildPreviewResponse(
     }
 
     const stream = includeBody
-      ? Readable.toWeb(createReadStream(absolutePath))
+      ? Readable.toWeb(
+          createReadStream(/* turbopackIgnore: true */ absolutePath),
+        )
       : null;
 
     return new Response(stream as ReadableStream<Uint8Array> | null, {
@@ -347,4 +351,35 @@ export async function GET(request: Request, context: FilePreviewRouteContext) {
 
 export async function HEAD(request: Request, context: FilePreviewRouteContext) {
   return buildPreviewResponse(request, context, false);
+}
+
+export async function POST(
+  _request: Request,
+  context: FilePreviewRouteContext,
+) {
+  const { fileId } = await context.params;
+  const userId = await getCurrentAccessUserId();
+  const fileAsset = await prisma.fileAsset.findFirst({
+    where: userId
+      ? { id: fileId, project: { ownerId: userId } }
+      : { id: fileId },
+    select: {
+      id: true,
+      projectId: true,
+      originalName: true,
+      fileType: true,
+      filePath: true,
+    },
+  });
+  if (!fileAsset) {
+    return NextResponse.json({ error: "文件不存在。" }, { status: 404 });
+  }
+  if (!isPowerPointFile(fileAsset)) {
+    return NextResponse.json({ error: "只有 PPTX 支持生成预览。" }, { status: 415 });
+  }
+
+  const result = await generatePowerPointPreviewPdf(fileAsset);
+  return NextResponse.json(result, {
+    status: result.previewStatus === "READY" ? 200 : 409,
+  });
 }

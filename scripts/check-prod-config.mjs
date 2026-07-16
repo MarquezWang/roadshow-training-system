@@ -3,9 +3,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { assertProductionAuthEnabled } from "../lib/production-auth-guard.mjs";
 
 const PROJECT_ROOT = process.cwd();
-const DEFAULT_AUTH_SECRET = "local-dev-auth-secret-please-change";
 const VALID_TRANSCRIPTION_PROVIDERS = new Set([
   "openai",
   "xfyun",
@@ -115,11 +115,25 @@ function pushCheck(checks, ok, label, detail = "") {
   checks.push({ ok, label, detail });
 }
 
+function getAuthSecretError(env) {
+  try {
+    assertProductionAuthEnabled({
+      ...env,
+      NODE_ENV: "production",
+      AUTH_ENABLED: "true",
+    });
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 function run() {
   const env = loadEffectiveEnv();
   const checks = [];
-  const provider = env.TRANSCRIPTION_PROVIDER?.trim();
+  const provider = env.TRANSCRIPTION_PROVIDER?.trim() || "openai";
   const libreOffice = findLibreOffice(env);
+  const authSecretError = getAuthSecretError(env);
 
   pushCheck(
     checks,
@@ -129,8 +143,9 @@ function run() {
   );
   pushCheck(
     checks,
-    hasValue(env, "AUTH_SECRET") && env.AUTH_SECRET !== DEFAULT_AUTH_SECRET,
-    "AUTH_SECRET 已配置且不是默认值",
+    !authSecretError,
+    "AUTH_SECRET 与可选 AUTH_SECRET_PREVIOUS 配置合格",
+    authSecretError,
   );
   pushCheck(checks, hasValue(env, "DATABASE_URL"), "DATABASE_URL 已配置");
   pushCheck(checks, hasValue(env, "AI_API_KEY"), "AI_API_KEY 已配置");
@@ -156,6 +171,14 @@ function run() {
       checks,
       hasValue(env, "XFYUN_SECRET_KEY"),
       "XFYUN_SECRET_KEY 已配置",
+    );
+  }
+
+  if (provider === "openai") {
+    pushCheck(
+      checks,
+      hasValue(env, "TRANSCRIPTION_API_KEY"),
+      "TRANSCRIPTION_API_KEY 已配置",
     );
   }
 

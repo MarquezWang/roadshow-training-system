@@ -24,6 +24,15 @@ export async function POST(
   try {
     const result = await runTranscriptionWithLock(sessionId, recordingId);
 
+    if (result.kind === "pending") {
+      return NextResponse.json({
+        ok: true,
+        status: result.transcript.status,
+        message: result.message,
+        transcript: result.transcript,
+      });
+    }
+
     if (result.kind === "business-failed") {
       return NextResponse.json(
         {

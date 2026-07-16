@@ -5,8 +5,10 @@ import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { transcribeWithTencentFlash } from "@/lib/transcription/tencent-flash";
 import { transcribeWithTencent } from "@/lib/transcription/tencent";
 import { transcribeWithXfyun } from "@/lib/transcription/xfyun";
+import { runWithTranscriptionAbort } from "@/lib/transcription-abort.mjs";
 
 const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
+const DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 5 * 60_000;
 
 export type TranscriptionProvider = "openai" | "xfyun" | "tencent" | "tencent_flash";
 
@@ -84,6 +86,13 @@ function getOpenAIConfig() {
   return { apiKey, baseURL, model };
 }
 
+function getTranscriptionTimeoutMs() {
+  const configured = Number(process.env.TRANSCRIPTION_TIMEOUT_MS);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_TRANSCRIPTION_TIMEOUT_MS;
+}
+
 function sanitizeError(error: unknown) {
   if (error instanceof Error) {
     return error.message
@@ -96,6 +105,7 @@ function sanitizeError(error: unknown) {
 
 async function transcribeWithOpenAI(
   filePath: string,
+  signal: AbortSignal,
 ): Promise<string> {
   const config = getOpenAIConfig();
   const absolutePath = path.resolve(filePath);
@@ -111,12 +121,23 @@ async function transcribeWithOpenAI(
 
   try {
     const file = createReadStream(absolutePath);
-    const response = await client.audio.transcriptions.create({
-      model: config.model,
-      file,
-      language: "zh",
-      response_format: "text",
-    });
+    const abortFile = () => file.destroy(new Error("ASR request aborted"));
+    signal.addEventListener("abort", abortFile, { once: true });
+    let response;
+    try {
+      response = await client.audio.transcriptions.create(
+        {
+          model: config.model,
+          file,
+          language: "zh",
+          response_format: "text",
+        },
+        { signal },
+      );
+    } finally {
+      signal.removeEventListener("abort", abortFile);
+      file.destroy();
+    }
 
     const text = typeof response === "string" ? response.trim() : "";
 
@@ -133,32 +154,42 @@ async function transcribeWithOpenAI(
 export async function transcribeAudio(
   filePath: string,
   mimeType?: string | null,
+  options: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {},
 ): Promise<TranscriptionResult> {
   const provider = getTranscriptionProvider();
   const startedAt = Date.now();
 
   try {
-    let result: TranscriptionResult;
-
-    switch (provider) {
-      case "tencent_flash":
-        result = normalizeTranscriptionResult(
-          await transcribeWithTencentFlash(filePath),
-        );
-        break;
-      case "tencent":
-        result = normalizeTranscriptionResult(await transcribeWithTencent(filePath));
-        break;
-      case "xfyun":
-        result = normalizeTranscriptionResult(
-          await transcribeWithXfyun(filePath, mimeType),
-        );
-        break;
-      case "openai":
-      default:
-        result = normalizeTranscriptionResult(await transcribeWithOpenAI(filePath));
-        break;
-    }
+    const result = await runWithTranscriptionAbort(
+      {
+        signal: options.signal,
+        timeoutMs: options.timeoutMs ?? getTranscriptionTimeoutMs(),
+      },
+      async (signal: AbortSignal) => {
+        switch (provider) {
+          case "tencent_flash":
+            return normalizeTranscriptionResult(
+              await transcribeWithTencentFlash(filePath, signal),
+            );
+          case "tencent":
+            return normalizeTranscriptionResult(
+              await transcribeWithTencent(filePath, signal),
+            );
+          case "xfyun":
+            return normalizeTranscriptionResult(
+              await transcribeWithXfyun(filePath, mimeType, signal),
+            );
+          case "openai":
+          default:
+            return normalizeTranscriptionResult(
+              await transcribeWithOpenAI(filePath, signal),
+            );
+        }
+      },
+    );
 
     console.log(
       `[ASR] provider=${provider} elapsedMs=${Date.now() - startedAt} ok=true textLength=${result.text.trim().length} segments=${result.segments.length}`,

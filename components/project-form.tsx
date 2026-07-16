@@ -15,6 +15,12 @@ type ProjectFormValues = {
   productForm?: string;
   cooperationDemand?: string;
   cooperationDemandDetail?: string;
+  businessModel?: string;
+  trlBasis?: string;
+  teamInfo?: string;
+  needsConversionSupport?: boolean;
+  projectContact?: string;
+  contactPhone?: string;
 };
 
 type ProjectFormProps = Readonly<{
@@ -76,6 +82,17 @@ export function ProjectForm({
             defaultValue={initialValues?.name ?? ""}
             required
             placeholder="请输入项目名称"
+            className={inputClass}
+          />
+        </label>
+
+        <label className="block text-sm font-medium text-slate-900 sm:col-span-2">
+          TRL 判断依据
+          <textarea
+            name="trlBasis"
+            defaultValue={initialValues?.trlBasis ?? ""}
+            rows={3}
+            placeholder="记录支撑当前成熟度判断的验证、试用或验收证据"
             className={inputClass}
           />
         </label>
@@ -160,6 +177,26 @@ export function ProjectForm({
             className={inputClass}
           />
         </label>
+
+        <label className="block text-sm font-medium text-slate-900 sm:col-span-2">
+          商业模式
+          <textarea
+            name="businessModel"
+            defaultValue={initialValues?.businessModel ?? ""}
+            rows={3}
+            className={inputClass}
+          />
+        </label>
+
+        <label className="block text-sm font-medium text-slate-900 sm:col-span-2">
+          团队信息
+          <textarea
+            name="teamInfo"
+            defaultValue={initialValues?.teamInfo ?? ""}
+            rows={3}
+            className={inputClass}
+          />
+        </label>
       </div>
 
       <fieldset>
@@ -196,6 +233,38 @@ export function ProjectForm({
           className={inputClass}
         />
       </label>
+
+      <fieldset className="rounded-md border border-slate-200 p-4">
+        <label className="flex items-center gap-3 text-sm font-medium text-slate-900">
+          <input
+            type="checkbox"
+            name="needsConversionSupport"
+            value="true"
+            defaultChecked={initialValues?.needsConversionSupport ?? false}
+            className="h-4 w-4 accent-teal-700"
+          />
+          需要成果转化机构协助对接
+        </label>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <label className="text-sm font-medium text-slate-900">
+            项目联系人
+            <input
+              name="projectContact"
+              defaultValue={initialValues?.projectContact ?? ""}
+              className={inputClass}
+            />
+          </label>
+          <label className="text-sm font-medium text-slate-900">
+            联系电话
+            <input
+              name="contactPhone"
+              defaultValue={initialValues?.contactPhone ?? ""}
+              inputMode="tel"
+              className={inputClass}
+            />
+          </label>
+        </div>
+      </fieldset>
 
       <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
         <Link

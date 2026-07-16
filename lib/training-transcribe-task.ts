@@ -7,12 +7,21 @@ import {
   TranscribeEmptyResultError,
 } from "@/lib/transcribe-error";
 import { devError, devLog, devWarn } from "@/lib/dev-log";
+import {
+  acquireTrainingTranscriptionJob,
+  completeTrainingTranscriptionJob,
+  failTrainingTranscriptionJob,
+  renewTrainingTranscriptionLease,
+  TRAINING_TRANSCRIPTION_JOB_TYPE,
+  trainingTranscriptionJobKey,
+} from "@/lib/training-transcription-job.mjs";
 
-const MAX_TRANSCRIBE_ATTEMPTS = 3;
-const TRANSCRIBE_RETRY_DELAYS_MS = [1_500, 3_000] as const;
+const TRANSCRIBE_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const TEMPORARY_TRANSCRIBE_ERROR_MESSAGE =
-  "转写服务暂时不可用，请稍后重试。";
-const STALE_TRANSCRIPTION_TASK_TIMEOUT_MS = 90_000;
+  "转写服务暂时不可用，系统将自动重试。";
+const RECOVERY_SCAN_INTERVAL_MS = 5_000;
+const RECOVERY_SCAN_LIMIT = 25;
+const TRANSCRIPTION_LEASE_HEARTBEAT_MS = 30_000;
 
 export const transcriptSelect = {
   id: true,
@@ -28,14 +37,30 @@ export const transcriptSelect = {
   completedAt: true,
   createdAt: true,
   updatedAt: true,
+  revision: true,
 } as const;
 
 type TranscriptionTarget = Awaited<ReturnType<typeof findTranscriptionTarget>>;
 type TrainingTranscript = NonNullable<TranscriptionTarget["transcript"]>;
+type AcquiredTranscriptionJob = {
+  state: "acquired";
+  ownerToken: string;
+  job: {
+    jobKey: string;
+    attempt: number;
+    maxAttempts: number;
+  };
+  transcript: TrainingTranscript;
+};
 
 export type TranscriptionRunResult =
   | {
       kind: "completed";
+      transcript: TrainingTranscript;
+    }
+  | {
+      kind: "pending";
+      message: string;
       transcript: TrainingTranscript;
     }
   | {
@@ -57,24 +82,6 @@ export class TranscribeHttpError extends Error {
     this.name = "TranscribeHttpError";
     this.status = status;
   }
-}
-
-const runningTranscriptionTasks = new Map<string, Promise<TranscriptionRunResult>>();
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isActiveTranscriptStatus(status: string) {
-  return status === "PENDING" || status === "PROCESSING";
-}
-
-function isStaleActiveTranscript(transcript: TrainingTranscript) {
-  return (
-    isActiveTranscriptStatus(transcript.status) &&
-    Date.now() - transcript.updatedAt.getTime() >
-      STALE_TRANSCRIPTION_TASK_TIMEOUT_MS
-  );
 }
 
 export function getErrorSummary(error: unknown) {
@@ -132,7 +139,6 @@ export function isRetryableTranscribeError(error: unknown) {
     "5xx",
     "empty",
     "为空",
-    "涓虹┖",
     "orderresult",
   ];
 
@@ -176,264 +182,366 @@ async function findTranscriptionTarget(sessionId: string, recordingId: string) {
     throw new TranscribeHttpError("录音文件路径为空。", 400);
   }
 
-  const absolutePath = path.resolve(process.cwd(), recording.filePath);
-
-  if (!existsSync(absolutePath)) {
-    throw new TranscribeHttpError("录音文件不存在，请重新录制。", 400);
-  }
-
   return {
     ...recording,
-    absolutePath,
+    absolutePath: path.resolve(
+      /* turbopackIgnore: true */ process.cwd(),
+      recording.filePath,
+    ),
   };
 }
 
-async function markTranscriptProcessing(target: TranscriptionTarget) {
-  const now = new Date();
-
-  return prisma.trainingTranscript.upsert({
-    where: {
-      recordingId: target.id,
-    },
-    create: {
-      recordingId: target.id,
-      sessionId: target.sessionId,
-      projectId: target.projectId,
-      status: "PROCESSING",
-      source: "ASR_PROVIDER",
-      language: "zh-CN",
-      text: "",
-      startedAt: now,
-    },
-    update: {
-      status: "PROCESSING",
-      source: "ASR_PROVIDER",
-      language: "zh-CN",
-      text: "",
-      errorMessage: null,
-      startedAt: now,
-      completedAt: null,
-    },
+async function readTranscript(recordingId: string) {
+  return prisma.trainingTranscript.findUnique({
+    where: { recordingId },
     select: transcriptSelect,
   });
 }
 
-async function runTranscription(
-  sessionId: string,
-  recordingId: string,
-): Promise<TranscriptionRunResult> {
-  const target = await findTranscriptionTarget(sessionId, recordingId);
-
-  if (target.transcript?.status === "COMPLETED" && target.transcript.text.trim()) {
-    devLog("[transcribe:run] completed transcript exists", {
-      sessionId,
-      recordingId,
-      transcriptId: target.transcript.id,
-    });
-
+function resultForUnacquiredJob(
+  state: string,
+  transcript: TrainingTranscript | null,
+  errorMessage?: string | null,
+): TranscriptionRunResult {
+  if (!transcript) {
+    throw new TranscribeHttpError("无法创建转写任务。", 500);
+  }
+  if (transcript.status === "COMPLETED" && transcript.text.trim()) {
+    return { kind: "completed", transcript };
+  }
+  if (state === "exhausted" || transcript.status === "FAILED") {
     return {
-      kind: "completed",
-      transcript: target.transcript,
+      kind: "system-failed",
+      message:
+        errorMessage ?? transcript.errorMessage ?? "自动转写失败。",
+      transcript,
     };
   }
+  return {
+    kind: "pending",
+    message:
+      state === "backoff"
+        ? "转写任务正在等待自动重试。"
+        : "转写任务已由其他处理器接管。",
+    transcript,
+  };
+}
 
-  await markTranscriptProcessing(target);
+async function executeAcquiredTranscription(
+  target: TranscriptionTarget,
+  acquired: AcquiredTranscriptionJob,
+): Promise<TranscriptionRunResult> {
+  const { recordingId, revision } = acquired.transcript;
+  const executionController = new AbortController();
+  const heartbeat = setInterval(() => {
+    void renewTrainingTranscriptionLease(prisma, {
+      jobKey: acquired.job.jobKey,
+      ownerToken: acquired.ownerToken,
+    })
+      .then((renewed: boolean) => {
+        if (!renewed && !executionController.signal.aborted) {
+          executionController.abort(new Error("transcription job lease lost"));
+        }
+      })
+      .catch((error: unknown) => {
+        devWarn("[transcribe:lease] heartbeat failed", {
+          recordingId,
+          errorSummary: getErrorSummary(error),
+        });
+      });
+  }, TRANSCRIPTION_LEASE_HEARTBEAT_MS);
+  heartbeat.unref?.();
 
   try {
-    let finalError: unknown = null;
-
-    for (
-      let attemptIndex = 1;
-      attemptIndex <= MAX_TRANSCRIBE_ATTEMPTS;
-      attemptIndex++
-    ) {
-      devLog("[transcribe:run] ASR attempt started", {
-        sessionId,
-        recordingId,
-        attemptIndex,
-        maxAttempts: MAX_TRANSCRIBE_ATTEMPTS,
-      });
-
-      try {
-        const transcription = await transcribeAudio(
-          target.absolutePath,
-          target.mimeType,
-        );
-        const completedAt = new Date();
-
-        const updated = await prisma.trainingTranscript.update({
-          where: {
-            recordingId,
-          },
-          data: {
-            status: "COMPLETED",
-            text: transcription.text,
-            segmentsJson:
-              transcription.segments.length > 0
-                ? JSON.stringify(transcription.segments)
-                : null,
-            completedAt,
-            errorMessage: null,
-          },
-          select: transcriptSelect,
-        });
-
-        devLog("[transcribe:run] ASR attempt succeeded", {
-          sessionId,
-          recordingId,
-          attemptIndex,
-          maxAttempts: MAX_TRANSCRIBE_ATTEMPTS,
-        });
-
-        return {
-          kind: "completed",
-          transcript: updated,
-        };
-      } catch (error) {
-        finalError = error;
-        const retryable = isRetryableTranscribeError(error);
-        const errorSummary = getErrorSummary(error);
-
-        devWarn("[transcribe:run] ASR attempt failed", {
-          sessionId,
-          recordingId,
-          attemptIndex,
-          maxAttempts: MAX_TRANSCRIBE_ATTEMPTS,
-          retryable,
-          errorSummary,
-        });
-
-        if (!retryable || attemptIndex >= MAX_TRANSCRIBE_ATTEMPTS) {
-          break;
-        }
-
-        await sleep(TRANSCRIBE_RETRY_DELAYS_MS[attemptIndex - 1] ?? 3_000);
-      }
+    if (!existsSync(target.absolutePath)) {
+      throw new TranscribeBusinessError(
+        "录音文件不存在，请重新录制。",
+        "audio file does not exist",
+      );
     }
 
-    throw finalError ?? new Error(TEMPORARY_TRANSCRIBE_ERROR_MESSAGE);
-  } catch (error) {
-    const now = new Date();
-    const errorSummary = getErrorSummary(error);
-
-    devError("[transcribe:run] ASR final failure", {
-      sessionId,
+    devLog("[transcribe:run] persistent ASR attempt started", {
+      sessionId: target.sessionId,
       recordingId,
+      attempt: acquired.job.attempt,
+    });
+    const transcription = await transcribeAudio(
+      target.absolutePath,
+      target.mimeType,
+      { signal: executionController.signal },
+    );
+    const completed = await completeTrainingTranscriptionJob(prisma, {
+      jobKey: acquired.job.jobKey,
+      ownerToken: acquired.ownerToken,
+      recordingId,
+      revision,
+      text: transcription.text,
+      segmentsJson:
+        transcription.segments.length > 0
+          ? JSON.stringify(transcription.segments)
+          : null,
+    });
+    const transcript =
+      completed.transcript ?? (await readTranscript(recordingId));
+
+    if (transcript?.status === "COMPLETED") {
+      return { kind: "completed", transcript };
+    }
+    if (!transcript) {
+      throw new TranscribeHttpError("转写结果丢失。", 500);
+    }
+    return {
+      kind: "pending",
+      message: "当前转写结果已被更新版本取代。",
+      transcript,
+    };
+  } catch (error) {
+    const retryable = isRetryableTranscribeError(error);
+    const isBusinessFailure = error instanceof TranscribeBusinessError;
+    const errorSummary = getErrorSummary(error);
+    const willRetry =
+      retryable && acquired.job.attempt < acquired.job.maxAttempts;
+    const errorMessage = isBusinessFailure
+      ? error.userMessage
+      : willRetry
+        ? TEMPORARY_TRANSCRIBE_ERROR_MESSAGE
+        : retryable
+          ? "转写服务多次尝试仍失败，请稍后手工重试。"
+          : errorSummary;
+    const retryDelayMs =
+      TRANSCRIBE_RETRY_DELAYS_MS[acquired.job.attempt - 1] ?? 30_000;
+
+    devWarn("[transcribe:run] persistent ASR attempt failed", {
+      sessionId: target.sessionId,
+      recordingId,
+      attempt: acquired.job.attempt,
+      retryable,
       errorSummary,
     });
+    const failed = await failTrainingTranscriptionJob(prisma, {
+      jobKey: acquired.job.jobKey,
+      ownerToken: acquired.ownerToken,
+      recordingId,
+      revision,
+      retryable,
+      retryDelayMs,
+      errorMessage,
+    });
+    const transcript = failed.transcript ?? (await readTranscript(recordingId));
 
-    if (error instanceof TranscribeBusinessError) {
-      const updated = await prisma.trainingTranscript.update({
-        where: {
-          recordingId,
-        },
-        data: {
-          status: "FAILED",
-          errorMessage: error.userMessage,
-          completedAt: now,
-        },
-        select: transcriptSelect,
-      });
-
+    if (transcript?.status === "COMPLETED") {
+      return { kind: "completed", transcript };
+    }
+    if (!transcript) {
+      throw error;
+    }
+    if (failed.state === "retry-scheduled" || failed.state === "owner-lost") {
+      return {
+        kind: "pending",
+        message:
+          failed.state === "retry-scheduled"
+            ? TEMPORARY_TRANSCRIBE_ERROR_MESSAGE
+            : "转写任务已被新的处理器接管。",
+        transcript,
+      };
+    }
+    if (isBusinessFailure) {
       return {
         kind: "business-failed",
         message: error.userMessage,
-        transcript: updated,
+        transcript,
       };
     }
-
-    const errorMessage = isRetryableTranscribeError(error)
-      ? TEMPORARY_TRANSCRIBE_ERROR_MESSAGE
-      : errorSummary;
-
-    const updated = await prisma.trainingTranscript.update({
-      where: {
-        recordingId,
-      },
-      data: {
-        status: "FAILED",
-        errorMessage,
-        completedAt: now,
-      },
-      select: transcriptSelect,
-    });
-
-    return {
-      kind: "system-failed",
-      message: errorMessage,
-      transcript: updated,
-    };
-  }
-}
-
-export function getRunningTranscriptionTask(recordingId: string) {
-  return runningTranscriptionTasks.get(recordingId) ?? null;
-}
-
-export function runTranscriptionWithLock(sessionId: string, recordingId: string) {
-  const runningTask = runningTranscriptionTasks.get(recordingId);
-
-  if (runningTask) {
-    return runningTask;
-  }
-
-  const task = runTranscription(sessionId, recordingId).finally(() => {
-    if (runningTranscriptionTasks.get(recordingId) === task) {
-      runningTranscriptionTasks.delete(recordingId);
+    return { kind: "system-failed", message: errorMessage, transcript };
+  } finally {
+    clearInterval(heartbeat);
+    if (!executionController.signal.aborted) {
+      executionController.abort(new Error("transcription attempt finished"));
     }
-  });
+  }
+}
 
-  runningTranscriptionTasks.set(recordingId, task);
-  return task;
+async function acquireForTarget(
+  target: TranscriptionTarget,
+  forceRetry: boolean,
+) {
+  return acquireTrainingTranscriptionJob(prisma, {
+    sessionId: target.sessionId,
+    recordingId: target.id,
+    forceRetry,
+  });
+}
+
+export async function runTranscriptionWithLock(
+  sessionId: string,
+  recordingId: string,
+  options: { forceRetry?: boolean } = {},
+): Promise<TranscriptionRunResult> {
+  const target = await findTranscriptionTarget(sessionId, recordingId);
+  const acquired = await acquireForTarget(target, options.forceRetry ?? true);
+
+  if (acquired.state !== "acquired") {
+    return resultForUnacquiredJob(
+      acquired.state,
+      acquired.transcript,
+      acquired.job?.errorMessage,
+    );
+  }
+  return executeAcquiredTranscription(
+    target,
+    acquired as AcquiredTranscriptionJob,
+  );
 }
 
 export async function startTranscriptionTask(
   sessionId: string,
   recordingId: string,
+  options: { forceRetry?: boolean } = {},
 ) {
   const target = await findTranscriptionTarget(sessionId, recordingId);
-  const runningTask = getRunningTranscriptionTask(recordingId);
+  const acquired = await acquireForTarget(target, options.forceRetry ?? false);
 
-  if (target.transcript?.status === "COMPLETED" && target.transcript.text.trim()) {
+  if (acquired.state !== "acquired") {
+    if (!acquired.transcript) {
+      throw new TranscribeHttpError("无法创建转写任务。", 500);
+    }
     return {
       started: false,
-      transcript: target.transcript,
+      state: acquired.state,
+      transcript: acquired.transcript,
     };
   }
 
-  if (
-    target.transcript &&
-    isActiveTranscriptStatus(target.transcript.status)
-  ) {
-    if (runningTask || !isStaleActiveTranscript(target.transcript)) {
-      return {
-        started: false,
-        transcript: target.transcript,
-      };
-    }
-
-    devWarn("[transcribe:start] stale transcript detected, restarting task", {
-      sessionId,
-      recordingId,
-      transcriptId: target.transcript.id,
-      status: target.transcript.status,
-      staleAgeMs: Date.now() - target.transcript.updatedAt.getTime(),
-      timeoutMs: STALE_TRANSCRIPTION_TASK_TIMEOUT_MS,
-    });
-  }
-
-  const transcript = await markTranscriptProcessing(target);
-
-  void runTranscriptionWithLock(sessionId, recordingId).catch((error) => {
+  void executeAcquiredTranscription(
+    target,
+    acquired as AcquiredTranscriptionJob,
+  ).catch((error) => {
     devError("[transcribe:start] background task crashed", {
       sessionId,
       recordingId,
       errorSummary: getErrorSummary(error),
     });
   });
-
   return {
     started: true,
-    transcript,
+    state: acquired.state,
+    transcript: acquired.transcript as TrainingTranscript,
   };
+}
+
+export async function recoverTrainingTranscriptionsForSession(
+  sessionId: string,
+) {
+  const recordings = await prisma.trainingRecording.findMany({
+    where: {
+      sessionId,
+      phase: { in: ["PITCH", "QA"] },
+      OR: [
+        { transcript: { is: null } },
+        {
+          transcript: {
+            is: { status: { in: ["PENDING", "PROCESSING"] } },
+          },
+        },
+      ],
+    },
+    select: { id: true },
+    take: RECOVERY_SCAN_LIMIT,
+  });
+  await Promise.allSettled(
+    recordings.map((recording) =>
+      startTranscriptionTask(sessionId, recording.id),
+    ),
+  );
+  return recordings.length;
+}
+
+let recoveryPassRunning = false;
+
+export async function recoverDueTrainingTranscriptions() {
+  if (recoveryPassRunning) return 0;
+  recoveryPassRunning = true;
+  try {
+    const now = new Date();
+    const dueJobs = await prisma.asyncJob.findMany({
+      where: {
+        jobType: TRAINING_TRANSCRIPTION_JOB_TYPE,
+        OR: [
+          { status: "PENDING" },
+          {
+            status: "RETRY_WAIT",
+            OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+          },
+          {
+            status: "RUNNING",
+            OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }],
+          },
+        ],
+      },
+      orderBy: { updatedAt: "asc" },
+      take: RECOVERY_SCAN_LIMIT,
+      select: { resourceId: true },
+    });
+    const dueRecordingIds = dueJobs.map((job) => job.resourceId);
+    const dueRecordings = await prisma.trainingRecording.findMany({
+      where: {
+        id: { in: dueRecordingIds },
+        phase: { in: ["PITCH", "QA"] },
+      },
+      select: { id: true, sessionId: true },
+    });
+    const foundRecordingIds = new Set(
+      dueRecordings.map((recording) => recording.id),
+    );
+    const missingResourceIds = dueRecordingIds.filter(
+      (recordingId) => !foundRecordingIds.has(recordingId),
+    );
+    if (missingResourceIds.length > 0) {
+      await prisma.asyncJob.updateMany({
+        where: {
+          jobType: TRAINING_TRANSCRIPTION_JOB_TYPE,
+          resourceId: { in: missingResourceIds },
+          status: { in: ["PENDING", "RETRY_WAIT", "RUNNING"] },
+        },
+        data: {
+          status: "FAILED",
+          leaseExpiresAt: null,
+          nextAttemptAt: null,
+          errorMessage: "录音记录已不存在。",
+        },
+      });
+    }
+    const recordings = dueRecordings;
+    await Promise.allSettled(
+      recordings.map((recording) =>
+        startTranscriptionTask(recording.sessionId, recording.id),
+      ),
+    );
+    return recordings.length;
+  } catch (error) {
+    devError("[transcribe:recovery] scan failed", {
+      errorSummary: getErrorSummary(error),
+    });
+    return 0;
+  } finally {
+    recoveryPassRunning = false;
+  }
+}
+
+const globalForRecovery = globalThis as typeof globalThis & {
+  trainingTranscriptionRecoveryTimer?: ReturnType<typeof setInterval>;
+};
+
+export function startTrainingTranscriptionRecoveryWorker() {
+  if (globalForRecovery.trainingTranscriptionRecoveryTimer) return;
+  void recoverDueTrainingTranscriptions();
+  const timer = setInterval(() => {
+    void recoverDueTrainingTranscriptions();
+  }, RECOVERY_SCAN_INTERVAL_MS);
+  timer.unref?.();
+  globalForRecovery.trainingTranscriptionRecoveryTimer = timer;
+}
+
+export function transcriptionJobKeyForRecording(recordingId: string) {
+  return trainingTranscriptionJobKey(recordingId);
 }

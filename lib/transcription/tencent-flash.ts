@@ -11,6 +11,10 @@ import {
   TranscribeBusinessError,
   TranscribeEmptyResultError,
 } from "@/lib/transcribe-error";
+import {
+  runWithTranscriptionAbort,
+  throwIfTranscriptionAborted,
+} from "@/lib/transcription-abort.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,8 +102,15 @@ function getTencentFlashConfig(): TencentFlashConfig {
   };
 }
 
-async function convertToTencentFlashMp3(inputPath: string) {
-  const tempDir = path.resolve(process.cwd(), "tmp", "tencent-asr-flash");
+async function convertToTencentFlashMp3(
+  inputPath: string,
+  signal: AbortSignal,
+) {
+  const tempDir = path.resolve(
+    /* turbopackIgnore: true */ process.cwd(),
+    "tmp",
+    "tencent-asr-flash",
+  );
   const outputPath = path.join(
     tempDir,
     `tencent-asr-flash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`,
@@ -125,6 +136,7 @@ async function convertToTencentFlashMp3(inputPath: string) {
       ],
       {
         timeout: 120_000,
+        signal,
       },
     );
   } catch (error) {
@@ -139,7 +151,7 @@ async function convertToTencentFlashMp3(inputPath: string) {
     throw new Error(`音频转码为腾讯云极速版 ASR MP3 失败：${message.slice(0, 200)}`);
   }
 
-  const outputStat = await stat(outputPath);
+  const outputStat = await stat(/* turbopackIgnore: true */ outputPath);
 
   if (!outputStat.isFile() || outputStat.size <= 0) {
     throw new Error("音频转码失败：ffmpeg 未生成 MP3 文件。");
@@ -262,65 +274,65 @@ function extractTencentFlashResult(
 async function callTencentFlashApi(
   config: TencentFlashConfig,
   audioBuffer: Buffer,
+  signal: AbortSignal,
 ) {
   const { url, signature } = buildSignedUrl(config);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  return runWithTranscriptionAbort(
+    { signal, timeoutMs: config.timeoutMs },
+    async (requestSignal: AbortSignal) => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: signature,
+          "Content-Type": "application/octet-stream",
+          Host: TENCENT_FLASH_HOST,
+        },
+        body: new Uint8Array(audioBuffer),
+        signal: requestSignal,
+      });
+      const rawText = await response.text();
+      let parsed: TencentFlashResponse;
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: signature,
-        "Content-Type": "application/octet-stream",
-        Host: TENCENT_FLASH_HOST,
-      },
-      body: new Uint8Array(audioBuffer),
-      signal: controller.signal,
-    });
-    const rawText = await response.text();
-    let parsed: TencentFlashResponse;
+      try {
+        parsed = JSON.parse(rawText) as TencentFlashResponse;
+      } catch {
+        throw new Error(`腾讯云极速版 ASR 返回非 JSON：HTTP ${response.status}`);
+      }
 
-    try {
-      parsed = JSON.parse(rawText) as TencentFlashResponse;
-    } catch {
-      throw new Error(`腾讯云极速版 ASR 返回非 JSON：HTTP ${response.status}`);
-    }
+      if (!response.ok || parsed.code !== 0) {
+        const requestId = parsed.request_id
+          ? ` requestId=${parsed.request_id}`
+          : "";
 
-    if (!response.ok || parsed.code !== 0) {
-      const requestId = parsed.request_id ? ` requestId=${parsed.request_id}` : "";
+        throw new TranscribeBusinessError(
+          "转写未成功，可能是音频格式、音质或腾讯云服务状态异常。请稍后重试。",
+          `腾讯云极速版 ASR 失败：code=${parsed.code ?? response.status} message=${parsed.message ?? "unknown"}${requestId}`,
+        );
+      }
 
-      throw new TranscribeBusinessError(
-        "转写未成功，可能是音频格式、音质或腾讯云服务状态异常。请稍后重试。",
-        `腾讯云极速版 ASR 失败：code=${parsed.code ?? response.status} message=${parsed.message ?? "unknown"}${requestId}`,
-      );
-    }
-
-    return parsed;
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error(`腾讯云极速版 ASR 请求超时：${config.timeoutMs}ms。`);
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
+      return parsed;
+    },
+  );
 }
 
 export async function transcribeWithTencentFlash(
   filePath: string,
+  signal: AbortSignal,
 ): Promise<TranscriptionResult> {
   const config = getTencentFlashConfig();
   const absolutePath = path.resolve(filePath);
   let convertedPath: string | null = null;
 
   try {
-    const converted = await convertToTencentFlashMp3(absolutePath);
+    throwIfTranscriptionAborted(signal);
+    const converted = await convertToTencentFlashMp3(absolutePath, signal);
     convertedPath = converted.outputPath;
 
-    const audioBuffer = await readFile(converted.outputPath);
-    const result = await callTencentFlashApi(config, audioBuffer);
+    const audioBuffer = await readFile(
+      /* turbopackIgnore: true */ converted.outputPath,
+      { signal },
+    );
+    const result = await callTencentFlashApi(config, audioBuffer, signal);
     const transcription = extractTencentFlashResult(result);
 
     if (!transcription.text) {

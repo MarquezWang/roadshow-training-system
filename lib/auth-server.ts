@@ -6,6 +6,7 @@ import {
   parseAuthCookieValue,
 } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { findActiveAuthUser } from "@/lib/auth-user.mjs";
 
 export async function getCurrentAuthUser() {
   if (!isAuthEnabled()) {
@@ -21,15 +22,7 @@ export async function getCurrentAuthUser() {
     return null;
   }
 
-  return prisma.user.findUnique({
-    where: { id: session.userId },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-    },
-  });
+  return findActiveAuthUser(prisma, session);
 }
 
 export async function requireCurrentAuthUser() {

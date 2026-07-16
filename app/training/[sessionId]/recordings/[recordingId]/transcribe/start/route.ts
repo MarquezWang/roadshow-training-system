@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
-  getRunningTranscriptionTask,
   startTranscriptionTask,
   TranscribeHttpError,
 } from "@/lib/training-transcribe-task";
@@ -23,25 +22,10 @@ export async function POST(
   }
 
   try {
-    const runningTask = getRunningTranscriptionTask(recordingId);
-
-    if (runningTask) {
-      const result = await Promise.race([
-        runningTask,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)),
-      ]);
-
-      if (result) {
-        return NextResponse.json({
-          ok: result.kind === "completed",
-          started: false,
-          status: result.transcript.status,
-          transcript: result.transcript,
-        });
-      }
-    }
-
-    const result = await startTranscriptionTask(sessionId, recordingId);
+    const result = await startTranscriptionTask(sessionId, recordingId, {
+      // 显式调用启动端点允许用户在最终失败后开启新一轮尝试。
+      forceRetry: true,
+    });
 
     return NextResponse.json({
       ok: result.transcript.status !== "FAILED",

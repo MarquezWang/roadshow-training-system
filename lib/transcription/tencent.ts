@@ -8,6 +8,10 @@ import type {
   TranscriptionSegment,
 } from "@/lib/transcription";
 import { TranscribeBusinessError } from "@/lib/transcribe-error";
+import {
+  abortableTranscriptionDelay,
+  throwIfTranscriptionAborted,
+} from "@/lib/transcription-abort.mjs";
 
 const execFileAsync = promisify(execFile);
 const TENCENT_ASR_ENDPOINT = "asr.tencentcloudapi.com";
@@ -126,7 +130,9 @@ async function callTencentAsrApi<T>(
   action: "CreateRecTask" | "DescribeTaskStatus",
   payload: Record<string, unknown>,
   config: TencentAsrConfig,
+  signal: AbortSignal,
 ): Promise<T> {
+  throwIfTranscriptionAborted(signal);
   const timestamp = Math.floor(Date.now() / 1000);
   const date = formatUtcDate(timestamp);
   const body = JSON.stringify(payload);
@@ -171,6 +177,7 @@ async function callTencentAsrApi<T>(
       "X-TC-Region": config.region,
     },
     body,
+    signal,
   });
   const rawText = await response.text();
   let parsed: TencentAsrResponse<T>;
@@ -196,12 +203,15 @@ async function callTencentAsrApi<T>(
   return parsed.Response;
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function convertToTencentMp3(inputPath: string) {
-  const tempDir = path.resolve(process.cwd(), "tmp", "tencent-asr");
+async function convertToTencentMp3(
+  inputPath: string,
+  signal: AbortSignal,
+) {
+  const tempDir = path.resolve(
+    /* turbopackIgnore: true */ process.cwd(),
+    "tmp",
+    "tencent-asr",
+  );
   const outputPath = path.join(
     tempDir,
     `tencent-asr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`,
@@ -227,6 +237,7 @@ async function convertToTencentMp3(inputPath: string) {
       ],
       {
         timeout: 120_000,
+        signal,
       },
     );
   } catch (error) {
@@ -241,7 +252,7 @@ async function convertToTencentMp3(inputPath: string) {
     throw new Error(`音频转码为腾讯云 ASR MP3 失败：${message.slice(0, 200)}`);
   }
 
-  const outputStat = await stat(outputPath);
+  const outputStat = await stat(/* turbopackIgnore: true */ outputPath);
 
   if (!outputStat.isFile() || outputStat.size <= 0) {
     throw new Error("音频转码失败：ffmpeg 未生成 MP3 文件。");
@@ -321,9 +332,13 @@ function isTencentTaskFailed(status: unknown, statusText: string) {
   return status === 3 || status === "3" || statusText === "failed";
 }
 
-async function pollTencentResult(taskId: number, config: TencentAsrConfig) {
+async function pollTencentResult(
+  taskId: number,
+  config: TencentAsrConfig,
+  signal: AbortSignal,
+) {
   for (let attempt = 1; attempt <= config.maxPollCount; attempt++) {
-    await sleep(config.pollIntervalMs);
+    await abortableTranscriptionDelay(config.pollIntervalMs, signal);
 
     const response = await callTencentAsrApi<DescribeTaskStatusResponse>(
       "DescribeTaskStatus",
@@ -331,6 +346,7 @@ async function pollTencentResult(taskId: number, config: TencentAsrConfig) {
         TaskId: taskId,
       },
       config,
+      signal,
     );
     const data = response.Data;
 
@@ -369,16 +385,21 @@ async function pollTencentResult(taskId: number, config: TencentAsrConfig) {
 
 export async function transcribeWithTencent(
   filePath: string,
+  signal: AbortSignal,
 ): Promise<TranscriptionResult> {
   const config = getTencentAsrConfig();
   const absolutePath = path.resolve(filePath);
   let convertedPath: string | null = null;
 
   try {
-    const converted = await convertToTencentMp3(absolutePath);
+    throwIfTranscriptionAborted(signal);
+    const converted = await convertToTencentMp3(absolutePath, signal);
     convertedPath = converted.outputPath;
 
-    const audioBuffer = await readFile(converted.outputPath);
+    const audioBuffer = await readFile(
+      /* turbopackIgnore: true */ converted.outputPath,
+      { signal },
+    );
     const audioData = audioBuffer.toString("base64");
 
     if (audioData.length > MAX_DIRECT_AUDIO_BASE64_LENGTH) {
@@ -399,6 +420,7 @@ export async function transcribeWithTencent(
         DataLen: audioBuffer.byteLength,
       },
       config,
+      signal,
     );
     const taskId = createResponse.Data?.TaskId;
 
@@ -406,7 +428,7 @@ export async function transcribeWithTencent(
       throw new Error("腾讯云 ASR 创建任务失败：未返回 TaskId。");
     }
 
-    return pollTencentResult(taskId, config);
+    return pollTencentResult(taskId, config, signal);
   } finally {
     if (convertedPath) {
       await rm(convertedPath, { force: true }).catch(() => {

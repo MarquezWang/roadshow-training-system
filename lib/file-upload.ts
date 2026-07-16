@@ -1,10 +1,11 @@
-import { mkdir, writeFile } from "fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, rm, writeFile } from "fs/promises";
 import path from "path";
 
 export const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
 
-const ALLOWED_EXTENSIONS = new Set([".pdf", ".ppt", ".pptx", ".docx", ".txt"]);
-const INITIAL_MATERIAL_EXTENSIONS = new Set([".pdf", ".ppt", ".pptx"]);
+const ALLOWED_EXTENSIONS = new Set([".pdf", ".pptx", ".docx", ".txt"]);
+const INITIAL_MATERIAL_EXTENSIONS = new Set([".pdf", ".pptx"]);
 
 export type StoredProjectFile = {
   originalName: string;
@@ -35,7 +36,7 @@ export function validateProjectUpload(file: File) {
   }
 
   if (!isSupportedUploadFile(file.name)) {
-    throw new Error("仅支持上传 PDF、PPT、PPTX、DOCX 或 TXT 文件。");
+    throw new Error("仅支持上传 PDF、PPTX、DOCX 或 TXT 文件。");
   }
 }
 
@@ -49,7 +50,7 @@ export class InitialProjectMaterialValidationError extends Error {
 export function validateInitialProjectMaterial(files: File[]) {
   if (files.length !== 1 || files[0].size === 0) {
     throw new InitialProjectMaterialValidationError(
-      "仅支持上传 1 个 PPT、PPTX 或 PDF 文件。",
+      "仅支持上传 1 个 PPTX 或 PDF 文件。",
     );
   }
 
@@ -58,7 +59,7 @@ export function validateInitialProjectMaterial(files: File[]) {
 
   if (!INITIAL_MATERIAL_EXTENSIONS.has(extension)) {
     throw new InitialProjectMaterialValidationError(
-      "仅支持上传 1 个 PPT、PPTX 或 PDF 文件。",
+      "仅支持上传 1 个 PPTX 或 PDF 文件。",
     );
   }
 
@@ -94,16 +95,37 @@ export async function saveProjectUpload(projectId: string, file: File) {
 
   const safeProjectId = sanitizeProjectId(projectId);
   const safeFileName = sanitizeFileName(file.name);
-  const storedName = `${Date.now()}-${safeFileName}`;
+  const storedName = `${randomUUID()}-${safeFileName}`;
   const relativeDirectory = path.join("uploads", "projects", safeProjectId);
-  const absoluteDirectory = path.join(process.cwd(), relativeDirectory);
+  const absoluteDirectory = path.join(
+    /* turbopackIgnore: true */ process.cwd(),
+    relativeDirectory,
+  );
   const relativePath = path
     .join(relativeDirectory, storedName)
     .replaceAll(path.sep, "/");
-  const absolutePath = path.join(process.cwd(), relativePath);
+  const absolutePath = path.join(
+    /* turbopackIgnore: true */ process.cwd(),
+    relativePath,
+  );
+  const temporaryPath = `${absolutePath}.${randomUUID()}.tmp`;
+  const buffer = Buffer.from(await file.arrayBuffer());
+
+  validateProjectFileSignature(file.name, buffer);
 
   await mkdir(absoluteDirectory, { recursive: true });
-  await writeFile(absolutePath, Buffer.from(await file.arrayBuffer()));
+  try {
+    await writeFile(/* turbopackIgnore: true */ temporaryPath, buffer, {
+      flag: "wx",
+    });
+    await rename(
+      /* turbopackIgnore: true */ temporaryPath,
+      /* turbopackIgnore: true */ absolutePath,
+    );
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 
   return {
     originalName: file.name,
@@ -111,4 +133,44 @@ export async function saveProjectUpload(projectId: string, file: File) {
     filePath: relativePath,
     fileSize: file.size,
   } satisfies StoredProjectFile;
+}
+
+export function validateProjectFileSignature(fileName: string, buffer: Buffer) {
+  const extension = path.extname(fileName).toLowerCase();
+  const startsWith = (signature: string) =>
+    buffer.subarray(0, signature.length).equals(Buffer.from(signature, "binary"));
+
+  if (extension === ".pdf" && !startsWith("%PDF-")) {
+    throw new Error("文件内容不是有效的 PDF。请勿仅修改文件扩展名。");
+  }
+
+  if (
+    (extension === ".pptx" || extension === ".docx") &&
+    !startsWith("PK\u0003\u0004")
+  ) {
+    throw new Error("Office 文件结构无效。请重新导出后上传。");
+  }
+
+  if (extension === ".txt" && buffer.subarray(0, 8_192).includes(0)) {
+    throw new Error("TXT 文件包含二进制内容，无法解析。");
+  }
+}
+
+export async function removeProjectUpload(filePath: string) {
+  const uploadRoot = path.resolve(
+    /* turbopackIgnore: true */ process.cwd(),
+    "uploads",
+    "projects",
+  );
+  const absolutePath = path.resolve(
+    /* turbopackIgnore: true */ process.cwd(),
+    filePath,
+  );
+  const relativePath = path.relative(uploadRoot, absolutePath);
+
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error("拒绝删除项目上传目录之外的文件。");
+  }
+
+  await rm(/* turbopackIgnore: true */ absolutePath, { force: true });
 }

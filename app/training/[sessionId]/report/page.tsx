@@ -7,7 +7,6 @@ import {
   normalizeQaQuestions,
   normalizeReportAnalysis,
 } from "./report-page-normalizers";
-import { isReportAnalysisStale } from "./report-page-staleness";
 import { TrainingReportClient } from "./training-report-client";
 
 type TrainingReportPageProps = Readonly<{
@@ -36,17 +35,15 @@ export default async function TrainingReportPage({
   }
 
   const recording = normalizePitchRecording(session.id, session.recordings);
-  const analysis = normalizeReportAnalysis(session.analyses[0]);
+  const currentAnalysis =
+    session.currentAnalysis?.status === "COMPLETED" &&
+    session.currentAnalysis.analysisType === "PITCH"
+      ? session.currentAnalysis
+      : session.analyses[0];
+  const analysis = normalizeReportAnalysis(currentAnalysis);
 
-  const isAnalysisStale = isReportAnalysisStale({
-    sessionId,
-    analysisStatus: analysis?.status ?? null,
-    analysisUpdatedAt: session.analyses[0]?.updatedAt ?? null,
-    recordings: session.recordings,
-    trainingQuestions: session.trainingQuestions,
-  });
-
-  const initialAnalysis = isAnalysisStale ? null : analysis;
+  // stale 只触发后台生成新版本；当前成功报告继续展示，直到新版本原子发布。
+  const initialAnalysis = analysis;
   const qaQuestions = normalizeQaQuestions(session.id, session.trainingQuestions);
 
   return (

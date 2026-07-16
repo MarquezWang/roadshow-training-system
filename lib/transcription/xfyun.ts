@@ -7,6 +7,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { TranscribeBusinessError } from "@/lib/transcribe-error";
 import { formatTranscriptErrorMessage } from "@/lib/transcript-error-message";
+import {
+  abortableTranscriptionDelay,
+  throwIfTranscriptionAborted,
+} from "@/lib/transcription-abort.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,7 +23,11 @@ const MAX_POLL_DURATION_MS = 10 * 60 * 1_000;
 const STATUS4_EMPTY_RETRY_COUNT = 6;
 const STATUS4_EMPTY_RETRY_INTERVAL_MS = 5_000;
 
-const XFYUN_DEBUG_DIR = path.join(process.cwd(), "tmp", "xfyun-debug");
+const XFYUN_DEBUG_DIR = path.join(
+  /* turbopackIgnore: true */ process.cwd(),
+  "tmp",
+  "xfyun-debug",
+);
 const XFYUN_DEBUG = process.env.XFYUN_DEBUG === "true";
 const KEEP_TEMP_AUDIO = process.env.XFYUN_KEEP_TEMP_AUDIO === "true";
 
@@ -112,16 +120,23 @@ async function saveDebugJson(
   }
 }
 
-async function probeAudio(filePath: string): Promise<AudioInfo> {
-  const probe = await execFileAsync("ffprobe", [
-    "-v",
-    "quiet",
-    "-print_format",
-    "json",
-    "-show_format",
-    "-show_streams",
-    filePath,
-  ]);
+async function probeAudio(
+  filePath: string,
+  signal: AbortSignal,
+): Promise<AudioInfo> {
+  const probe = await execFileAsync(
+    "ffprobe",
+    [
+      "-v",
+      "quiet",
+      "-print_format",
+      "json",
+      "-show_format",
+      "-show_streams",
+      filePath,
+    ],
+    { signal, timeout: 30_000 },
+  );
 
   const info = JSON.parse(probe.stdout) as {
     format?: { duration?: string };
@@ -153,6 +168,7 @@ async function probeAudio(filePath: string): Promise<AudioInfo> {
 
 async function convertToWav(
   inputPath: string,
+  signal: AbortSignal,
 ): Promise<{ outputPath: string; audioInfo: AudioInfo }> {
   const outputPath = path.join(
     tmpdir(),
@@ -160,20 +176,24 @@ async function convertToWav(
   );
 
   try {
-    await execFileAsync("ffmpeg", [
-      "-y",
-      "-i",
-      inputPath,
-      "-acodec",
-      "pcm_s16le",
-      "-ar",
-      "16000",
-      "-ac",
-      "1",
-      "-sample_fmt",
-      "s16",
-      outputPath,
-    ]);
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-y",
+        "-i",
+        inputPath,
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        "-sample_fmt",
+        "s16",
+        outputPath,
+      ],
+      { signal, timeout: 120_000 },
+    );
   } catch (error) {
     if (
       error instanceof Error &&
@@ -190,16 +210,18 @@ async function convertToWav(
     );
   }
 
-  if (!existsSync(outputPath)) {
+  if (!existsSync(/* turbopackIgnore: true */ outputPath)) {
     throw new Error("音频转码失败：ffmpeg 未生成输出文件。");
   }
 
-  const stat = await readFile(outputPath).then((buf) => buf.length);
+  const stat = await readFile(/* turbopackIgnore: true */ outputPath, {
+    signal,
+  }).then((buf) => buf.length);
   debugLog(
     `[xfyun convert] outputPath=${outputPath} fileSize=${stat} bytes`,
   );
 
-  const audioInfo = await probeAudio(outputPath);
+  const audioInfo = await probeAudio(outputPath, signal);
 
   return { outputPath, audioInfo };
 }
@@ -209,11 +231,15 @@ async function uploadAudio(
   config: ReturnType<typeof getXfyunConfig>,
   audioInfo: AudioInfo,
   debugDir: string,
+  signal: AbortSignal,
 ): Promise<{ orderId: string; uploadFileName: string; uploadFileSize: number; uploadDurationMs: number; debugDir: string }> {
   const ts = Math.floor(Date.now() / 1000).toString();
   const signa = generateSigna(config.appId, ts, config.secretKey);
   const fileName = path.basename(filePath);
-  const fileBuffer = await readFile(filePath);
+  throwIfTranscriptionAborted(signal);
+  const fileBuffer = await readFile(/* turbopackIgnore: true */ filePath, {
+    signal,
+  });
   const fileSize = fileBuffer.length;
   const durationMs = Math.round(audioInfo.durationSeconds * 1000);
 
@@ -249,6 +275,7 @@ async function uploadAudio(
       "Content-Type": "application/octet-stream",
     },
     body: new Uint8Array(fileBuffer),
+    signal,
   });
 
   const body = (await response.json()) as {
@@ -337,6 +364,7 @@ async function getResultOnce(
   variant: ResultVariant,
   config: ReturnType<typeof getXfyunConfig>,
   debugDir: string,
+  signal: AbortSignal,
 ): Promise<{ body: XfyunResultBody; variantName: string }> {
   const ts = Math.floor(Date.now() / 1000).toString();
   const signa = generateSigna(config.appId, ts, config.secretKey);
@@ -351,7 +379,7 @@ async function getResultOnce(
   }
 
   const url = `${XFYUN_RESULT_URL}?${params.toString()}`;
-  const init: RequestInit = { method: variant.method };
+  const init: RequestInit = { method: variant.method, signal };
 
   if (variant.method === "POST") {
     init.body = new FormData();
@@ -513,6 +541,7 @@ async function pollResult(
   },
   debugDir: string,
   debugAudioPath: string | null,
+  signal: AbortSignal,
 ): Promise<string> {
   const startTime = Date.now();
   let status4EmptyCount = 0;
@@ -525,6 +554,7 @@ async function pollResult(
       RESULT_VARIANTS[0],
       config,
       debugDir,
+      signal,
     );
 
     const primaryBody = primaryResult.body;
@@ -579,7 +609,7 @@ async function pollResult(
         );
       }
 
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      await abortableTranscriptionDelay(POLL_INTERVAL_MS, signal);
       continue;
     }
 
@@ -611,6 +641,7 @@ async function pollResult(
           RESULT_VARIANTS[vi],
           config,
           debugDir,
+          signal,
         );
 
         variantSummaries.push(formatVariantSummary(fallback));
@@ -672,8 +703,9 @@ async function pollResult(
         );
       }
 
-      await new Promise((resolve) =>
-        setTimeout(resolve, STATUS4_EMPTY_RETRY_INTERVAL_MS),
+      await abortableTranscriptionDelay(
+        STATUS4_EMPTY_RETRY_INTERVAL_MS,
+        signal,
       );
       continue;
     }
@@ -694,7 +726,7 @@ async function pollResult(
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    await abortableTranscriptionDelay(POLL_INTERVAL_MS, signal);
   }
 
   debugLog(
@@ -869,6 +901,7 @@ function extractTextFromResult(orderResult: unknown): string {
 export async function transcribeWithXfyun(
   filePath: string,
   mimeType?: string | null,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<string> {
   const config = getXfyunConfig();
   const absolutePath = path.resolve(filePath);
@@ -882,10 +915,11 @@ export async function transcribeWithXfyun(
   let debugAudioPath: string | null = null;
 
   try {
+    throwIfTranscriptionAborted(signal);
     let audioInfo: AudioInfo;
 
     if (await needsConversion(absolutePath, mimeType)) {
-      const converted = await convertToWav(absolutePath);
+      const converted = await convertToWav(absolutePath, signal);
       tempConvertedPath = converted.outputPath;
       audioPath = converted.outputPath;
       audioInfo = converted.audioInfo;
@@ -895,14 +929,20 @@ export async function transcribeWithXfyun(
         debugLog(`[xfyun debug] 保留转码 wav: ${debugAudioPath}`);
       }
     } else {
-      audioInfo = await probeAudio(absolutePath);
+      audioInfo = await probeAudio(absolutePath, signal);
       if (KEEP_TEMP_AUDIO) {
         debugAudioPath = absolutePath;
         debugLog(`[xfyun debug] 原始音频路径: ${debugAudioPath}`);
       }
     }
 
-    const uploadResult = await uploadAudio(audioPath, config, audioInfo, XFYUN_DEBUG_DIR);
+    const uploadResult = await uploadAudio(
+      audioPath,
+      config,
+      audioInfo,
+      XFYUN_DEBUG_DIR,
+      signal,
+    );
 
     const text = await pollResult(
       uploadResult.orderId,
@@ -915,6 +955,7 @@ export async function transcribeWithXfyun(
       },
       uploadResult.debugDir,
       debugAudioPath,
+      signal,
     );
 
     // 保存 debug-summary.json（成功路径）

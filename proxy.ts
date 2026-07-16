@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  getAuthenticatedRequest,
   authCookieName,
-  isAuthenticatedRequest,
   isAuthEnabled,
 } from "@/lib/auth";
 
@@ -27,6 +27,27 @@ function expectsHtml(request: NextRequest) {
   return request.headers.get("accept")?.includes("text/html") ?? false;
 }
 
+function applyRotatedAuthCookie(
+  response: NextResponse,
+  authResult: Awaited<ReturnType<typeof getAuthenticatedRequest>>,
+) {
+  if (!authResult?.rotatedCookieValue) {
+    return response;
+  }
+
+  response.cookies.set(authCookieName, authResult.rotatedCookieValue, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: Math.max(
+      1,
+      authResult.session.exp - Math.floor(Date.now() / 1000),
+    ),
+  });
+  return response;
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
@@ -34,14 +55,13 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const isAuthenticated = await isAuthenticatedRequest(request);
+  const authResult = await getAuthenticatedRequest(request);
+  const isAuthenticated = Boolean(authResult);
 
   if (pathname === "/login") {
-    if (isAuthenticated) {
-      return NextResponse.redirect(new URL("/projects", request.url));
-    }
-
-    return NextResponse.next();
+    // The database-backed login page decides whether the account/session is
+    // still active. This avoids a redirect loop after password reset or disable.
+    return applyRotatedAuthCookie(NextResponse.next(), authResult);
   }
 
   if (pathname === "/logout") {
@@ -51,7 +71,7 @@ export async function proxy(request: NextRequest) {
   }
 
   if (!isProtectedPath(pathname) || isAuthenticated) {
-    return NextResponse.next();
+    return applyRotatedAuthCookie(NextResponse.next(), authResult);
   }
 
   if (isApiPath(pathname) || !expectsHtml(request)) {

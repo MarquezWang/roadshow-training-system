@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/page-header";
 import { getCurrentAuthUserId } from "@/lib/auth-server";
 import { parseFileToText } from "@/lib/file-parser";
 import {
+  removeProjectUpload,
   saveProjectUpload,
   validateInitialProjectMaterial,
 } from "@/lib/file-upload";
@@ -141,10 +142,11 @@ async function createProject(formData: FormData) {
       summary,
       coreTechnology: technicalKeywords,
       applicationScenario,
-      businessModel: "",
+      businessModel: getValue(formData, "businessModel"),
       cooperationDemand: cooperationDemands.join("、"),
       productForm: getValue(formData, "productForm"),
       trlBasis: getValue(formData, "trlReason"),
+      teamInfo: getValue(formData, "teamInfo"),
       cooperationDemandDetail: cooperationDemands.includes("其他")
         ? otherDemandDetail
         : "",
@@ -157,43 +159,52 @@ async function createProject(formData: FormData) {
     },
   });
 
-  const savedFile = await saveProjectUpload(project.id, material);
-  let extractedText: string | null = null;
-  let parseStatus = "SUCCESS";
-  let parseError: string | null = null;
-
+  let savedFile: Awaited<ReturnType<typeof saveProjectUpload>> | null = null;
   try {
-    extractedText = await parseFileToText(
-      savedFile.filePath,
-      savedFile.fileType,
-    );
-  } catch (error) {
-    parseStatus = "FAILED";
-    parseError =
-      error instanceof Error ? error.message : "文件解析失败，请稍后重试。";
-  }
+    savedFile = await saveProjectUpload(project.id, material);
+    let extractedText: string | null = null;
+    let parseStatus = "SUCCESS";
+    let parseError: string | null = null;
 
-  const fileAsset = await prisma.fileAsset.create({
-    data: {
-      projectId: project.id,
-      originalName: savedFile.originalName,
-      fileType: savedFile.fileType,
-      filePath: savedFile.filePath,
-      fileSize: savedFile.fileSize,
-      extractedText,
-      parseStatus,
-      parseError,
-    },
-  });
+    try {
+      extractedText = await parseFileToText(
+        savedFile.filePath,
+        savedFile.fileType,
+      );
+    } catch (error) {
+      parseStatus = "FAILED";
+      parseError =
+        error instanceof Error ? error.message : "文件解析失败，请稍后重试。";
+    }
 
-  if (isPowerPointFile(savedFile)) {
-    await generatePowerPointPreviewPdf({
-      id: fileAsset.id,
-      projectId: project.id,
-      originalName: savedFile.originalName,
-      fileType: savedFile.fileType,
-      filePath: savedFile.filePath,
+    const fileAsset = await prisma.fileAsset.create({
+      data: {
+        projectId: project.id,
+        originalName: savedFile.originalName,
+        fileType: savedFile.fileType,
+        filePath: savedFile.filePath,
+        fileSize: savedFile.fileSize,
+        extractedText,
+        parseStatus,
+        parseError,
+      },
     });
+
+    if (isPowerPointFile(savedFile)) {
+      await generatePowerPointPreviewPdf({
+        id: fileAsset.id,
+        projectId: project.id,
+        originalName: savedFile.originalName,
+        fileType: savedFile.fileType,
+        filePath: savedFile.filePath,
+      });
+    }
+  } catch (error) {
+    await Promise.allSettled([
+      prisma.project.delete({ where: { id: project.id } }),
+      ...(savedFile ? [removeProjectUpload(savedFile.filePath)] : []),
+    ]);
+    throw error;
   }
 
   redirect(`/projects/${project.id}`);

@@ -307,6 +307,39 @@ test("客户机构部署、持续运行和验收证明可升级为 TRL 8", () =>
   assert.equal(result.matrix.actualUseProof, true);
 });
 
+test("否定的正式使用和验收描述不能构成实际使用证明", () => {
+  const result = assess(
+    "实际客户没有正式使用系统，也未通过现场验收。",
+    "软件系统/平台/App/SaaS",
+  );
+
+  assert.equal(result.matrix.realEnvironmentTest, false);
+  assert.equal(result.matrix.actualUseProof, false);
+  assert.ok(Number(result.trl.replace("TRL ", "")) < 7);
+});
+
+test("同句中的未认证不能抹掉已经完成的真实客户试用", () => {
+  const result = assess(
+    "系统已在真实客户现场试用，收集了用户反馈，但尚未通过认证。",
+    "软件系统/平台/App/SaaS",
+  );
+
+  assert.equal(result.trl, "TRL 7");
+  assert.equal(result.matrix.realEnvironmentTest, true);
+  assert.equal(result.matrix.certificationOrMarketAccess, false);
+  assert.equal(result.matrix.actualUseProof, false);
+});
+
+test("无标点转折中的否定证据按子句隔离", () => {
+  const result = assess(
+    "系统已在真实客户现场试用并收集反馈但未完成现场验收",
+    "软件系统/平台/App/SaaS",
+  );
+
+  assert.equal(result.matrix.realEnvironmentTest, true);
+  assert.equal(result.matrix.actualUseProof, false);
+});
+
 test("真实设备接入和认证可将船舶数据系统评为 TRL 8", () => {
   const result = assess(
     "软件系统已接入26艘船舶新能源系统，开展全天候监测。系统已通过船级社认证和型式认可。",

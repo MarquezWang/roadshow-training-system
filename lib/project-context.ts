@@ -49,6 +49,10 @@ export type ProjectAIContext = {
     applicationScenario: string;
     businessModel: string;
     cooperationDemand: string;
+    productForm: string;
+    trlBasis: string;
+    teamInfo: string;
+    cooperationDemandDetail: string;
   };
   files: Array<{
     id: string;
@@ -130,6 +134,30 @@ export type ProjectAIContext = {
     };
   };
 };
+
+export function parseProjectAIContextSnapshot(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<ProjectAIContext>;
+    if (
+      !parsed.project ||
+      typeof parsed.project.id !== "string" ||
+      !Array.isArray(parsed.files) ||
+      !Array.isArray(parsed.criteria) ||
+      !Array.isArray(parsed.expertComments) ||
+      !Array.isArray(parsed.historicalQuestions)
+    ) {
+      return null;
+    }
+
+    return parsed as ProjectAIContext;
+  } catch {
+    return null;
+  }
+}
 
 function takeFileTexts(
   files: Array<{
@@ -681,6 +709,10 @@ export async function buildProjectAIContext(
       applicationScenario: project.applicationScenario,
       businessModel: project.businessModel,
       cooperationDemand: project.cooperationDemand,
+      productForm: project.productForm,
+      trlBasis: project.trlBasis,
+      teamInfo: project.teamInfo,
+      cooperationDemandDetail: project.cooperationDemandDetail,
     },
     files: fileTextResult.files,
     evaluationRule: rule

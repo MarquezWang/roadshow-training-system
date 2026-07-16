@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import { reconcileTrainingAnalysisInputVersion } from "@/lib/training-analysis-input";
+import { recoverTrainingTranscriptionsForSession } from "@/lib/training-transcribe-task";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +41,17 @@ export async function GET(
       status: true,
       pitchEndedAt: true,
       qaEndedAt: true,
+      currentAnalysisId: true,
+      currentAnalysis: {
+        select: {
+          id: true,
+          status: true,
+          analysisType: true,
+          errorMessage: true,
+          updatedAt: true,
+          inputHash: true,
+        },
+      },
     },
   });
 
@@ -46,35 +59,71 @@ export async function GET(
     return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
   }
 
-  // 获取 analysis
-  const analysis = await prisma.trainingAnalysis.findFirst({
+  // 读报告状态时同步修复历史缺失任务和租约过期任务；真正的 ASR 在后台执行。
+  await recoverTrainingTranscriptionsForSession(sessionId);
+
+  // 最新尝试用于显示生成进度；当前指针用于持续展示最后一个成功版本。
+  const latestAnalysisAttempt = await prisma.trainingAnalysis.findFirst({
     where: {
       sessionId,
       analysisType: "PITCH",
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: { createdAt: "desc" },
     select: {
       id: true,
       status: true,
       errorMessage: true,
       updatedAt: true,
+      inputHash: true,
     },
   });
+  const pointedAnalysis =
+    session.currentAnalysis?.status === "COMPLETED" &&
+    session.currentAnalysis.analysisType === "PITCH"
+      ? session.currentAnalysis
+      : null;
+  const currentAnalysis =
+    pointedAnalysis ??
+    (await prisma.trainingAnalysis.findFirst({
+      where: {
+        sessionId,
+        analysisType: "PITCH",
+        status: "COMPLETED",
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        status: true,
+        analysisType: true,
+        errorMessage: true,
+        updatedAt: true,
+        inputHash: true,
+      },
+    }));
+  const analysis = latestAnalysisAttempt ?? currentAnalysis;
 
-  // 获取 Pitch transcript 状态
-  const pitchTranscript = await prisma.trainingTranscript.findFirst({
+  // 从录音侧读取转写，确保“已有录音但 Transcript 尚未创建”不会被视为完成。
+  const pitchRecording = await prisma.trainingRecording.findFirst({
     where: {
       sessionId,
-      recording: { phase: "PITCH" },
+      phase: "PITCH",
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: { createdAt: "desc" },
     select: {
       id: true,
-      status: true,
-      completedAt: true,
+      createdAt: true,
       updatedAt: true,
+      transcript: {
+        select: {
+          id: true,
+          status: true,
+          completedAt: true,
+          updatedAt: true,
+        },
+      },
     },
   });
+  const pitchTranscript = pitchRecording?.transcript ?? null;
 
   // 获取 QA 回答及转写状态（通过 TrainingAnswer 关联 question → recording → transcript）
   const qaAnswers = await prisma.trainingAnswer.findMany({
@@ -158,6 +207,9 @@ export async function GET(
   const qaMissingCount = qaTranscriptItems.filter(
     (t) => t.transcriptStatus === "MISSING",
   ).length;
+  const qaMissingWithRecordingCount = qaTranscriptItems.filter(
+    (t) => t.recordingId && t.transcriptStatus === "MISSING",
+  ).length;
   const qaAnsweredWithoutRecordingCount = qaTranscriptItems.filter(
     (t) => !t.recordingId,
   ).length;
@@ -181,18 +233,24 @@ export async function GET(
     hasQaEnded && hasWaitTimedOut(session.qaEndedAt, nowMs);
   const pitchTranscriptWaiting = isWaitingTranscriptStatus(
     pitchTranscript?.status,
-  );
+  ) || Boolean(pitchRecording && !pitchTranscript);
   const pitchTranscriptWaitTimedOut =
     pitchTranscriptWaiting &&
     hasWaitTimedOut(
-      pitchTranscript?.updatedAt ?? session.pitchEndedAt ?? session.qaEndedAt,
+      pitchTranscript?.updatedAt ??
+        pitchRecording?.updatedAt ??
+        pitchRecording?.createdAt ??
+        session.pitchEndedAt ??
+        session.qaEndedAt,
       nowMs,
     );
 
   // 只等待实际进入过的题。未进入的基础题不阻塞报告生成。
   const allQaCompleteOrFailed =
     hasQaEnded &&
-    ((qaPendingCount === 0 && qaProcessingCount === 0) ||
+    ((qaPendingCount === 0 &&
+      qaProcessingCount === 0 &&
+      qaMissingWithRecordingCount === 0) ||
       qaTranscriptWaitTimedOut);
   const noAnalyzableAnswerContent =
     enteredQaAnswers.length === 0 ||
@@ -205,45 +263,27 @@ export async function GET(
   // 判断是否可以生成 analysis
   // 条件：Pitch/QA transcript 已稳定，或等待超过阈值后允许降级生成。
   const pitchReady =
-    !pitchTranscript ||
-    pitchTranscript.status === "COMPLETED" ||
-    pitchTranscript.status === "FAILED" ||
+    !pitchRecording ||
+    pitchTranscript?.status === "COMPLETED" ||
+    pitchTranscript?.status === "FAILED" ||
     pitchTranscriptWaitTimedOut;
   const canGenerateAnalysis = pitchReady && allQaCompleteOrFailed;
 
-  // 判断是否有 stale analysis
-  let hasStaleAnalysis = false;
+  // 旧报告在确认输入未变化后会自动补写内容指纹，不要求用户无意义地重生成。
+  const analysisVersion = currentAnalysis
+    ? await reconcileTrainingAnalysisInputVersion(sessionId, currentAnalysis)
+    : null;
+  const hasStaleAnalysis = analysisVersion?.stale ?? false;
   const analysisProcessingTimedOut =
     analysis?.status === "PROCESSING" &&
     analysis.updatedAt !== null &&
     nowMs - analysis.updatedAt.getTime() > PROCESSING_ANALYSIS_TIMEOUT_MS;
-  if (
-    analysis &&
-    analysis.status === "COMPLETED" &&
-    analysis.updatedAt
-  ) {
-    const analysisUpdatedMs = analysis.updatedAt.getTime();
-    const allTranscriptTimes = [
-      ...(pitchTranscript?.completedAt
-        ? [pitchTranscript.completedAt.getTime()]
-        : []),
-      ...qaTranscriptItems
-        .filter((t) => t.completedAt)
-        .map((t) => new Date(t.completedAt!).getTime()),
-    ];
-
-    if (allTranscriptTimes.length > 0) {
-      const latestTranscriptMs = Math.max(...allTranscriptTimes);
-      if (latestTranscriptMs > analysisUpdatedMs) {
-        hasStaleAnalysis = true;
-      }
-    }
-  }
-
   return NextResponse.json({
     analysisStatus: analysis?.status ?? "NONE",
     analysisId: analysis?.id ?? null,
     analysisError: analysis?.errorMessage ?? null,
+    currentAnalysisId: currentAnalysis?.id ?? null,
+    hasCurrentAnalysis: Boolean(currentAnalysis),
     pitchTranscriptStatus: pitchTranscript?.status ?? "MISSING",
     qaTranscriptPendingCount: qaPendingCount,
     qaTranscriptProcessingCount: qaProcessingCount,

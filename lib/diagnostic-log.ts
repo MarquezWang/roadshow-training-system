@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from "fs/promises";
+import { appendFile, mkdir, readFile, stat, writeFile } from "fs/promises";
 import path from "path";
 
 export type DiagnosticEventType =
@@ -15,9 +15,13 @@ export type DiagnosticEvent = {
   meta?: Record<string, string | number | boolean | null>;
 };
 
-const DIAGNOSTIC_DIR = path.join(process.cwd(), "data");
+const DIAGNOSTIC_DIR = path.join(
+  /*turbopackIgnore: true*/ process.cwd(),
+  "data",
+);
 const DIAGNOSTIC_FILE = path.join(DIAGNOSTIC_DIR, "diagnostics.jsonl");
 const MAX_LOG_FILE_BYTES = 512 * 1024;
+let diagnosticWriteQueue: Promise<void> = Promise.resolve();
 
 function sanitizeMessage(message: string) {
   return message
@@ -59,7 +63,7 @@ async function trimLogFileIfNeeded() {
   }
 }
 
-export async function writeDiagnosticEvent(
+async function appendDiagnosticEvent(
   event: Omit<DiagnosticEvent, "ts">,
 ) {
   try {
@@ -71,11 +75,16 @@ export async function writeDiagnosticEvent(
       message: sanitizeMessage(event.message),
       meta: sanitizeMeta(event.meta),
     };
-    const previous = await readFile(DIAGNOSTIC_FILE, "utf8").catch(() => "");
-    await writeFile(DIAGNOSTIC_FILE, `${previous}${JSON.stringify(entry)}\n`);
+    await appendFile(DIAGNOSTIC_FILE, `${JSON.stringify(entry)}\n`, "utf8");
   } catch {
     // No-op: diagnostics must never break business flow.
   }
+}
+
+export function writeDiagnosticEvent(event: Omit<DiagnosticEvent, "ts">) {
+  const write = diagnosticWriteQueue.then(() => appendDiagnosticEvent(event));
+  diagnosticWriteQueue = write.catch(() => undefined);
+  return write;
 }
 
 export async function readRecentDiagnosticEvents(limit = 20) {
@@ -87,7 +96,13 @@ export async function readRecentDiagnosticEvents(limit = 20) {
       .filter(Boolean)
       .slice(-limit)
       .reverse()
-      .map((line) => JSON.parse(line) as DiagnosticEvent);
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line) as DiagnosticEvent];
+        } catch {
+          return [];
+        }
+      });
   } catch {
     return [];
   }

@@ -1,0 +1,2 @@
+ALTER TABLE "TrainingTranscript" ADD COLUMN "revision" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "TrainingAnalysis" ADD COLUMN "inputHash" TEXT NOT NULL DEFAULT '';

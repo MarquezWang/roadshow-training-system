@@ -10,6 +10,7 @@ import type { ReportScoreDisplayState } from "./report-score-display";
 type OverviewAnalysis = {
   status: string;
   overallScore: number | null;
+  isFallbackReport: boolean;
   summary: string;
 };
 
@@ -81,6 +82,29 @@ export function ReportOverviewTab({
           copySummaryMessage={copySummaryMessage}
           onCopyOnePageSummary={onCopyOnePageSummary}
         />
+      ) : null}
+
+      {analysis?.status === "COMPLETED" &&
+      analysis.isFallbackReport &&
+      !isAborted ? (
+        <section className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4 text-amber-100">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold">当前为降级报告</p>
+              <p className="mt-1 text-xs leading-5 text-amber-100/80">
+                系统已保留现有报告。你可以重新请求 AI 生成完整结构，失败时不会覆盖上一份报告。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onRetryAnalysisGeneration}
+              disabled={isAnalysisLoading}
+              className="inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-amber-200/40 bg-amber-100/10 px-4 text-xs font-semibold transition-colors hover:bg-amber-100/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isAnalysisLoading ? "正在重新生成……" : "重新生成完整报告"}
+            </button>
+          </div>
+        </section>
       ) : null}
 
       {analysis?.status === "COMPLETED" ? (

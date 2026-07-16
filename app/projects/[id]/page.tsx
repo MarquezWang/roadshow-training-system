@@ -14,6 +14,9 @@ import {
 } from "@/lib/training-status";
 import { MaterialDiagnosisPanel } from "./material-diagnosis-panel";
 import { TrainingRecordsPanel } from "./training-records-panel";
+import { ProjectMaterialsPanel } from "./project-materials-panel";
+import { calculateCurrentProjectContextHash } from "@/lib/project-context-hash";
+import { DeleteProjectButton } from "./delete-project-button";
 
 type ProjectDetailPageProps = Readonly<{
   params: Promise<{
@@ -125,6 +128,23 @@ export default async function ProjectDetailPage({
           priorityTasks: true,
           judgeQuestions: true,
           criteriaResults: true,
+          inputHash: true,
+          ruleVersion: true,
+        },
+      },
+      fileAssets: {
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          originalName: true,
+          fileType: true,
+          fileSize: true,
+          parseStatus: true,
+          parseError: true,
+          previewStatus: true,
+          previewError: true,
+          includeInAIContext: true,
+          createdAt: true,
         },
       },
     },
@@ -139,6 +159,14 @@ export default async function ProjectDetailPage({
   ).length;
   const latestMaterialDiagnosis = parseLatestMaterialDiagnosis(
     project.materialDiagnoses[0] ?? null,
+  );
+  const currentProjectContextHash = await calculateCurrentProjectContextHash(
+    project.id,
+  );
+  const isMaterialDiagnosisStale = Boolean(
+    project.materialDiagnoses[0] &&
+      (!project.materialDiagnoses[0].inputHash ||
+        project.materialDiagnoses[0].inputHash !== currentProjectContextHash),
   );
   const sessionsWithDuration = project.trainingSessions.filter(
     (session) => session.pitchDurationSec !== null,
@@ -320,14 +348,18 @@ export default async function ProjectDetailPage({
           >
             编辑项目
           </Link>
+          <DeleteProjectButton projectId={project.id} />
         </div>
       </section>
+
+      <ProjectMaterialsPanel projectId={project.id} files={project.fileAssets} />
 
       <TrainingRecordsPanel records={trainingRecordItems} />
 
       <MaterialDiagnosisPanel
         projectId={project.id}
         initialDiagnosis={latestMaterialDiagnosis}
+        initialIsStale={isMaterialDiagnosisStale}
       />
     </main>
   );

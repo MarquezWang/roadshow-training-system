@@ -13,6 +13,7 @@ import {
 type MaterialDiagnosisPanelProps = Readonly<{
   projectId: string;
   initialDiagnosis: MaterialDiagnosisResult | null;
+  initialIsStale: boolean;
 }>;
 
 const readinessClass: Record<ReadinessLevel, string> = {
@@ -64,9 +65,11 @@ async function readErrorMessage(response: Response) {
 export function MaterialDiagnosisPanel({
   projectId,
   initialDiagnosis,
+  initialIsStale,
 }: MaterialDiagnosisPanelProps) {
   const router = useRouter();
   const [diagnosis, setDiagnosis] = useState(initialDiagnosis);
+  const [isStale, setIsStale] = useState(initialIsStale);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [selectedCriterionKey, setSelectedCriterionKey] = useState("");
@@ -102,6 +105,7 @@ export function MaterialDiagnosisPanel({
       }
 
       setDiagnosis(data.diagnosis);
+      setIsStale(false);
       router.refresh();
     } catch (error) {
       setErrorMessage(
@@ -166,6 +170,12 @@ export function MaterialDiagnosisPanel({
       {errorMessage ? (
         <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
           {errorMessage}
+        </div>
+      ) : null}
+
+      {isStale ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+          项目档案、材料或评审规则已变化；当前诊断是历史结果，请重新生成。
         </div>
       ) : null}
 

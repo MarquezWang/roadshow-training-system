@@ -1,5 +1,6 @@
 import { readdir } from "fs/promises";
 import Link from "next/link";
+import { getTranscriptionProvider } from "@/lib/transcription";
 import path from "path";
 import { AI_MODEL_FAST, AI_MODEL_STRONG } from "@/lib/ai-models";
 import { requireAdminUser } from "@/lib/auth-server";
@@ -222,7 +223,7 @@ export default async function AdminHomePage() {
     prisma.trainingSession.count({
       where: {
         status: {
-          in: ["QA_COMPLETED", "REPORT_READY", "COMPLETED"],
+          in: ["QA_ENDED", "REPORT_READY", "FINISHED"],
         },
       },
     }),
@@ -233,17 +234,27 @@ export default async function AdminHomePage() {
   ]);
 
   const aiConfigured = hasValue(process.env.AI_API_KEY);
-  const transcriptionProvider = process.env.TRANSCRIPTION_PROVIDER || "xfyun";
+  const transcriptionProvider = getTranscriptionProvider();
   const tencentConfigured =
     hasValue(process.env.TENCENT_SECRET_ID) &&
     hasValue(process.env.TENCENT_SECRET_KEY);
   const xfyunConfigured =
     hasValue(process.env.XFYUN_APP_ID) && hasValue(process.env.XFYUN_SECRET_KEY);
+  const openAiTranscriptionConfigured = hasValue(
+    process.env.TRANSCRIPTION_API_KEY,
+  );
+  const tencentFlashConfigured =
+    tencentConfigured &&
+    (hasValue(process.env.TENCENT_APP_ID) ||
+      hasValue(process.env.TENCENTCLOUD_APP_ID));
   const asrConfigured =
-    transcriptionProvider === "tencent" ||
-    transcriptionProvider === "tencent_flash"
-      ? tencentConfigured
-      : xfyunConfigured;
+    transcriptionProvider === "openai"
+      ? openAiTranscriptionConfigured
+      : transcriptionProvider === "xfyun"
+        ? xfyunConfigured
+        : transcriptionProvider === "tencent_flash"
+          ? tencentFlashConfigured
+          : tencentConfigured;
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">

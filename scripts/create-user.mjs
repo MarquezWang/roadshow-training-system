@@ -1,6 +1,6 @@
-import crypto from "node:crypto";
 import process from "node:process";
 import { PrismaClient } from "@prisma/client";
+import { hashPassword } from "../lib/password-hash.mjs";
 
 const prisma = new PrismaClient();
 
@@ -30,10 +30,6 @@ Examples:
 `);
 }
 
-function hashPassword(password) {
-  return crypto.createHash("sha256").update(password).digest("hex");
-}
-
 async function main() {
   const email = getArg("email");
   const name = getArg("name") || email;
@@ -53,13 +49,18 @@ async function main() {
     throw new Error("Role must be USER, ADMIN, or TEAM.");
   }
 
-  const passwordHash = hashPassword(password);
+  const passwordHash = await hashPassword(password);
   const existing = await prisma.user.findUnique({ where: { email } });
 
   const user = existing
     ? await prisma.user.update({
         where: { email },
-        data: { name, passwordHash, role },
+        data: {
+          name,
+          passwordHash,
+          role,
+          sessionVersion: { increment: 1 },
+        },
         select: { id: true, email: true, name: true, role: true },
       })
     : await prisma.user.create({

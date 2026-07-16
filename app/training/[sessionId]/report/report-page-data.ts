@@ -43,12 +43,33 @@ export function getTrainingReportPageSession(
           },
         },
       },
+      currentAnalysis: {
+        select: {
+          id: true,
+          status: true,
+          analysisType: true,
+          overallScore: true,
+          summary: true,
+          errorMessage: true,
+          inputHash: true,
+          updatedAt: true,
+          strengthsJson: true,
+          weaknessesJson: true,
+          suggestionsJson: true,
+          coverageJson: true,
+          timingJson: true,
+          slideSyncJson: true,
+          riskQuestionsJson: true,
+          rawResultJson: true,
+        },
+      },
       analyses: {
         where: {
           analysisType: "PITCH",
+          status: "COMPLETED",
         },
         orderBy: {
-          updatedAt: "desc",
+          createdAt: "desc",
         },
         take: 1,
         select: {
@@ -57,6 +78,7 @@ export function getTrainingReportPageSession(
           overallScore: true,
           summary: true,
           errorMessage: true,
+          inputHash: true,
           updatedAt: true,
           strengthsJson: true,
           weaknessesJson: true,

@@ -7,9 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:auth": "node --test tests/auth/auth-route-coverage.test.mjs",
+    "test:auth": "node --test tests/auth/auth-route-coverage.test.mjs tests/auth/auth-cookie-rotation.test.mjs tests/auth/password-security.test.mjs tests/auth/safe-redirect.test.mjs",
     "test:trl": "node --test tests/trl/trl-assessment.test.mjs",
-    "test:stability": "node --test tests/stability/end-pitch-guard.test.mjs tests/stability/report-status-guard.test.mjs tests/stability/qa-answer-idempotency.test.mjs tests/stability/dynamic-followup-preflight.test.mjs tests/stability/dynamic-followup-validation.test.mjs",
+    "test:files": "node --test tests/files/file-upload-security.test.mjs tests/files/upload-orphan-scan.test.mjs tests/files/document-parser-boundary.test.mjs tests/files/file-lifecycle.test.mjs",
+    "test:stability": "node --test tests/stability/end-pitch-guard.test.mjs tests/stability/report-status-guard.test.mjs tests/stability/qa-answer-idempotency.test.mjs tests/stability/dynamic-followup-preflight.test.mjs tests/stability/dynamic-followup-validation.test.mjs tests/stability/state-machine-guards.test.mjs tests/stability/diagnostic-log-concurrency.test.mjs tests/stability/analysis-structured-output-guard.test.mjs tests/stability/admin-user-account.test.mjs tests/stability/training-analysis-version.test.mjs tests/stability/training-analysis-publication.test.mjs tests/stability/training-transcription-job.test.mjs tests/stability/transcription-resource-boundary.test.mjs tests/stability/upload-maintenance-job.test.mjs tests/stability/deletion-route-consistency.test.mjs",
     "test:stability:local": "node scripts/run-stability-tests.mjs",
     "test:stability:end-pitch": "node --test tests/stability/end-pitch-guard.test.mjs",
     "test:stability:report-status": "node --test tests/stability/report-status-guard.test.mjs",
@@ -23,7 +24,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed",
-    "user:create": "node scripts/create-user.mjs"
+    "user:create": "node scripts/create-user.mjs",
+    "uploads:scan": "node scripts/scan-upload-orphans.mjs"
   },
   "prisma": {
     "seed": "node prisma/seed.mjs"

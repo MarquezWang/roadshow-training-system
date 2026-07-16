@@ -14,6 +14,7 @@ import {
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
+import { calculateProjectContextHash } from "@/lib/project-context-hash";
 
 type MaterialDiagnosisRouteContext = Readonly<{
   params: Promise<{
@@ -104,6 +105,7 @@ export async function POST(
     }
 
     const aiContext = await buildProjectAIContext(id);
+    const inputHash = calculateProjectContextHash(aiContext);
 
     if (!hasMaterialText(aiContext)) {
       return NextResponse.json(
@@ -139,6 +141,16 @@ export async function POST(
       (total, criterion) => total + criterion.weight,
       0,
     );
+    const latestContext = await buildProjectAIContext(id);
+    if (calculateProjectContextHash(latestContext) !== inputHash) {
+      return NextResponse.json(
+        {
+          status: "failed",
+          message: "诊断生成期间项目材料发生变化，请重新生成。",
+        },
+        { status: 409 },
+      );
+    }
 
     await prisma.materialDiagnosis.create({
       data: {
@@ -153,6 +165,8 @@ export async function POST(
         priorityTasks: JSON.stringify(diagnosis.priorityTasks, null, 2),
         judgeQuestions: JSON.stringify(diagnosis.judgeQuestions, null, 2),
         criteriaResults: JSON.stringify(diagnosis.criteriaResults, null, 2),
+        inputHash,
+        ruleVersion: aiContext.evaluationRule.version,
       },
     });
 

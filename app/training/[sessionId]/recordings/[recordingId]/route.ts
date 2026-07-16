@@ -1,4 +1,6 @@
-import { readFile, stat } from "fs/promises";
+import { createReadStream } from "node:fs";
+import { stat } from "fs/promises";
+import { Readable } from "node:stream";
 import path from "path";
 import { NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
@@ -13,23 +15,34 @@ type RecordingPlaybackRouteContext = Readonly<{
 
 async function resolveRecordingPath(filePath: string) {
   const normalizedPath = filePath.replaceAll("\\", "/");
+  const recordingPrefix = "uploads/training/";
 
-  if (!normalizedPath.startsWith("uploads/training/")) {
+  if (!normalizedPath.startsWith(recordingPrefix)) {
     throw new Error("INVALID_RECORDING_PATH");
   }
 
-  const uploadsRoot = path.resolve(process.cwd(), "uploads");
-  const absolutePath = path.resolve(process.cwd(), normalizedPath);
-  const relativeToUploads = path.relative(uploadsRoot, absolutePath);
+  const trainingUploadsRoot = path.join(
+    /* turbopackIgnore: true */ process.cwd(),
+    "uploads",
+    "training",
+  );
+  const absolutePath = path.resolve(
+    trainingUploadsRoot,
+    normalizedPath.slice(recordingPrefix.length),
+  );
+  const relativeToTrainingUploads = path.relative(
+    trainingUploadsRoot,
+    absolutePath,
+  );
 
   if (
-    relativeToUploads.startsWith("..") ||
-    path.isAbsolute(relativeToUploads)
+    relativeToTrainingUploads.startsWith("..") ||
+    path.isAbsolute(relativeToTrainingUploads)
   ) {
     throw new Error("INVALID_RECORDING_PATH");
   }
 
-  const fileStat = await stat(absolutePath);
+  const fileStat = await stat(/* turbopackIgnore: true */ absolutePath);
 
   if (!fileStat.isFile()) {
     throw new Error("FILE_NOT_FOUND");
@@ -119,7 +132,6 @@ export async function GET(
     const { absolutePath, size } = await resolveRecordingPath(
       recording.filePath,
     );
-    const bytes = await readFile(absolutePath);
     const range = parseRangeHeader(request.headers.get("range"), size);
     const baseHeaders = {
       "Content-Type": recording.mimeType,
@@ -141,19 +153,28 @@ export async function GET(
     }
 
     if (range) {
-      const body = bytes.subarray(range.start, range.end + 1);
+      const contentLength = range.end - range.start + 1;
+      const body = Readable.toWeb(
+        createReadStream(/* turbopackIgnore: true */ absolutePath, {
+          start: range.start,
+          end: range.end,
+        }),
+      );
 
-      return new Response(body, {
+      return new Response(body as BodyInit, {
         status: 206,
         headers: {
           ...baseHeaders,
-          "Content-Length": String(body.byteLength),
+          "Content-Length": String(contentLength),
           "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
         },
       });
     }
 
-    return new Response(bytes, {
+    const body = Readable.toWeb(
+      createReadStream(/* turbopackIgnore: true */ absolutePath),
+    );
+    return new Response(body as BodyInit, {
       headers: {
         ...baseHeaders,
         "Content-Length": String(size),

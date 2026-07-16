@@ -38,6 +38,10 @@ async function updateProject(id: string, formData: FormData) {
     formData,
     "cooperationDemandDetail",
   );
+  const needsConversionSupport =
+    getValue(formData, "needsConversionSupport") === "true";
+  const projectContact = getValue(formData, "projectContact");
+  const contactPhone = getValue(formData, "contactPhone");
 
   if (
     !name ||
@@ -48,6 +52,13 @@ async function updateProject(id: string, formData: FormData) {
     !/^TRL [1-9]$/.test(stage)
   ) {
     throw new Error("请完整填写项目档案。");
+  }
+
+  if (
+    needsConversionSupport &&
+    (!projectContact || !/^1[3-9]\d{9}$/.test(contactPhone))
+  ) {
+    throw new Error("请填写项目联系人和有效的 11 位手机号。");
   }
 
   if (
@@ -68,9 +79,15 @@ async function updateProject(id: string, formData: FormData) {
       summary,
       coreTechnology,
       applicationScenario,
+      businessModel: getValue(formData, "businessModel"),
       productForm: getValue(formData, "productForm"),
+      trlBasis: getValue(formData, "trlBasis"),
+      teamInfo: getValue(formData, "teamInfo"),
       cooperationDemand: cooperationDemands.join("、"),
       cooperationDemandDetail,
+      needsConversionSupport,
+      projectContact: needsConversionSupport ? projectContact : "",
+      contactPhone: needsConversionSupport ? contactPhone : "",
     },
   });
 
@@ -94,9 +111,15 @@ export default async function EditProjectPage({ params }: EditProjectPageProps) 
       summary: true,
       coreTechnology: true,
       applicationScenario: true,
+      businessModel: true,
       productForm: true,
+      trlBasis: true,
+      teamInfo: true,
       cooperationDemand: true,
       cooperationDemandDetail: true,
+      needsConversionSupport: true,
+      projectContact: true,
+      contactPhone: true,
     },
   });
 

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { dynamicQuestionTrainingStatuses } from "@/lib/training-status";
 
 export const DYNAMIC_FOLLOWUP_ORDER_INDEX = 4;
 export const DYNAMIC_FOLLOWUP_SOURCE = "DYNAMIC_FOLLOWUP";
@@ -66,32 +67,55 @@ export type SerializedDynamicQuestion = NonNullable<
   ReturnType<typeof serializeDynamicQuestion>
 >;
 
+export class DynamicFollowupSessionClosedError extends Error {
+  constructor() {
+    super("dynamic followup session is no longer open");
+    this.name = "DynamicFollowupSessionClosedError";
+  }
+}
+
 export async function createOrReturnDynamicQuestion(params: {
   sessionId: string;
   projectId: string;
   questionText: string;
 }) {
   const { sessionId, projectId, questionText } = params;
-  const existingQuestion = await findExistingDynamicQuestion(sessionId);
-  const serializedExistingQuestion =
-    serializeDynamicQuestion(existingQuestion);
-
-  if (serializedExistingQuestion) {
-    return serializedExistingQuestion;
-  }
-
   try {
-    const createdQuestion = await prisma.trainingQuestion.create({
-      data: {
-        sessionId,
-        projectId,
-        orderIndex: DYNAMIC_FOLLOWUP_ORDER_INDEX,
-        questionText,
-        questionType: DYNAMIC_FOLLOWUP_TYPE,
-        source: DYNAMIC_FOLLOWUP_SOURCE,
-        basis: DYNAMIC_FOLLOWUP_BASIS,
-      },
-      select: dynamicQuestionSelect,
+    const createdQuestion = await prisma.$transaction(async (transaction) => {
+      const existingQuestion = await transaction.trainingQuestion.findFirst({
+        where: {
+          sessionId,
+          orderIndex: DYNAMIC_FOLLOWUP_ORDER_INDEX,
+          source: DYNAMIC_FOLLOWUP_SOURCE,
+        },
+        select: dynamicQuestionSelect,
+      });
+      if (existingQuestion) {
+        return existingQuestion;
+      }
+
+      const openSession = await transaction.trainingSession.count({
+        where: {
+          id: sessionId,
+          status: { in: [...dynamicQuestionTrainingStatuses] },
+        },
+      });
+      if (openSession === 0) {
+        throw new DynamicFollowupSessionClosedError();
+      }
+
+      return transaction.trainingQuestion.create({
+        data: {
+          sessionId,
+          projectId,
+          orderIndex: DYNAMIC_FOLLOWUP_ORDER_INDEX,
+          questionText,
+          questionType: DYNAMIC_FOLLOWUP_TYPE,
+          source: DYNAMIC_FOLLOWUP_SOURCE,
+          basis: DYNAMIC_FOLLOWUP_BASIS,
+        },
+        select: dynamicQuestionSelect,
+      });
     });
 
     const serializedCreatedQuestion =

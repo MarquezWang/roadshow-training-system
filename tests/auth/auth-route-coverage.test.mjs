@@ -55,3 +55,13 @@ test("ai connectivity endpoint remains admin-only in production", () => {
     "/api/ai/test must hide itself from non-admin production callers",
   );
 });
+
+test("proxy rotates previous-secret cookies and leaves database validation to login", () => {
+  const proxySource = read("proxy.ts");
+  const loginSource = read("app/login/page.tsx");
+
+  assert.match(proxySource, /getAuthenticatedRequest\(request\)/);
+  assert.match(proxySource, /authResult\.rotatedCookieValue/);
+  assert.match(proxySource, /response\.cookies\.set\(authCookieName/);
+  assert.match(loginSource, /getCurrentAuthUser\(\)/);
+});

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
+import { trainingTranscriptionJobKey } from "@/lib/training-transcription-job.mjs";
 
 type TranscriptRouteContext = Readonly<{
   params: Promise<{
@@ -9,7 +10,7 @@ type TranscriptRouteContext = Readonly<{
   }>;
 }>;
 
-const allowedSources = new Set(["MANUAL", "ASR_PROVIDER", "MOCK"]);
+const allowedSources = new Set(["MANUAL", "MOCK"]);
 
 function normalizeSource(value: unknown) {
   if (typeof value !== "string") {
@@ -76,6 +77,7 @@ export async function GET(
       completedAt: true,
       createdAt: true,
       updatedAt: true,
+      revision: true,
     },
   });
 
@@ -110,45 +112,63 @@ export async function POST(
 
   const now = new Date();
   const source = normalizeSource(body?.source);
-  const transcript = await prisma.trainingTranscript.upsert({
-    where: {
-      recordingId,
-    },
-    create: {
-      recordingId,
-      sessionId: recording.sessionId,
-      projectId: recording.projectId,
-      status: "COMPLETED",
-      source,
-      language: normalizeLanguage(body?.language),
-      text,
-      segmentsJson: null,
-      completedAt: now,
-    },
-    update: {
-      status: "COMPLETED",
-      source,
-      language: normalizeLanguage(body?.language),
-      text,
-      segmentsJson: null,
-      errorMessage: null,
-      completedAt: now,
-    },
-    select: {
-      id: true,
-      recordingId: true,
-      sessionId: true,
-      status: true,
-      source: true,
-      language: true,
-      text: true,
-      segmentsJson: true,
-      errorMessage: true,
-      startedAt: true,
-      completedAt: true,
-      createdAt: true,
-      updatedAt: true,
-    },
+  const transcript = await prisma.$transaction(async (transaction) => {
+    const saved = await transaction.trainingTranscript.upsert({
+      where: {
+        recordingId,
+      },
+      create: {
+        recordingId,
+        sessionId: recording.sessionId,
+        projectId: recording.projectId,
+        status: "COMPLETED",
+        source,
+        language: normalizeLanguage(body?.language),
+        text,
+        segmentsJson: null,
+        completedAt: now,
+        revision: 1,
+      },
+      update: {
+        status: "COMPLETED",
+        source,
+        language: normalizeLanguage(body?.language),
+        text,
+        segmentsJson: null,
+        errorMessage: null,
+        completedAt: now,
+        revision: { increment: 1 },
+      },
+      select: {
+        id: true,
+        recordingId: true,
+        sessionId: true,
+        status: true,
+        source: true,
+        language: true,
+        text: true,
+        segmentsJson: true,
+        errorMessage: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        revision: true,
+      },
+    });
+    await transaction.asyncJob.updateMany({
+      where: {
+        jobKey: trainingTranscriptionJobKey(recordingId),
+        status: { not: "COMPLETED" },
+      },
+      data: {
+        status: "COMPLETED",
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+        errorMessage: null,
+      },
+    });
+    return saved;
   });
 
   return NextResponse.json({ transcript });

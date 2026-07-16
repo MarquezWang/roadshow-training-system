@@ -7,6 +7,10 @@ export const abortableTrainingStatuses = [
   "QAING",
 ] as const;
 
+export const pitchStartableTrainingStatuses = ["CREATED", "PITCH_READY"] as const;
+export const qaStartableTrainingStatuses = ["PITCH_ENDED", "QA_READY"] as const;
+export const dynamicQuestionTrainingStatuses = ["QA_READY", "QAING"] as const;
+
 export const terminalTrainingStatuses = [
   "QA_ENDED",
   "REPORT_READY",

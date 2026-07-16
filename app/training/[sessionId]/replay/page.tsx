@@ -96,10 +96,17 @@ export default async function TrainingReplayPage({
     notFound();
   }
 
-  const previewFile = selectDisplayablePdf(session.project.fileAssets);
+  const primaryFileId =
+    session.primaryFileId ??
+    session.slideEvents.find((event) => event.eventType === "START")?.fileId ??
+    null;
+  const previewCandidates = primaryFileId
+    ? session.project.fileAssets.filter((file) => file.id === primaryFileId)
+    : session.project.fileAssets;
+  const previewFile = selectDisplayablePdf(previewCandidates);
   const previewNotice = previewFile
     ? null
-    : (getDisplayMaterialNotice(session.project.fileAssets)?.message ?? null);
+    : (getDisplayMaterialNotice(previewCandidates)?.message ?? null);
 
   const pitchRecording =
     session.recordings.find(

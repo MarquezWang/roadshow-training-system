@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { AIEmptyContentError, callAI } from "@/lib/ai";
 import {
   buildProjectAIContext,
+  parseProjectAIContextSnapshot,
   ProjectContextNotFoundError,
   type ProjectAIContext,
 } from "@/lib/project-context";
@@ -12,6 +13,14 @@ import { devLog, devWarn, devError } from "@/lib/dev-log";
 import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { prisma } from "@/lib/prisma";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import {
+  calculateTrainingAnalysisInputHash,
+  reconcileTrainingAnalysisInputVersion,
+} from "@/lib/training-analysis-input";
+import { acquireAsyncJob, releaseAsyncJob } from "@/lib/async-job";
+import { isFallbackTrainingAnalysis } from "@/lib/training-analysis-fallback";
+import { publishTrainingAnalysis } from "@/lib/training-analysis-publication.mjs";
+import { getTrainingAnalysisGenerationContract } from "@/lib/training-analysis-version.mjs";
 import {
   validateTrainingAnalysisResult,
   type TrainingAnalysisResult,
@@ -30,21 +39,18 @@ type TrainingAnalysisRecord = NonNullable<
 >;
 
 const PITCH_ANALYSIS_TYPE = "PITCH";
-const PITCH_ANALYSIS_MAX_OUTPUT_TOKENS = readPositiveIntegerEnv(
-  "PITCH_ANALYSIS_MAX_OUTPUT_TOKENS",
-  12_000,
-);
-const PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS = readPositiveIntegerEnv(
-  "PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS",
-  16_000,
-);
+const ANALYSIS_GENERATION_CONTRACT = getTrainingAnalysisGenerationContract();
+const PITCH_ANALYSIS_MAX_OUTPUT_TOKENS =
+  ANALYSIS_GENERATION_CONTRACT.maxOutputTokens;
+const PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS =
+  ANALYSIS_GENERATION_CONTRACT.repairMaxOutputTokens;
 const PROCESSING_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1_000;
 const TRANSCRIPT_WAIT_TIMEOUT_MS = 90_000;
 const CONTEXT_EXPERT_COMMENT_LIMIT = 10;
 const CONTEXT_HISTORICAL_QUESTION_LIMIT = 10;
 const FALLBACK_ANALYSIS_SCORE = 15;
 const DEBUG_RAW_AI_OUTPUT_LIMIT = 4_000;
-const activeAnalysisGenerationLocks = new Set<string>();
+const analysisJobKey = (sessionId: string) => `training-analysis:${sessionId}`;
 const COVERAGE_ITEMS = [
   "项目背景",
   "痛点问题",
@@ -94,9 +100,9 @@ type RetryWithoutJsonModeDebug = {
 };
 
 type AnalysisParseFailureDebug = {
-  reason: "AI_JSON_PARSE_FAILED" | "AI_EMPTY_CONTENT";
+  reason: "AI_STRUCTURED_OUTPUT_INVALID" | "AI_EMPTY_CONTENT";
   finalFallbackReason:
-    | "JSON_PARSE_FAILED_AFTER_REPAIR"
+    | "STRUCTURED_OUTPUT_INVALID_AFTER_REPAIR"
     | "RETRY_WITHOUT_JSON_MODE_EMPTY_CONTENT";
   generatedAt: string;
   initialParseError?: JsonParseFailureDetails;
@@ -111,8 +117,8 @@ type AnalysisParseFailureDebug = {
   retryWithoutJsonMode?: RetryWithoutJsonModeDebug;
 };
 type AnalysisJsonParseFailureDebug = AnalysisParseFailureDebug & {
-  reason: "AI_JSON_PARSE_FAILED";
-  finalFallbackReason: "JSON_PARSE_FAILED_AFTER_REPAIR";
+  reason: "AI_STRUCTURED_OUTPUT_INVALID";
+  finalFallbackReason: "STRUCTURED_OUTPUT_INVALID_AFTER_REPAIR";
   initialParseError: JsonParseFailureDetails;
   repairError: JsonParseFailureDetails;
 };
@@ -131,16 +137,6 @@ class AnalysisJsonRepairError extends Error {
     this.name = "AnalysisJsonRepairError";
     this.debug = debug;
   }
-}
-
-function readPositiveIntegerEnv(name: string, fallback: number) {
-  const value = Number(process.env[name]);
-
-  if (!Number.isInteger(value) || value <= 0) {
-    return fallback;
-  }
-
-  return value;
 }
 
 function truncateDebugText(text: string) {
@@ -176,6 +172,7 @@ function serializeAnalysis(analysis: TrainingAnalysisRecord) {
     pageCount: analysis.pageCount,
     slideEventCount: analysis.slideEventCount,
     overallScore: analysis.overallScore,
+    isFallbackReport: isFallbackTrainingAnalysis(analysis),
     summary: analysis.summary,
     strengths: parseStoredJson<string[]>(analysis.strengthsJson, []),
     weaknesses: parseStoredJson<string[]>(analysis.weaknessesJson, []),
@@ -212,6 +209,11 @@ function serializeAnalysis(analysis: TrainingAnalysisRecord) {
         : (rawResult.dynamicFollowupReview as DynamicFollowupReview),
     rawResult,
     errorMessage: analysis.errorMessage,
+    inputHash: analysis.inputHash,
+    promptVersion: analysis.promptVersion,
+    schemaVersion: analysis.schemaVersion,
+    modelVersion: analysis.modelVersion,
+    ruleVersion: analysis.ruleVersion,
     createdAt: analysis.createdAt.toISOString(),
     updatedAt: analysis.updatedAt.toISOString(),
   };
@@ -231,7 +233,7 @@ async function findLatestAnalysis(sessionId: string) {
       analysisType: PITCH_ANALYSIS_TYPE,
     },
     orderBy: {
-      updatedAt: "desc",
+      createdAt: "desc",
     },
   });
 }
@@ -339,11 +341,17 @@ function buildFallbackAnalysis(input: {
   transcriptMissing: boolean;
   qaData: AnalysisQuestionData[];
   dynamicFollowupData: AnalysisQuestionData | null;
+  failureReason?: "STRUCTURED_OUTPUT_INVALID" | "AI_EMPTY_CONTENT" | "NO_ANALYZABLE_TEXT";
 }) {
+  const fallbackSummary =
+    input.failureReason === "AI_EMPTY_CONTENT"
+      ? "报告生成时 AI 未返回有效内容，系统已基于可用转写和答辩数据生成基础报告，并保留排查信息。"
+      : input.failureReason === "NO_ANALYZABLE_TEXT"
+        ? "本轮训练缺少可分析的转写或回答文本，系统已根据录音元信息生成基础报告。"
+        : "报告生成时 AI 结构化输出不符合报告 Schema，修复重试失败后系统已生成基础报告，并保留排查信息。";
   const fallbackAnalysis = {
     overallScore: FALLBACK_ANALYSIS_SCORE,
-    summary:
-      "报告生成时 AI 结构化 JSON 解析失败，系统已基于可用转写和答辩数据降级生成基础报告，并保留排查信息。",
+    summary: fallbackSummary,
     strengths: [],
     weaknesses: [
       "结构化报告生成失败，当前报告为降级版本，细节判断可能不完整。",
@@ -440,7 +448,8 @@ function buildAnalysisPrompt(
   });
 }
 
-function buildRepairPrompt(rawText: string, error: AIJsonParseError) {
+function buildRepairPrompt(rawText: string, error: unknown) {
+  const details = getJsonParseFailureDetails(error);
   return renderPrompt(
     [
       "请修复下面这段 AI 输出，使其成为一个合法 JSON 对象。",
@@ -522,13 +531,38 @@ function buildRepairPrompt(rawText: string, error: AIJsonParseError) {
       "{{rawText}}",
     ].join("\n"),
     {
-      parseError: error.message,
-      originalLength: error.originalLength,
-      extractedLength: error.extractedLength,
-      parsePosition: error.parsePosition ?? "unknown",
+      parseError: details.message,
+      originalLength: details.originalLength ?? "unknown",
+      extractedLength: details.extractedLength ?? "unknown",
+      parsePosition: details.parsePosition ?? "unknown",
       rawText,
     },
   );
+}
+
+async function findCurrentAnalysis(sessionId: string) {
+  const session = await prisma.trainingSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      currentAnalysis: true,
+    },
+  });
+
+  if (
+    session?.currentAnalysis?.status === "COMPLETED" &&
+    session.currentAnalysis.analysisType === PITCH_ANALYSIS_TYPE
+  ) {
+    return session.currentAnalysis;
+  }
+
+  return prisma.trainingAnalysis.findFirst({
+    where: {
+      sessionId,
+      analysisType: PITCH_ANALYSIS_TYPE,
+      status: "COMPLETED",
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
 }
 
 function getJsonParseFailureDetails(error: unknown): JsonParseFailureDetails {
@@ -563,14 +597,14 @@ function buildAnalysisParseFailureDebug({
   retryWithoutJsonMode,
 }: {
   rawText: string;
-  initialError: AIJsonParseError;
+  initialError: unknown;
   repairError: unknown;
   jsonModeEmptyContent?: EmptyContentDetails | null;
   retryWithoutJsonMode?: RetryWithoutJsonModeDebug | null;
 }): AnalysisJsonParseFailureDebug {
   return {
-    reason: "AI_JSON_PARSE_FAILED",
-    finalFallbackReason: "JSON_PARSE_FAILED_AFTER_REPAIR",
+    reason: "AI_STRUCTURED_OUTPUT_INVALID",
+    finalFallbackReason: "STRUCTURED_OUTPUT_INVALID_AFTER_REPAIR",
     generatedAt: new Date().toISOString(),
     initialParseError: getJsonParseFailureDetails(initialError),
     repairError: getJsonParseFailureDetails(repairError),
@@ -642,6 +676,7 @@ function buildStoredAnalysisResult(
 async function parseAnalysisJsonWithRepair(
   rawText: string,
   debugContext?: {
+    sessionId?: string;
     jsonModeEmptyContent?: EmptyContentDetails | null;
     retryWithoutJsonMode?: RetryWithoutJsonModeDebug | null;
   },
@@ -649,12 +684,8 @@ async function parseAnalysisJsonWithRepair(
   try {
     return validateTrainingAnalysisResult(parseAIJson(rawText));
   } catch (error) {
-    if (!(error instanceof AIJsonParseError)) {
-      throw error;
-    }
-
     devError(
-      `路演表现分析 JSON 解析失败，开始一次修复重试。${formatJsonParseFailure(
+      `路演表现分析结构化输出校验失败，开始一次修复重试。${formatJsonParseFailure(
         getJsonParseFailureDetails(error),
       )}`,
     );
@@ -689,8 +720,9 @@ async function parseAnalysisJsonWithRepair(
       );
       void writeDiagnosticEvent({
         type: "REPORT_ERROR",
-        message: "Pitch analysis JSON parse and repair failed",
+        message: "Pitch analysis structured output validation and repair failed",
         meta: {
+          sessionId: debugContext?.sessionId ?? null,
           initialError: debug.initialParseError.message,
           repairError: debug.repairError.message,
           rawAiOutputLength: debug.rawAiOutputLength,
@@ -699,7 +731,7 @@ async function parseAnalysisJsonWithRepair(
         },
       });
       throw new AnalysisJsonRepairError(
-        "路演表现分析 JSON 解析失败，修复重试后仍无法解析。",
+        "路演表现分析结构化输出校验失败，修复重试后仍不符合报告 Schema。",
         debug,
       );
     }
@@ -729,8 +761,8 @@ async function createOrUpdateProcessingAnalysis(input: {
   pageCount: number | null;
   slideEventCount: number;
   transcriptMissing: boolean;
+  inputHash: string;
 }) {
-  const latestAnalysis = await findLatestAnalysis(input.sessionId);
   const baseData = {
     projectId: input.projectId,
     transcriptId: input.transcriptId,
@@ -750,16 +782,12 @@ async function createOrUpdateProcessingAnalysis(input: {
     riskQuestionsJson: "[]",
     rawResultJson: "{}",
     errorMessage: null,
+    inputHash: input.inputHash,
+    promptVersion: ANALYSIS_GENERATION_CONTRACT.promptVersion,
+    schemaVersion: ANALYSIS_GENERATION_CONTRACT.schemaVersion,
+    modelVersion: ANALYSIS_GENERATION_CONTRACT.modelVersion,
+    ruleVersion: ANALYSIS_GENERATION_CONTRACT.ruleVersion,
   };
-
-  if (latestAnalysis) {
-    return prisma.trainingAnalysis.update({
-      where: {
-        id: latestAnalysis.id,
-      },
-      data: baseData,
-    });
-  }
 
   return prisma.trainingAnalysis.create({
     data: {
@@ -767,37 +795,6 @@ async function createOrUpdateProcessingAnalysis(input: {
       sessionId: input.sessionId,
     },
   });
-}
-
-/**
- * 检查已有 COMPLETED analysis 是否 stale：
- * 如果任一 Pitch 或 QA transcript 的 completedAt 晚于 analysis.updatedAt，
- * 说明 analysis 生成时使用了旧的/不完整的 transcript 输入。
- */
-async function isAnalysisStale(analysis: TrainingAnalysisRecord): Promise<{
-  stale: boolean;
-  reason: string | null;
-}> {
-  const latestCompletedTranscript = await prisma.trainingTranscript.findFirst({
-    where: {
-      sessionId: analysis.sessionId,
-      completedAt: { not: null },
-    },
-    orderBy: { completedAt: "desc" },
-    select: { id: true, completedAt: true, recording: { select: { phase: true } } },
-  });
-
-  if (
-    latestCompletedTranscript?.completedAt &&
-    latestCompletedTranscript.completedAt.getTime() > analysis.updatedAt.getTime()
-  ) {
-    return {
-      stale: true,
-      reason: `Transcript ${latestCompletedTranscript.id} (phase: ${latestCompletedTranscript.recording?.phase ?? "unknown"}) completed at ${latestCompletedTranscript.completedAt.toISOString()}, after analysis updatedAt ${analysis.updatedAt.toISOString()}`,
-    };
-  }
-
-  return { stale: false, reason: null };
 }
 
 export async function GET(
@@ -808,7 +805,7 @@ export async function GET(
   if (!(await isSessionOwnedByCurrentUser(sessionId))) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
-  const analysis = await findLatestAnalysis(sessionId);
+  const analysis = await findCurrentAnalysis(sessionId);
 
   // 获取 QA transcript 状态计数，供前端轮询使用
   const qaTranscripts = await prisma.trainingTranscript.findMany({
@@ -839,16 +836,19 @@ export async function GET(
 }
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   context: TrainingAnalysisRouteContext,
 ) {
   const { sessionId } = await context.params;
+  const forceRegeneration = request.nextUrl.searchParams.get("force") === "true";
   if (!(await isSessionOwnedByCurrentUser(sessionId))) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
   let processingAnalysisId: string | null = null;
   let hasGenerationLock = false;
+  let analysisJobOwnerToken: string | null = null;
+  let analysisJobError: string | null = null;
 
   try {
     const session = await prisma.trainingSession.findUnique({
@@ -928,8 +928,18 @@ export async function POST(
     if (!session) {
       return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
     }
+    const analysisInputHash = await calculateTrainingAnalysisInputHash(sessionId);
+    if (!analysisInputHash) {
+      return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
+    }
 
-    if (activeAnalysisGenerationLocks.has(sessionId)) {
+    const acquiredAnalysisJob = await acquireAsyncJob({
+      jobKey: analysisJobKey(sessionId),
+      jobType: "TRAINING_ANALYSIS",
+      resourceId: sessionId,
+      leaseMs: 15 * 60_000,
+    });
+    if (!acquiredAnalysisJob) {
       const activeAnalysis = await findLatestAnalysis(sessionId);
 
       if (activeAnalysis && isProcessingAnalysisFresh(activeAnalysis)) {
@@ -948,7 +958,7 @@ export async function POST(
       );
     }
 
-    activeAnalysisGenerationLocks.add(sessionId);
+    analysisJobOwnerToken = acquiredAnalysisJob.ownerToken;
     hasGenerationLock = true;
 
     // 防止重复生成：检查是否已有处理中或已完成的 analysis
@@ -969,13 +979,23 @@ export async function POST(
         });
       }
       if (existingAnalysis.status === "COMPLETED") {
-        const staleCheck = await isAnalysisStale(existingAnalysis);
-        if (!staleCheck.stale) {
-          return NextResponse.json({ analysis: serializeAnalysis(existingAnalysis) });
-        }
-        // Stale analysis: transcript 在 analysis 生成后完成，需重新生成
-        devLog("[analysis:POST] stale analysis detected, regenerating", {
+        const staleCheck = await reconcileTrainingAnalysisInputVersion(
           sessionId,
+          existingAnalysis,
+        );
+        if (!staleCheck.stale && !forceRegeneration) {
+          return NextResponse.json({
+            analysis: {
+              ...serializeAnalysis(existingAnalysis),
+              inputHash:
+                staleCheck.currentInputHash ?? existingAnalysis.inputHash,
+            },
+          });
+        }
+        // stale 或用户明确要求重试降级报告时，创建新版本并保留旧报告。
+        devLog("[analysis:POST] regenerating completed analysis", {
+          sessionId,
+          forceRegeneration,
           staleReason: staleCheck.reason,
           analysisUpdatedAt: existingAnalysis.updatedAt.toISOString(),
         });
@@ -1001,38 +1021,46 @@ export async function POST(
 
     // 如果 Pitch 转写仍在进行中，未超时前返回等待；超时后继续降级生成。
     if (transcriptMissing) {
-      const processingTranscript = await prisma.trainingTranscript.findFirst({
+      const pitchRecording = await prisma.trainingRecording.findFirst({
         where: {
           sessionId,
-          status: {
-            in: ["PENDING", "PROCESSING"],
-          },
-          recording: {
-            phase: "PITCH",
-          },
+          phase: "PITCH",
         },
         orderBy: {
-          updatedAt: "desc",
+          createdAt: "desc",
         },
         select: {
           id: true,
-          status: true,
+          createdAt: true,
           updatedAt: true,
+          transcript: {
+            select: { id: true, status: true, updatedAt: true },
+          },
         },
       });
       const pitchWaitStartedAt =
-        processingTranscript?.updatedAt ?? session.pitchEndedAt;
+        pitchRecording?.transcript?.updatedAt ??
+        pitchRecording?.updatedAt ??
+        pitchRecording?.createdAt ??
+        session.pitchEndedAt;
       const pitchCanDegrade = hasTranscriptWaitTimedOut(
         pitchWaitStartedAt,
         nowMs,
       );
+      const pitchTranscriptWaiting = Boolean(
+        pitchRecording &&
+          (!pitchRecording.transcript ||
+            ["PENDING", "PROCESSING"].includes(
+              pitchRecording.transcript.status,
+            )),
+      );
 
-      if (processingTranscript && !pitchCanDegrade) {
+      if (pitchTranscriptWaiting && !pitchCanDegrade) {
         return NextResponse.json(
           {
             error: "路演转写正在进行中，请稍后再试。",
             transcriptProcessing: true,
-            transcriptStatus: processingTranscript.status,
+            transcriptStatus: pitchRecording?.transcript?.status ?? "MISSING",
           },
           { status: 409 },
         );
@@ -1058,29 +1086,31 @@ export async function POST(
       .map((q) => q.answer!.recording!.id);
 
     if (!canDegrade && enteredQaRecordingIds.length > 0) {
-      const pendingQaTranscripts = await prisma.trainingTranscript.findMany({
+      const pendingQaRecordings = await prisma.trainingRecording.findMany({
         where: {
           sessionId,
-          recordingId: {
+          id: {
             in: enteredQaRecordingIds,
           },
-          status: { in: ["PENDING", "PROCESSING"] },
-          recording: {
-            phase: "QA",
-          },
+          phase: "QA",
         },
         select: {
           id: true,
-          status: true,
+          transcript: { select: { status: true } },
         },
       });
+      const pendingCount = pendingQaRecordings.filter(
+        (recording) =>
+          !recording.transcript ||
+          ["PENDING", "PROCESSING"].includes(recording.transcript.status),
+      ).length;
 
-      if (pendingQaTranscripts.length > 0) {
+      if (pendingCount > 0) {
         return NextResponse.json(
           {
             error: "答辩回答转写尚未完成，请稍后重试。",
             qaTranscriptsProcessing: true,
-            pendingCount: pendingQaTranscripts.length,
+            pendingCount,
           },
           { status: 409 },
         );
@@ -1110,6 +1140,7 @@ export async function POST(
       pageCount,
       slideEventCount: session.slideEvents.length,
       transcriptMissing,
+      inputHash: analysisInputHash,
     });
 
     processingAnalysisId = processingAnalysis.id;
@@ -1173,13 +1204,35 @@ export async function POST(
         transcriptMissing,
         qaData,
         dynamicFollowupData,
+        failureReason: "NO_ANALYZABLE_TEXT",
       });
-      const completedAnalysis = await prisma.trainingAnalysis.update({
-        where: {
-          id: processingAnalysis.id,
-        },
+      const latestInputHash = await calculateTrainingAnalysisInputHash(sessionId);
+      if (!latestInputHash || latestInputHash !== analysisInputHash) {
+        await prisma.trainingAnalysis.update({
+          where: { id: processingAnalysis.id },
+          data: {
+            status: "FAILED",
+            errorMessage: "报告生成期间训练输入发生变化，请重新生成。",
+          },
+        });
+        processingAnalysisId = null;
+        analysisJobError = "analysis input changed while generating";
+        return NextResponse.json(
+          {
+            error: "报告生成期间训练输入发生变化，请重新生成。",
+            reason: "analysis_input_changed",
+          },
+          { status: 409 },
+        );
+      }
+
+      const completedAnalysis = await publishTrainingAnalysis(prisma, {
+        jobKey: analysisJobKey(sessionId),
+        ownerToken: analysisJobOwnerToken,
+        sessionId,
+        analysisId: processingAnalysis.id,
+        inputHash: analysisInputHash,
         data: {
-          status: "COMPLETED",
           overallScore: fallbackAnalysis.overallScore,
           summary:
             "本轮路演与答辩转写文本不可用，系统已生成降级报告。答辩回答内容无法基于文本完整评分，请结合录音回放人工复核。",
@@ -1202,14 +1255,18 @@ export async function POST(
           errorMessage: null,
         },
       });
+      processingAnalysisId = null;
 
       return NextResponse.json({
         analysis: serializeAnalysis(completedAnalysis),
       });
     }
 
+    const snapshotContext = parseProjectAIContextSnapshot(
+      session.projectContextSnapshot,
+    );
     const [contextResult, template] = await Promise.all([
-      buildProjectAIContext(session.projectId),
+      snapshotContext ?? buildProjectAIContext(session.projectId),
       loadPromptTemplate("pitch-performance-analysis"),
     ]);
     const aiContext = compactContext(contextResult);
@@ -1331,6 +1388,7 @@ export async function POST(
     try {
       if (aiResult) {
         analysisJson = await parseAnalysisJsonWithRepair(aiResult.text, {
+          sessionId,
           jsonModeEmptyContent,
           retryWithoutJsonMode,
         });
@@ -1342,6 +1400,7 @@ export async function POST(
           transcriptMissing,
           qaData,
           dynamicFollowupData,
+          failureReason: "AI_EMPTY_CONTENT",
         });
       }
     } catch (analysisParseError) {
@@ -1365,6 +1424,7 @@ export async function POST(
         transcriptMissing,
         qaData,
         dynamicFollowupData,
+        failureReason: "STRUCTURED_OUTPUT_INVALID",
       });
       devLog("[analysis:POST] fallback analysis created", {
         sessionId,
@@ -1490,12 +1550,33 @@ export async function POST(
 
     analysisJson.qaReviews = [...normalizedQaReviews, ...missingReviews];
 
-    const completedAnalysis = await prisma.trainingAnalysis.update({
-      where: {
-        id: processingAnalysis.id,
-      },
+    const latestInputHash = await calculateTrainingAnalysisInputHash(sessionId);
+    if (!latestInputHash || latestInputHash !== analysisInputHash) {
+      await prisma.trainingAnalysis.update({
+        where: { id: processingAnalysis.id },
+        data: {
+          status: "FAILED",
+          errorMessage: "报告生成期间训练输入发生变化，请重新生成。",
+        },
+      });
+      processingAnalysisId = null;
+      analysisJobError = "analysis input changed while generating";
+      return NextResponse.json(
+        {
+          error: "报告生成期间训练输入发生变化，请重新生成。",
+          reason: "analysis_input_changed",
+        },
+        { status: 409 },
+      );
+    }
+
+    const completedAnalysis = await publishTrainingAnalysis(prisma, {
+      jobKey: analysisJobKey(sessionId),
+      ownerToken: analysisJobOwnerToken,
+      sessionId,
+      analysisId: processingAnalysis.id,
+      inputHash: analysisInputHash,
       data: {
-        status: "COMPLETED",
         overallScore: analysisJson.overallScore,
         summary: analysisJson.summary,
         strengthsJson: JSON.stringify(analysisJson.strengths, null, 2),
@@ -1516,14 +1597,16 @@ export async function POST(
         errorMessage: analysisParseFailureDebug
           ? analysisParseFailureDebug.reason === "AI_EMPTY_CONTENT"
             ? "AI 返回内容为空，已生成降级报告。详情见 rawResultJson._debug。"
-            : "AI JSON 解析失败，已生成降级报告。详情见 rawResultJson._debug。"
+            : "AI 结构化输出不符合报告 Schema，修复重试失败后已生成降级报告。详情见 rawResultJson._debug。"
           : null,
       },
     });
+    processingAnalysisId = null;
 
     return NextResponse.json({ analysis: serializeAnalysis(completedAnalysis) });
   } catch (error) {
     const message = getFriendlyErrorMessage(error);
+    analysisJobError = message;
 
     if (processingAnalysisId) {
       await prisma.trainingAnalysis.update({
@@ -1546,7 +1629,12 @@ export async function POST(
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
     if (hasGenerationLock) {
-      activeAnalysisGenerationLocks.delete(sessionId);
+      await releaseAsyncJob({
+        jobKey: analysisJobKey(sessionId),
+        ownerToken: analysisJobOwnerToken,
+        status: analysisJobError ? "FAILED" : "COMPLETED",
+        errorMessage: analysisJobError,
+      });
     }
   }
 }

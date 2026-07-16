@@ -63,6 +63,7 @@ export function useReportAnalysisGeneration({
 
   async function generateAnalysis(
     startMessage = "正在生成训练报告……",
+    forceRegeneration = false,
   ) {
     if (isAborted) {
       setAnalysisMessage("本轮训练已中止，不能继续生成训练报告。");
@@ -76,9 +77,12 @@ export function useReportAnalysisGeneration({
     setAnalysisMessage(startMessage);
 
     try {
-      const response = await fetch(`/training/${sessionId}/analysis`, {
+      const response = await fetch(
+        `/training/${sessionId}/analysis${forceRegeneration ? "?force=true" : ""}`,
+        {
         method: "POST",
-      });
+        },
+      );
       const body = (await response.json().catch(() => null)) as {
         analysis?: ReportTrainingAnalysis;
         error?: string;
@@ -102,8 +106,8 @@ export function useReportAnalysisGeneration({
         throw new Error("报告生成失败，请稍后重试。");
       }
 
-      setAnalysis(body.analysis);
       if (body.analysis.status === "COMPLETED") {
+        setAnalysis(body.analysis);
         setAnalysisMessage("");
         setIsAnalysisLoading(false);
       } else if (body.analysis.status === "FAILED") {
@@ -121,7 +125,7 @@ export function useReportAnalysisGeneration({
     if (isGeneratingAnalysisRef.current) return;
     isGeneratingAnalysisRef.current = true;
     setCanRetryAnalysisGeneration(false);
-    void generateAnalysis().finally(() => {
+    void generateAnalysis("正在重新生成完整训练报告……", true).finally(() => {
       isGeneratingAnalysisRef.current = false;
     });
   }

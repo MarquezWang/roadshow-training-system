@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { PREFERRED_DEVICE_KEY } from "@/lib/use-audio-input";
+import { createUploadIdempotencyKey } from "@/lib/client-upload-idempotency";
 
 const recordingMimeTypeCandidates = [
   "audio/webm;codecs=opus",
@@ -65,6 +66,7 @@ export function useQaRecording({ sessionId }: UseQaRecordingOptions) {
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingStartedAtRef = useRef<Date | null>(null);
   const recordingMimeTypeRef = useRef("");
+  const recordingUploadKeyRef = useRef("");
 
   const startQuestionRecording = useCallback(async () => {
     if (
@@ -92,6 +94,8 @@ export function useQaRecording({ sessionId }: UseQaRecordingOptions) {
       recordingChunksRef.current = [];
       recordingStartedAtRef.current = new Date();
       recordingMimeTypeRef.current = mimeType;
+      recordingUploadKeyRef.current =
+        createUploadIdempotencyKey("qa-recording");
       mediaStreamRef.current = stream;
       mediaRecorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
@@ -136,28 +140,34 @@ export function useQaRecording({ sessionId }: UseQaRecordingOptions) {
     }
 
     const blob = new Blob(recordingChunksRef.current, { type: mimeType });
-    const formData = new FormData();
+    const uploadKey =
+      recordingUploadKeyRef.current ||
+      createUploadIdempotencyKey("qa-recording");
+    recordingUploadKeyRef.current = uploadKey;
     const durationSec = startedAt
       ? Math.max(0, Math.round((stoppedAt.getTime() - startedAt.getTime()) / 1000))
       : null;
 
-    formData.append(
-      "file",
-      blob,
-      `qa-answer.${getRecordingFileExtension(mimeType)}`,
-    );
-    formData.append("phase", "QA");
-    formData.append("startedAt", startedAt?.toISOString() ?? "");
-    formData.append("endedAt", stoppedAt.toISOString());
-
-    if (durationSec !== null) {
-      formData.append("durationSec", String(durationSec));
-    }
-
     try {
       const response = await fetch(`/training/${sessionId}/recordings`, {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": mimeType,
+          "Idempotency-Key": uploadKey,
+          "X-Recording-Upload": "raw-v1",
+          "X-Recording-Phase": "QA",
+          "X-Recording-Name": encodeURIComponent(
+            `qa-answer.${getRecordingFileExtension(mimeType)}`,
+          ),
+          "X-Recording-Ended-At": stoppedAt.toISOString(),
+          ...(startedAt
+            ? { "X-Recording-Started-At": startedAt.toISOString() }
+            : {}),
+          ...(durationSec !== null
+            ? { "X-Recording-Duration-Sec": String(durationSec) }
+            : {}),
+        },
+        body: blob,
       });
       const body = (await response.json().catch(() => null)) as {
         recording?: { id?: string };
@@ -169,6 +179,7 @@ export function useQaRecording({ sessionId }: UseQaRecordingOptions) {
       }
 
       setQaRecordingMessage("本题录音已保存。");
+      recordingUploadKeyRef.current = "";
 
       // 后台触发转写，不阻塞 UI
       void fetch(

@@ -210,7 +210,7 @@ export function ReportOverviewSummary({
               </span>
               <p className="text-xs font-semibold opacity-80">{item.title}</p>
             </div>
-            <p className="mt-2 line-clamp-2 text-sm leading-6">{item.value}</p>
+            <p className="mt-2 break-words text-sm leading-6">{item.value}</p>
           </div>
         ))}
       </div>

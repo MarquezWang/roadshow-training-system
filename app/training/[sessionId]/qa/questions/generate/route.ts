@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { callAI } from "@/lib/ai";
 import {
   buildProjectAIContext,
+  parseProjectAIContextSnapshot,
   ProjectContextNotFoundError,
 } from "@/lib/project-context";
 import { parseAIJson, AIJsonParseError } from "@/lib/json-utils";
@@ -11,6 +12,11 @@ import { prisma } from "@/lib/prisma";
 import { validateGeneratedTrainingQuestions } from "@/lib/training-qa-validator";
 import { devLog, devWarn, devError } from "@/lib/dev-log";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import {
+  acquireAsyncJob,
+  getAsyncJob,
+  releaseAsyncJob,
+} from "@/lib/async-job";
 
 type GenerateTrainingQuestionsContext = Readonly<{
   params: Promise<{
@@ -25,25 +31,9 @@ const allowedStatuses = new Set([
   "QAING",
 ]);
 
-interface LockEntry {
-  startedAt: number;
-}
-
-const STALE_LOCK_MS = 60_000; // 60 秒后视为 stale lock
-
-// 内存级生成锁，防止并发重复生成
-const generationLocks = new Map<string, LockEntry>();
-
-function getLockAgeMs(sessionId: string): number | null {
-  const lock = generationLocks.get(sessionId);
-  if (!lock) return null;
-  return Date.now() - lock.startedAt;
-}
-
-function isLockStale(sessionId: string): boolean {
-  const age = getLockAgeMs(sessionId);
-  return age !== null && age > STALE_LOCK_MS;
-}
+const STALE_LOCK_MS = 10 * 60_000;
+const questionGenerationJobKey = (sessionId: string) =>
+  `qa-question-generation:${sessionId}`;
 
 function parseStoredJson(value: string | null) {
   if (!value) {
@@ -211,9 +201,17 @@ export async function GET(
     }
 
     const existingQuestions = await getExistingQuestions(sessionId);
-    const isGenerating = generationLocks.has(sessionId);
-    const lockAgeMs = getLockAgeMs(sessionId);
-    const lockStale = isLockStale(sessionId);
+    const job = await getAsyncJob(questionGenerationJobKey(sessionId));
+    const isGenerating = Boolean(
+      job?.status === "RUNNING" &&
+        job.leaseExpiresAt &&
+        job.leaseExpiresAt > new Date(),
+    );
+    const lockAgeMs = job ? Date.now() - job.updatedAt.getTime() : null;
+    const lockStale = Boolean(
+      job?.status === "RUNNING" &&
+        (!job.leaseExpiresAt || job.leaseExpiresAt <= new Date()),
+    );
 
     devLog("[qa:generate:GET]", {
       sessionId,
@@ -223,18 +221,9 @@ export async function GET(
       lockStale,
     });
 
-    // 如果锁已过期，清理它
-    if (lockStale) {
-      devLog("[qa:generate:GET] cleaning stale lock", {
-        sessionId,
-        lockAgeMs,
-      });
-      generationLocks.delete(sessionId);
-    }
-
     return NextResponse.json({
       questions: existingQuestions,
-      isGenerating: isGenerating && !lockStale,
+      isGenerating,
     });
   } catch (error) {
     devError("[qa:generate:GET] error", { sessionId, error });
@@ -253,6 +242,7 @@ export async function POST(
   if (!(await isSessionOwnedByCurrentUser(sessionId))) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
+  let acquiredLockToken: string | null = null;
 
   try {
     const session = await prisma.trainingSession.findUnique({
@@ -263,6 +253,7 @@ export async function POST(
         id: true,
         projectId: true,
         status: true,
+        projectContextSnapshot: true,
       },
     });
 
@@ -293,9 +284,19 @@ export async function POST(
     }
 
     // 检查生成锁
-    const lockAgeMs = getLockAgeMs(session.id);
-    const lockExists = generationLocks.has(session.id);
-    const lockStale = isLockStale(session.id);
+    const currentJob = await getAsyncJob(questionGenerationJobKey(session.id));
+    const lockAgeMs = currentJob
+      ? Date.now() - currentJob.updatedAt.getTime()
+      : null;
+    const lockExists = Boolean(
+      currentJob?.status === "RUNNING" &&
+        currentJob.leaseExpiresAt &&
+        currentJob.leaseExpiresAt > new Date(),
+    );
+    const lockStale = Boolean(
+      currentJob?.status === "RUNNING" &&
+        (!currentJob.leaseExpiresAt || currentJob.leaseExpiresAt <= new Date()),
+    );
 
     devLog("[qa:generate:POST] lock check", {
       sessionId,
@@ -304,39 +305,30 @@ export async function POST(
       lockStale,
     });
 
-    if (lockExists) {
-      if (lockStale) {
-        // Stale lock，清理并重新生成
-        devLog("[qa:generate:POST] cleaning stale lock, regenerating", {
-          sessionId,
+    const acquiredJob = await acquireAsyncJob({
+      jobKey: questionGenerationJobKey(session.id),
+      jobType: "QA_QUESTION_GENERATION",
+      resourceId: session.id,
+      leaseMs: STALE_LOCK_MS,
+    });
+    if (!acquiredJob) {
+      return NextResponse.json(
+        {
+          error: "答辩问题正在生成中，请稍后重试。",
+          generating: true,
           lockAgeMs,
-        });
-        generationLocks.delete(session.id);
-      } else {
-        devLog("[qa:generate:POST] generation in progress, returning 409", {
-          sessionId,
-          lockAgeMs,
-        });
-        return NextResponse.json(
-          {
-            error: "答辩问题正在生成中，请稍后重试。",
-            generating: true,
-            lockAgeMs,
-            message: `问题生成已进行 ${Math.round((lockAgeMs ?? 0) / 1000)} 秒，请等待。`,
-          },
-          { status: 409 },
-        );
-      }
+          message: `问题生成已进行 ${Math.round((lockAgeMs ?? 0) / 1000)} 秒，请等待。`,
+        },
+        { status: 409 },
+      );
     }
+    acquiredLockToken = acquiredJob.ownerToken;
 
-    // 设置生成锁
-    devLog("[qa:generate:POST] starting generation", { sessionId });
-    generationLocks.set(session.id, { startedAt: Date.now() });
-
-    try {
+    {
       const [aiContext, template, transcript, pitchAnalysis] =
         await Promise.all([
-          buildProjectAIContext(session.projectId),
+          parseProjectAIContextSnapshot(session.projectContextSnapshot) ??
+            buildProjectAIContext(session.projectId),
           loadPromptTemplate("training-qa-question-generation"),
           getLatestTranscript(session.id),
           getLatestPitchAnalysis(session.id),
@@ -421,18 +413,27 @@ export async function POST(
         count: savedQuestions.length,
       });
 
-      return NextResponse.json({
-        questions: savedQuestions,
+      const wasReleased = await releaseAsyncJob({
+        jobKey: questionGenerationJobKey(session.id),
+        ownerToken: acquiredLockToken,
+        status: "COMPLETED",
       });
-    } finally {
-      const wasReleased = generationLocks.delete(session.id);
       devLog("[qa:generate:POST] lock released", {
         sessionId,
         wasReleased,
       });
+
+      return NextResponse.json({
+        questions: savedQuestions,
+      });
     }
   } catch (error) {
-    generationLocks.delete(sessionId);
+    await releaseAsyncJob({
+      jobKey: questionGenerationJobKey(sessionId),
+      ownerToken: acquiredLockToken,
+      status: "FAILED",
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     devLog("[qa:generate:POST] lock released in outer catch", {
       sessionId,
     });

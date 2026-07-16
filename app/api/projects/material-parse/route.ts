@@ -12,23 +12,8 @@ const EMPTY_TEXT_MESSAGE =
   "未能从文件中提取到可读取文字。请确认 PDF 不是扫描件/图片版，或改传 PPTX、DOCX、TXT。";
 const PARSE_TIMEOUT_MESSAGE =
   "材料解析超时，请尝试改传 PPTX、DOCX、TXT，或手动填写项目档案。";
-const IS_DEVELOPMENT = process.env.NODE_ENV === "development";
-const PARSE_TIMEOUT_MS = 60_000;
 
 export const runtime = "nodejs";
-
-class MaterialParseTimeoutError extends Error {
-  constructor() {
-    super(PARSE_TIMEOUT_MESSAGE);
-    this.name = "MaterialParseTimeoutError";
-  }
-}
-
-function debugLog(stage: string, details: unknown) {
-  if (IS_DEVELOPMENT) {
-    console.info(`[project-material-parse] ${stage}`, details);
-  }
-}
 
 function infoLog(stage: string, details: unknown) {
   console.info(`[project-material-parse] ${stage}`, details);
@@ -49,7 +34,6 @@ function getFileType(fileName: string) {
   const lowerName = fileName.toLowerCase();
 
   if (lowerName.endsWith(".pdf")) return "pdf";
-  if (lowerName.endsWith(".ppt")) return "ppt";
   if (lowerName.endsWith(".pptx")) return "pptx";
   if (lowerName.endsWith(".docx")) return "docx";
   if (lowerName.endsWith(".txt")) return "txt";
@@ -58,38 +42,17 @@ function getFileType(fileName: string) {
 }
 
 function getFailureMessage(error: unknown) {
-  if (error instanceof MaterialParseTimeoutError) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (message.includes("解析超过") || message.includes("解析任务拥堵")) {
     return PARSE_TIMEOUT_MESSAGE;
   }
-
-  const message = error instanceof Error ? error.message : String(error);
 
   if (message.includes("未能从文件中提取到有效文本")) {
     return EMPTY_TEXT_MESSAGE;
   }
 
   return SYSTEM_FAILURE_MESSAGE;
-}
-
-async function parseUploadedFileToTextWithTimeout(file: File) {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const parsePromise = parseUploadedFileToText(file);
-  parsePromise.catch(() => undefined);
-
-  try {
-    return await Promise.race([
-      parsePromise,
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new MaterialParseTimeoutError());
-        }, PARSE_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timeoutId !== null) {
-      clearTimeout(timeoutId);
-    }
-  }
 }
 
 export async function POST(request: Request) {
@@ -133,9 +96,8 @@ export async function POST(request: Request) {
         fileName: material.name,
         fileType,
         fileSize: material.size,
-        timeoutMs: PARSE_TIMEOUT_MS,
       });
-      extractedText = await parseUploadedFileToTextWithTimeout(material);
+      extractedText = await parseUploadedFileToText(material);
     } catch (error) {
       errorLog("parse_error", {
         fileName: material.name,
@@ -144,14 +106,7 @@ export async function POST(request: Request) {
         ...getErrorDetails(error),
       });
 
-      if (fileType !== "ppt") {
-        throw error;
-      }
-
-      debugLog("legacy_ppt_parse_skipped", {
-        fileName: material.name,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      throw error;
     }
 
     infoLog("parse_succeeded", {

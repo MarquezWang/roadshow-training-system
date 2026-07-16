@@ -8,7 +8,7 @@ type TrainingEventRouteContext = Readonly<{
   }>;
 }>;
 
-const allowedEventTypes = new Set(["START", "NEXT", "PREV", "JUMP", "END"]);
+const allowedEventTypes = new Set(["NEXT", "PREV", "JUMP"]);
 
 function readInteger(value: unknown, fieldName: string) {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
@@ -73,12 +73,7 @@ export async function POST(
       return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
     }
 
-    if (
-      (eventType === "NEXT" ||
-        eventType === "PREV" ||
-        eventType === "JUMP") &&
-      session.status !== "PITCHING"
-    ) {
+    if (session.status !== "PITCHING") {
       return NextResponse.json(
         { error: "只有路演中才能记录正式翻页事件。" },
         { status: 409 },
@@ -104,30 +99,44 @@ export async function POST(
       }
     }
 
-    const slideEvent = await prisma.slideEvent.create({
-      data: {
-        sessionId,
-        fileId,
-        pageIndex,
-        eventType,
-        elapsedSec,
-      },
-      select: {
-        id: true,
-      },
+    const result = await prisma.$transaction(async (transaction) => {
+      const transition = await transaction.trainingSession.updateMany({
+        where: {
+          id: sessionId,
+          status: "PITCHING",
+        },
+        data: {
+          currentPageIndex: pageIndex,
+        },
+      });
+
+      if (transition.count === 0) {
+        return null;
+      }
+
+      return transaction.slideEvent.create({
+        data: {
+          sessionId,
+          fileId,
+          pageIndex,
+          eventType,
+          elapsedSec,
+        },
+        select: {
+          id: true,
+        },
+      });
     });
 
-    await prisma.trainingSession.update({
-      where: {
-        id: sessionId,
-      },
-      data: {
-        currentPageIndex: pageIndex,
-      },
-    });
+    if (!result) {
+      return NextResponse.json(
+        { error: "训练状态已变化，翻页事件未保存。" },
+        { status: 409 },
+      );
+    }
 
     return NextResponse.json({
-      eventId: slideEvent.id,
+      eventId: result.id,
     });
   } catch (error) {
     const message =

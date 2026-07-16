@@ -1,150 +1,67 @@
-import { access, readFile } from "fs/promises";
+import { access } from "fs/promises";
 import path from "path";
-import { pathToFileURL } from "url";
-import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
-import JSZip from "jszip";
-import { validateProjectUpload } from "@/lib/file-upload";
+import {
+  runDocumentParserWorker,
+  withTemporaryDocumentFile,
+} from "@/lib/document-parser-boundary.mjs";
+import {
+  validateProjectFileSignature,
+  validateProjectUpload,
+} from "@/lib/file-upload";
 
-const MAX_EXTRACTED_TEXT_LENGTH = 100_000;
 const SUPPORTED_FILE_TYPES = new Set(["txt", "pdf", "docx", "pptx"]);
-
-function normalizeText(text: string) {
-  return text.replace(/\r/g, "").replace(/[ \t]+\n/g, "\n").trim();
-}
-
-function limitExtractedText(text: string) {
-  return text.length > MAX_EXTRACTED_TEXT_LENGTH
-    ? text.slice(0, MAX_EXTRACTED_TEXT_LENGTH)
-    : text;
-}
 
 async function resolveUploadPath(filePath: string) {
   const normalizedPath = filePath.replaceAll("\\", "/");
+  const uploadPrefix = "uploads/projects/";
 
-  if (!normalizedPath.startsWith("uploads/projects/")) {
+  if (!normalizedPath.startsWith(uploadPrefix)) {
     throw new Error("文件路径不在允许的 uploads/projects 目录下。");
   }
 
-  const uploadsRoot = path.resolve(process.cwd(), "uploads");
-  const absolutePath = path.resolve(process.cwd(), normalizedPath);
-  const relativeToUploads = path.relative(uploadsRoot, absolutePath);
+  const projectsUploadsRoot = path.join(
+    /* turbopackIgnore: true */ process.cwd(),
+    "uploads",
+    "projects",
+  );
+  const absolutePath = path.resolve(
+    projectsUploadsRoot,
+    normalizedPath.slice(uploadPrefix.length),
+  );
+  const relativeToProjectsUploads = path.relative(
+    projectsUploadsRoot,
+    absolutePath,
+  );
 
   if (
-    relativeToUploads.startsWith("..") ||
-    path.isAbsolute(relativeToUploads)
+    relativeToProjectsUploads.startsWith("..") ||
+    path.isAbsolute(relativeToProjectsUploads)
   ) {
-    throw new Error("文件路径不在允许的 uploads 目录下。");
+    throw new Error("文件路径不在允许的 uploads/projects 目录下。");
   }
 
-  await access(absolutePath);
+  await access(/* turbopackIgnore: true */ absolutePath);
   return absolutePath;
 }
 
-async function parseTxt(buffer: Buffer) {
-  return buffer.toString("utf8");
-}
-
-async function parsePdf(buffer: Buffer) {
-  const workerPath = path.join(
-    process.cwd(),
-    "node_modules",
-    "pdfjs-dist",
-    "legacy",
-    "build",
-    "pdf.worker.mjs",
-  );
-
-  PDFParse.setWorker(pathToFileURL(workerPath).href);
-
-  const parser = new PDFParse({
-    data: new Uint8Array(buffer),
-  });
-
-  try {
-    const result = await parser.getText();
-
-    return result.text;
-  } finally {
-    await parser.destroy();
-  }
-}
-
-async function parseDocx(buffer: Buffer) {
-  const result = await mammoth.extractRawText({ buffer });
-
-  return result.value;
-}
-
-async function parsePptx(buffer: Buffer) {
-  const zip = await JSZip.loadAsync(buffer);
-  const slideFiles = Object.keys(zip.files)
-    .filter((fileName) => /^ppt\/slides\/slide\d+\.xml$/.test(fileName))
-    .sort((left, right) =>
-      left.localeCompare(right, undefined, { numeric: true }),
-    );
-
-  const slideTexts = await Promise.all(
-    slideFiles.map(async (fileName) => {
-      const xml = await zip.files[fileName].async("text");
-      const matches = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)];
-
-      return matches
-        .map((match) =>
-          match[1]
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/&amp;/g, "&")
-            .replace(/&quot;/g, '"')
-            .replace(/&apos;/g, "'"),
-        )
-        .join("\n");
-    }),
-  );
-
-  return slideTexts.join("\n\n");
-}
-
-async function parseBufferToText(buffer: Buffer, fileType: string) {
+function normalizeFileType(fileType: string) {
   const normalizedType = fileType.toLowerCase().replace(/^\./, "");
 
   if (!SUPPORTED_FILE_TYPES.has(normalizedType)) {
     throw new Error(`暂不支持解析 ${fileType} 文件。`);
   }
-
-  let extractedText = "";
-
-  if (normalizedType === "txt") {
-    extractedText = await parseTxt(buffer);
-  }
-
-  if (normalizedType === "pdf") {
-    extractedText = await parsePdf(buffer);
-  }
-
-  if (normalizedType === "docx") {
-    extractedText = await parseDocx(buffer);
-  }
-
-  if (normalizedType === "pptx") {
-    extractedText = await parsePptx(buffer);
-  }
-
-  const normalizedText = normalizeText(extractedText);
-
-  if (!normalizedText) {
-    throw new Error("未能从文件中提取到有效文本。");
-  }
-
-  return limitExtractedText(normalizedText);
+  return normalizedType;
 }
 
 export async function parseUploadedFileToText(file: File) {
   validateProjectUpload(file);
-  const fileType = path.extname(file.name).toLowerCase().replace(".", "");
+  const fileType = normalizeFileType(path.extname(file.name));
   const buffer = Buffer.from(await file.arrayBuffer());
+  validateProjectFileSignature(file.name, buffer);
 
-  return parseBufferToText(buffer, fileType);
+  return withTemporaryDocumentFile(buffer, fileType, (temporaryPath: string) =>
+    runDocumentParserWorker({ inputPath: temporaryPath, fileType }),
+  );
 }
 
 export async function parseFileToText(filePath: string, fileType: string) {
@@ -160,7 +77,8 @@ export async function parseFileToText(filePath: string, fileType: string) {
     throw new Error("文件不存在或不可读取。");
   }
 
-  const buffer = await readFile(absolutePath);
-
-  return parseBufferToText(buffer, fileType);
+  return runDocumentParserWorker({
+    inputPath: absolutePath,
+    fileType: normalizeFileType(fileType),
+  });
 }

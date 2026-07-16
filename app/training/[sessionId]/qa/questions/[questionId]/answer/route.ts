@@ -74,15 +74,16 @@ async function finishQa(
         )
       : null);
 
-  return prisma.trainingSession.update({
-    where: {
-      id: sessionId,
-    },
+  const transition = await prisma.trainingSession.updateMany({
+    where: { id: sessionId, status: "QAING" },
     data: {
       status: "QA_ENDED",
       qaEndedAt: endedAt,
       qaDurationSec,
     },
+  });
+  const updatedSession = await prisma.trainingSession.findUnique({
+    where: { id: sessionId },
     select: {
       id: true,
       status: true,
@@ -90,6 +91,8 @@ async function finishQa(
       qaDurationSec: true,
     },
   });
+
+  return { updated: transition.count === 1, session: updatedSession };
 }
 
 export async function POST(
@@ -187,6 +190,14 @@ export async function POST(
   const durationSec = getDurationSec(startedAt, now);
 
   const savedAnswer = await prisma.$transaction(async (transaction) => {
+    const stateGuard = await transaction.trainingSession.updateMany({
+      where: { id: sessionId, status: "QAING" },
+      data: { updatedAt: now },
+    });
+    if (stateGuard.count === 0) {
+      return null;
+    }
+
     const answer = await transaction.trainingAnswer.upsert({
       where: {
         questionId,
@@ -260,6 +271,13 @@ export async function POST(
     });
   });
 
+  if (!savedAnswer) {
+    return NextResponse.json(
+      { error: "训练状态已变化，回答未保存。" },
+      { status: 409 },
+    );
+  }
+
   let nextQuestion: { id: string; orderIndex: number } | null = null;
 
   if (!shouldFinish && preferredNextQuestionId) {
@@ -304,14 +322,24 @@ export async function POST(
   }
 
   if (!nextQuestion) {
-    const updatedSession = await finishQa(sessionId, now, clientQaDurationSec);
+    const finishResult = await finishQa(sessionId, now, clientQaDurationSec);
+
+    if (!finishResult.updated || !finishResult.session) {
+      return NextResponse.json(
+        {
+          error: "训练状态已变化，答辩未被重复结束。",
+          session: finishResult.session,
+        },
+        { status: 409 },
+      );
+    }
 
     return NextResponse.json({
       completed: true,
       answer: savedAnswer,
       session: {
-        ...updatedSession,
-        qaEndedAt: updatedSession.qaEndedAt?.toISOString() ?? null,
+        ...finishResult.session,
+        qaEndedAt: finishResult.session.qaEndedAt?.toISOString() ?? null,
       },
     });
   }

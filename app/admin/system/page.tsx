@@ -9,7 +9,9 @@ import { requireAdminUser } from "@/lib/auth-server";
 import { readRecentDiagnosticEvents } from "@/lib/diagnostic-log";
 import { checkLibreOfficeAvailability } from "@/lib/powerpoint-preview";
 import { prisma } from "@/lib/prisma";
+import { getTranscriptionProvider } from "@/lib/transcription";
 import { SystemTestPanel } from "./system-test-panel";
+import { UploadMaintenancePanel } from "./upload-maintenance-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -253,8 +255,7 @@ export default async function AdminSystemPage() {
     readRecentDiagnosticEvents(12),
     readRuntimeVersion(),
   ]);
-  const transcriptionProvider =
-    process.env.TRANSCRIPTION_PROVIDER?.trim() || "openai";
+  const transcriptionProvider = getTranscriptionProvider();
   const authEnabled = process.env.AUTH_ENABLED === "true";
   const usesTencentCredential = transcriptionProvider.startsWith("tencent");
   const usesTencentStandardAsr = transcriptionProvider === "tencent";
@@ -273,7 +274,7 @@ export default async function AdminSystemPage() {
     : usesXfyunProvider
       ? hasValue(process.env.XFYUN_APP_ID) &&
         hasValue(process.env.XFYUN_SECRET_KEY)
-      : true;
+      : hasValue(process.env.TRANSCRIPTION_API_KEY);
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 sm:px-8 lg:px-10">
@@ -297,6 +298,7 @@ export default async function AdminSystemPage() {
 
       <div className="mt-6 grid gap-6">
         <SystemTestPanel />
+        <UploadMaintenancePanel />
 
         <Section
           title="运行版本与上线风险"

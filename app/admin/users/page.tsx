@@ -1,5 +1,10 @@
 import Link from "next/link";
-import { createUserAction, resetUserPasswordAction, updateUserAction } from "./actions";
+import {
+  createUserAction,
+  resetUserPasswordAction,
+  setUserDisabledAction,
+  updateUserAction,
+} from "./actions";
 import { requireAdminUser } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 
@@ -15,6 +20,10 @@ const statusMessages: Record<string, string> = {
   created: "用户已创建。",
   updated: "用户信息已更新。",
   password: "密码已重置。",
+  disabled: "用户已停用，既有登录会话已失效。",
+  restored: "用户已恢复，可以重新登录。",
+  cannot_self: "不能停用或降级当前登录管理员。",
+  last_admin: "操作被拒绝：系统必须至少保留一个启用的管理员。",
   error: "操作失败，请检查登录名是否重复、密码是否至少 8 位。",
 };
 
@@ -43,6 +52,7 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
       name: true,
       role: true,
       passwordHash: true,
+      disabledAt: true,
       createdAt: true,
       _count: {
         select: {
@@ -75,7 +85,7 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
       {status && statusMessages[status] ? (
         <div
           className={`mt-6 rounded-lg border px-4 py-3 text-sm ${
-            status === "error"
+            ["error", "cannot_self", "last_admin"].includes(status)
               ? "border-rose-200 bg-rose-50 text-rose-700"
               : "border-teal-200 bg-teal-50 text-teal-800"
           }`}
@@ -138,7 +148,7 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
         <div className="border-b border-slate-100 px-5 py-4">
           <h2 className="text-base font-semibold text-slate-950">用户列表</h2>
           <p className="mt-1 text-sm text-slate-500">
-            当前共 {users.length} 个用户。当前登录用户不能被降级。
+            当前共 {users.length} 个用户。当前登录用户不能被停用或降级，系统始终保留至少一个启用的管理员。
           </p>
         </div>
 
@@ -200,13 +210,37 @@ export default async function AdminUsersPage({ searchParams }: UsersPageProps) {
                   <td className="px-5 py-4 text-slate-700">
                     <div
                       className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${
-                        user.passwordHash
+                        user.disabledAt
+                          ? "border-rose-200 bg-rose-50 text-rose-700"
+                          : user.passwordHash
                           ? "border-teal-200 bg-teal-50 text-teal-700"
                           : "border-slate-200 bg-slate-50 text-slate-500"
                       }`}
                     >
-                      {user.passwordHash ? "可登录" : "不可登录"}
+                      {user.disabledAt
+                        ? "已停用"
+                        : user.passwordHash
+                          ? "可登录"
+                          : "不可登录"}
                     </div>
+                    <form action={setUserDisabledAction} className="mt-3">
+                      <input type="hidden" name="id" value={user.id} />
+                      <input
+                        type="hidden"
+                        name="disabled"
+                        value={user.disabledAt ? "false" : "true"}
+                      />
+                      <button
+                        disabled={user.id === currentUser.id}
+                        className={`rounded-md border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 ${
+                          user.disabledAt
+                            ? "border-teal-200 text-teal-700 hover:bg-teal-50"
+                            : "border-rose-200 text-rose-700 hover:bg-rose-50"
+                        }`}
+                      >
+                        {user.disabledAt ? "恢复账号" : "停用账号"}
+                      </button>
+                    </form>
                   </td>
                   <td className="px-5 py-4 text-slate-700">
                     {user._count.projects}

@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import { qaStartableTrainingStatuses } from "@/lib/training-status";
 
 type StartQaContext = Readonly<{
   params: Promise<{
     sessionId: string;
   }>;
 }>;
-
-const allowedStatuses = new Set(["PITCH_ENDED", "QA_READY", "QAING"]);
 
 export async function POST(_request: Request, context: StartQaContext) {
   const { sessionId } = await context.params;
@@ -30,10 +29,24 @@ export async function POST(_request: Request, context: StartQaContext) {
     return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
   }
 
-  if (!allowedStatuses.has(session.status)) {
+  if (session.status === "QAING") {
+    return NextResponse.json({
+      session: {
+        ...session,
+        qaStartedAt: session.qaStartedAt?.toISOString() ?? null,
+      },
+      skipped: true,
+    });
+  }
+
+  if (
+    !qaStartableTrainingStatuses.includes(
+      session.status as (typeof qaStartableTrainingStatuses)[number],
+    )
+  ) {
     return NextResponse.json(
       { error: "当前训练状态不能开始答辩。" },
-      { status: 400 },
+      { status: 409 },
     );
   }
 
@@ -58,9 +71,10 @@ export async function POST(_request: Request, context: StartQaContext) {
 
   const now = new Date();
   const qaStartedAt = session.qaStartedAt ?? now;
-  const updatedSession = await prisma.trainingSession.update({
+  const transition = await prisma.trainingSession.updateMany({
     where: {
       id: sessionId,
+      status: { in: [...qaStartableTrainingStatuses] },
     },
     data: {
       status: "QAING",
@@ -68,17 +82,28 @@ export async function POST(_request: Request, context: StartQaContext) {
       qaEndedAt: null,
       qaDurationSec: null,
     },
-    select: {
-      id: true,
-      status: true,
-      qaStartedAt: true,
-    },
   });
+  const updatedSession = await prisma.trainingSession.findUnique({
+    where: { id: sessionId },
+    select: { id: true, status: true, qaStartedAt: true },
+  });
+
+  if (!updatedSession) {
+    return NextResponse.json({ error: "训练场次不存在。" }, { status: 404 });
+  }
+
+  if (transition.count === 0 && updatedSession.status !== "QAING") {
+    return NextResponse.json(
+      { error: "训练状态已变化，不能开始答辩。", session: updatedSession },
+      { status: 409 },
+    );
+  }
 
   return NextResponse.json({
     session: {
       ...updatedSession,
       qaStartedAt: updatedSession.qaStartedAt?.toISOString() ?? null,
     },
+    skipped: transition.count === 0,
   });
 }

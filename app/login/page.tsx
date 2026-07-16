@@ -1,4 +1,7 @@
 import { loginAction } from "./actions";
+import { redirect } from "next/navigation";
+import { getCurrentAuthUser } from "@/lib/auth-server";
+import { getSafeInternalPath } from "@/lib/safe-redirect.mjs";
 
 type LoginPageProps = Readonly<{
   searchParams?: Promise<{
@@ -16,13 +19,22 @@ function getErrorMessage(error: string | undefined) {
     return "账号或密码不正确。";
   }
 
+  if (error === "rate_limited") {
+    return "登录失败次数过多，请 15 分钟后再试。";
+  }
+
   return "";
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const params = (await searchParams) ?? {};
-  const next = params.next?.startsWith("/") ? params.next : "/projects";
+  const next = getSafeInternalPath(params.next);
   const errorMessage = getErrorMessage(params.error);
+  const currentUser = await getCurrentAuthUser();
+
+  if (currentUser) {
+    redirect(next);
+  }
 
   return (
     <main className="grid min-h-screen place-items-center bg-slate-950 px-6 py-10 text-white">

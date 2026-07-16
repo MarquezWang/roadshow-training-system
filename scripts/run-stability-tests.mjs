@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
-const npxCommand = isWindows ? "npx.cmd" : "npx";
+const pythonCommand = isWindows ? "python.exe" : "python3";
 const port = process.env.STABILITY_TEST_PORT || "3210";
 const databaseUrl =
   process.env.STABILITY_TEST_DATABASE_URL ||
@@ -126,14 +126,12 @@ async function main() {
   console.log(`[stability] database=${databaseUrl}`);
   console.log(`[stability] server=${baseUrl}`);
 
-  await runCommand(npxCommand, [
-    "prisma",
-    "db",
-    "push",
-    "--skip-generate",
-    "--force-reset",
-    "--accept-data-loss",
-  ]);
+  await Promise.all(
+    [dbPath, `${dbPath}-journal`, `${dbPath}-shm`, `${dbPath}-wal`].map(
+      (target) => rm(target, { force: true }),
+    ),
+  );
+  await runCommand(pythonCommand, ["scripts/apply-sqlite-test-migrations.py"]);
 
   serverProcess = spawn(npmCommand, ["run", "dev", "--", "-p", port], {
     stdio: "inherit",

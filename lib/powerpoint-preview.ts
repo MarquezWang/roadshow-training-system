@@ -1,15 +1,22 @@
-import { execFile } from "child_process";
-import { mkdir, rename, rm, stat } from "fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readdir, rename, rm, stat } from "fs/promises";
 import path from "path";
-import { promisify } from "util";
+import { pathToFileURL } from "url";
 
+import { runBoundedProcess } from "@/lib/bounded-process.mjs";
+import { createDocumentParseLimiter } from "@/lib/document-parser-boundary.mjs";
 import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { prisma } from "@/lib/prisma";
 
-const execFileAsync = promisify(execFile);
 const CONVERSION_TIMEOUT_MS = 60_000;
 const DETECTION_TIMEOUT_MS = 5_000;
+const CONVERSION_QUEUE_TIMEOUT_MS = 60_000;
+const MAX_ATTEMPT_DIRECTORY_BYTES = 150 * 1024 * 1024;
+const MAX_PREVIEW_PDF_BYTES = 100 * 1024 * 1024;
 const PPT_PREVIEW_LOG_PREFIX = "[PPT_PREVIEW]";
+const libreOfficeLimiter = createDocumentParseLimiter(
+  Number(process.env.LIBREOFFICE_MAX_CONCURRENCY) || 1,
+);
 
 type FileAssetForPreview = {
   id: string;
@@ -19,7 +26,12 @@ type FileAssetForPreview = {
   filePath: string;
 };
 
-export type PreviewStatus = "NONE" | "PENDING" | "READY" | "FAILED";
+export type PreviewStatus =
+  | "NONE"
+  | "PENDING"
+  | "FINALIZING"
+  | "READY"
+  | "FAILED";
 
 type LibreOfficeCheckResult =
   | {
@@ -80,7 +92,7 @@ function assertSafeProjectUploadPath(filePath: string) {
   }
 
   const projectsUploadsRoot = path.resolve(
-    process.cwd(),
+    /*turbopackIgnore: true*/ process.cwd(),
     "uploads",
     "projects",
   );
@@ -123,7 +135,10 @@ function quoteLogValue(value: string) {
 }
 
 function getShortPath(filePath: string) {
-  const relativePath = path.relative(process.cwd(), filePath);
+  const relativePath = path.relative(
+    /*turbopackIgnore: true*/ process.cwd(),
+    filePath,
+  );
 
   if (!relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
     return relativePath.replaceAll(path.sep, "/");
@@ -157,9 +172,9 @@ export async function checkLibreOfficeAvailability(): Promise<LibreOfficeCheckRe
 
   for (const command of getLibreOfficeCandidates()) {
     try {
-      const result = await execFileAsync(command, ["--version"], {
-        timeout: DETECTION_TIMEOUT_MS,
-        windowsHide: true,
+      const result = await runBoundedProcess(command, ["--version"], {
+        timeoutMs: DETECTION_TIMEOUT_MS,
+        maxOutputBytes: 64 * 1024,
       });
       const version = sanitizeLogValue(
         result.stdout || result.stderr || "version unavailable",
@@ -203,10 +218,22 @@ async function runLibreOfficeConvert(inputPath: string, outputDir: string) {
     );
   }
 
+  const profilePath = path.join(outputDir, ".lo-profile");
+  const temporaryPath = path.join(outputDir, ".lo-tmp");
+  await Promise.all([
+    mkdir(profilePath, { recursive: true }),
+    mkdir(temporaryPath, { recursive: true }),
+  ]);
+
   const args = [
+    `-env:UserInstallation=${pathToFileURL(profilePath).href}`,
     "--headless",
+    "--invisible",
     "--nologo",
+    "--nodefault",
     "--nofirststartwizard",
+    "--nolockcheck",
+    "--norestore",
     "--convert-to",
     "pdf",
     "--outdir",
@@ -214,17 +241,73 @@ async function runLibreOfficeConvert(inputPath: string, outputDir: string) {
     inputPath,
   ];
 
+  const release = await libreOfficeLimiter.acquire({
+    timeoutMs: CONVERSION_QUEUE_TIMEOUT_MS,
+  });
+  const controller = new AbortController();
+  let directoryLimitExceeded = false;
+  const monitor = setInterval(() => {
+    void getDirectorySize(outputDir).then((size) => {
+      if (size > MAX_ATTEMPT_DIRECTORY_BYTES && !controller.signal.aborted) {
+        directoryLimitExceeded = true;
+        controller.abort();
+      }
+    }).catch(() => undefined);
+  }, 500);
+
   try {
-    await execFileAsync(libreOffice.command, args, {
-      timeout: CONVERSION_TIMEOUT_MS,
-      windowsHide: true,
+    await runBoundedProcess(libreOffice.command, args, {
+      timeoutMs: CONVERSION_TIMEOUT_MS,
+      maxOutputBytes: 512 * 1024,
+      signal: controller.signal,
+      env: {
+        ...process.env,
+        HOME: temporaryPath,
+        TEMP: temporaryPath,
+        TMP: temporaryPath,
+        SAL_DISABLE_OPENCL: "1",
+        SAL_USE_VCLPLUGIN: "svp",
+        http_proxy: "http://127.0.0.1:9",
+        https_proxy: "http://127.0.0.1:9",
+        HTTP_PROXY: "http://127.0.0.1:9",
+        HTTPS_PROXY: "http://127.0.0.1:9",
+        ALL_PROXY: "http://127.0.0.1:9",
+        all_proxy: "http://127.0.0.1:9",
+        NO_PROXY: "",
+        no_proxy: "",
+      },
     });
   } catch (error) {
     throw new PowerPointPreviewError(
       "libreoffice_execution_failed",
-      `PPT 展示预览生成失败：${sanitizeLogValue(getErrorMessage(error))}`,
+      directoryLimitExceeded
+        ? "PPT 展示预览生成失败：临时文件超过 150MB，已终止转换。"
+        : `PPT 展示预览生成失败：${sanitizeLogValue(getErrorMessage(error))}`,
     );
+  } finally {
+    clearInterval(monitor);
+    controller.abort();
+    release();
+    await Promise.all([
+      rm(profilePath, { recursive: true, force: true }),
+      rm(temporaryPath, { recursive: true, force: true }),
+    ]).catch(() => undefined);
   }
+}
+
+async function getDirectorySize(directoryPath: string): Promise<number> {
+  let total = 0;
+  const entries = await readdir(directoryPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(directoryPath, entry.name);
+    if (entry.isDirectory()) {
+      total += await getDirectorySize(entryPath);
+    } else if (entry.isFile()) {
+      total += (await stat(entryPath)).size;
+    }
+    if (total > MAX_ATTEMPT_DIRECTORY_BYTES) return total;
+  }
+  return total;
 }
 
 export async function convertPowerPointToPdf(
@@ -263,7 +346,11 @@ export async function convertPowerPointToPdf(
 
   try {
     const convertedStat = await stat(convertedPath);
-    if (!convertedStat.isFile() || convertedStat.size === 0) {
+    if (
+      !convertedStat.isFile() ||
+      convertedStat.size === 0 ||
+      convertedStat.size > MAX_PREVIEW_PDF_BYTES
+    ) {
       throw new PowerPointPreviewError(
         "output_pdf_not_generated",
         "PPT 展示预览生成失败：未找到转换后的 PDF 文件。",
@@ -304,39 +391,101 @@ export async function generatePowerPointPreviewPdf(file: FileAssetForPreview) {
     };
   }
 
-  await prisma.fileAsset.update({
+  const attemptId = randomUUID();
+  const startedAt = new Date();
+  const staleBefore = new Date(
+    startedAt.getTime() - Math.max(CONVERSION_TIMEOUT_MS * 2, 120_000),
+  );
+  const acquisition = await prisma.fileAsset.updateMany({
     where: {
       id: file.id,
+      OR: [
+        { previewStatus: { notIn: ["PENDING", "FINALIZING"] } },
+        { previewStartedAt: null },
+        { previewStartedAt: { lt: staleBefore } },
+      ],
     },
     data: {
       previewStatus: "PENDING",
       previewError: null,
+      previewAttemptId: attemptId,
+      previewStartedAt: startedAt,
     },
   });
 
+  if (acquisition.count === 0) {
+    const current = await prisma.fileAsset.findUnique({
+      where: { id: file.id },
+      select: {
+        previewStatus: true,
+        previewPdfPath: true,
+        previewError: true,
+      },
+    });
+    return {
+      previewStatus: (current?.previewStatus ?? "FAILED") as PreviewStatus,
+      previewPdfPath: current?.previewPdfPath ?? null,
+      previewError: current?.previewError ?? "预览生成任务正在执行。",
+    };
+  }
+
+  let attemptOutputDir: string | null = null;
   try {
     const inputPath = assertSafeProjectUploadPath(file.filePath);
     const outputRelativePath = getPreviewPdfRelativePath(
       file.projectId,
       file.id,
     );
-    const outputPath = path.resolve(process.cwd(), outputRelativePath);
+    const outputPath = path.resolve(
+      /*turbopackIgnore: true*/ process.cwd(),
+      outputRelativePath,
+    );
     const outputDir = path.dirname(outputPath);
-    const convertedPath = await convertPowerPointToPdf(inputPath, outputDir);
+    attemptOutputDir = path.join(outputDir, `.attempt-${attemptId}`);
+    const convertedPath = await convertPowerPointToPdf(
+      inputPath,
+      attemptOutputDir,
+    );
 
-    if (convertedPath !== outputPath) {
-      await rm(outputPath, { force: true });
-      await rename(convertedPath, outputPath);
-    }
-
-    await prisma.fileAsset.update({
+    const finalizing = await prisma.fileAsset.updateMany({
       where: {
         id: file.id,
+        previewAttemptId: attemptId,
+        previewStatus: "PENDING",
+      },
+      data: { previewStatus: "FINALIZING" },
+    });
+    if (finalizing.count === 0) {
+      const current = await prisma.fileAsset.findUnique({
+        where: { id: file.id },
+        select: {
+          previewStatus: true,
+          previewPdfPath: true,
+          previewError: true,
+        },
+      });
+      return {
+        previewStatus: (current?.previewStatus ?? "FAILED") as PreviewStatus,
+        previewPdfPath: current?.previewPdfPath ?? null,
+        previewError: current?.previewError ?? "预览任务已被较新的任务取代。",
+      };
+    }
+
+    await rm(outputPath, { force: true });
+    await rename(convertedPath, outputPath);
+
+    await prisma.fileAsset.updateMany({
+      where: {
+        id: file.id,
+        previewAttemptId: attemptId,
+        previewStatus: "FINALIZING",
       },
       data: {
         previewPdfPath: outputRelativePath,
         previewStatus: "READY",
         previewError: null,
+        previewAttemptId: null,
+        previewStartedAt: null,
       },
     });
 
@@ -363,14 +512,18 @@ export async function generatePowerPointPreviewPdf(file: FileAssetForPreview) {
       },
     });
 
-    await prisma.fileAsset.update({
+    await prisma.fileAsset.updateMany({
       where: {
         id: file.id,
+        previewAttemptId: attemptId,
+        previewStatus: { in: ["PENDING", "FINALIZING"] },
       },
       data: {
         previewPdfPath: null,
         previewStatus: "FAILED",
         previewError,
+        previewAttemptId: null,
+        previewStartedAt: null,
       },
     });
 
@@ -379,5 +532,11 @@ export async function generatePowerPointPreviewPdf(file: FileAssetForPreview) {
       previewPdfPath: null,
       previewError,
     };
+  } finally {
+    if (attemptOutputDir) {
+      await rm(attemptOutputDir, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
   }
 }

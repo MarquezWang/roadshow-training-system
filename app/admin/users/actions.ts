@@ -2,9 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { hashPassword } from "@/lib/auth";
 import { requireAdminUser } from "@/lib/auth-server";
+import { hashPassword } from "@/lib/password";
 import { prisma } from "@/lib/prisma";
+import {
+  changeManagedUserRole,
+  setManagedUserDisabled,
+} from "@/lib/admin-user-account.mjs";
 
 const validRoles = new Set(["USER", "ADMIN", "TEAM"]);
 
@@ -12,9 +16,36 @@ function getText(formData: FormData, name: string) {
   return String(formData.get(name) ?? "").trim();
 }
 
-function redirectWithMessage(type: "created" | "updated" | "password" | "error") {
+type UserActionStatus =
+  | "created"
+  | "updated"
+  | "password"
+  | "disabled"
+  | "restored"
+  | "cannot_self"
+  | "last_admin"
+  | "error";
+
+function redirectWithMessage(type: UserActionStatus) {
   revalidatePath("/admin/users");
   redirect(`/admin/users?status=${type}`);
+}
+
+function managedUserErrorStatus(error: unknown): UserActionStatus {
+  const code =
+    typeof error === "object" && error && "code" in error
+      ? String(error.code)
+      : error instanceof Error
+        ? error.message
+        : "";
+
+  if (code === "cannot_disable_self" || code === "cannot_demote_self") {
+    return "cannot_self";
+  }
+  if (code === "last_active_admin") {
+    return "last_admin";
+  }
+  return "error";
 }
 
 function normalizeRole(value: string) {
@@ -64,18 +95,39 @@ export async function updateUserAction(formData: FormData) {
   const safeRole = id === currentUser.id ? "ADMIN" : role;
 
   try {
-    await prisma.user.update({
-      where: { id },
-      data: {
-        name,
-        role: safeRole,
-      },
+    await changeManagedUserRole(prisma, {
+      actorId: currentUser.id,
+      targetId: id,
+      name,
+      role: safeRole,
     });
-  } catch {
-    redirectWithMessage("error");
+  } catch (error) {
+    redirectWithMessage(managedUserErrorStatus(error));
   }
 
   redirectWithMessage("updated");
+}
+
+export async function setUserDisabledAction(formData: FormData) {
+  const currentUser = await requireAdminUser();
+  const id = getText(formData, "id");
+  const disabled = getText(formData, "disabled") === "true";
+
+  if (!id) {
+    redirectWithMessage("error");
+  }
+
+  try {
+    await setManagedUserDisabled(prisma, {
+      actorId: currentUser.id,
+      targetId: id,
+      disabled,
+    });
+  } catch (error) {
+    redirectWithMessage(managedUserErrorStatus(error));
+  }
+
+  redirectWithMessage(disabled ? "disabled" : "restored");
 }
 
 export async function resetUserPasswordAction(formData: FormData) {
@@ -93,6 +145,7 @@ export async function resetUserPasswordAction(formData: FormData) {
       where: { id },
       data: {
         passwordHash: await hashPassword(password),
+        sessionVersion: { increment: 1 },
       },
     });
   } catch {

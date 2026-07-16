@@ -120,8 +120,10 @@ const MATURITY_KEYWORDS = [
   "全面应用",
   "销售回款",
 ] as const;
-const PROSPECTIVE_OR_NEGATIVE_PATTERN =
-  /(计划|规划|预计|预期|目标|将于|待实现|尚未|未见|未有|暂无|未来|力争|意向|拟(?:于|在|将|开展|建设|实施|完成|投入|部署|接入|申请|进行|实现|量产|交付|生产|销售|推广|上线))/i;
+const PROSPECTIVE_PATTERN =
+  /(计划|规划|预计|预期|目标|将于|待实现|未来|力争|意向|拟(?:于|在|将|开展|建设|实施|完成|投入|部署|接入|申请|进行|实现|量产|交付|生产|销售|推广|上线))/i;
+const NEGATIVE_EVIDENCE_PATTERN =
+  /(尚未|还未|仍未|未曾|未见|未有|未能|未予|未通过|未完成|未取得|未获得|未形成|未投入|未正式|未实现|未开始|未达到|没有|尚无|暂无|缺少|欠缺|不存在|不具备|不符合|不满足|并非|不是|不代表)/i;
 const EVIDENCE_PATTERNS: Record<keyof EvidenceMatrix, RegExp> = {
   conceptPlan:
     /(技术方案|应用设想|技术路线|功能清单|需求方案|解决方案|总体方案)/i,
@@ -462,16 +464,21 @@ function normalizeForMatch(value: string) {
   return value.toLowerCase().replace(/\s+/g, "");
 }
 
-function sourceSegments(sourceText: string) {
+function hasDisqualifyingPolarity(value: string) {
+  return PROSPECTIVE_PATTERN.test(value) || NEGATIVE_EVIDENCE_PATTERN.test(value);
+}
+
+function splitEvidenceClauses(sourceText: string) {
   return sourceText
-    .split(/[\n。！？；]+/)
+    .split(/[\n。！？；，,]+|(?:但是|然而|不过|但)/)
     .map((segment) => segment.trim())
-    .filter(
-      (segment) =>
-        segment.length >= 4 &&
-        segment.length <= 600 &&
-        !PROSPECTIVE_OR_NEGATIVE_PATTERN.test(segment),
-    );
+    .filter((segment) => segment.length >= 4 && segment.length <= 600);
+}
+
+function sourceSegments(sourceText: string) {
+  return splitEvidenceClauses(sourceText).filter(
+    (segment) => !hasDisqualifyingPolarity(segment),
+  );
 }
 
 function verifyAiEvidence(
@@ -488,7 +495,7 @@ function verifyAiEvidence(
       normalizedValue.length >= 4 &&
       normalizedSource.includes(normalizedValue) &&
       pattern.test(value) &&
-      !PROSPECTIVE_OR_NEGATIVE_PATTERN.test(value)
+      !hasDisqualifyingPolarity(value)
     );
   });
 }
@@ -502,7 +509,7 @@ function verifyAiSourceQuotes(sourceText: string, values: string[]) {
     return (
       normalizedValue.length >= 4 &&
       normalizedSource.includes(normalizedValue) &&
-      !PROSPECTIVE_OR_NEGATIVE_PATTERN.test(value)
+      !hasDisqualifyingPolarity(value)
     );
   });
 }
@@ -512,10 +519,7 @@ function matchingSegments(segments: string[], pattern: RegExp) {
 }
 
 function sourceEvidenceWindows(sourceText: string) {
-  const segments = sourceText
-    .split(/[\n。！？；]+/)
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length >= 4 && segment.length <= 600);
+  const segments = splitEvidenceClauses(sourceText);
   const windows: string[] = [];
 
   for (let start = 0; start < segments.length; start += 1) {
@@ -527,7 +531,7 @@ function sourceEvidenceWindows(sourceText: string) {
       index += 1
     ) {
       const segment = segments[index];
-      if (PROSPECTIVE_OR_NEGATIVE_PATTERN.test(segment)) break;
+      if (hasDisqualifyingPolarity(segment)) break;
 
       window = window ? `${window}。${segment}` : segment;
       windows.push(window);
