@@ -1,3 +1,5 @@
+import { isRecord } from "@/lib/type-guards";
+
 export const DELIVERABLE_TYPES = [
   "软件系统/平台/App/SaaS",
   "硬件设备/智能装备",
@@ -219,10 +221,6 @@ const DELIVERABLE_ALIASES: Array<{
     pattern: /(服务模式|课程|培训|咨询服务|运营服务)/i,
   },
 ];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 export function inspectTrlEvidencePayload(value: unknown):
   | {

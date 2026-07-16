@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AIEmptyContentError, callAI } from "@/lib/ai";
 import {
   buildProjectAIContext,
   parseProjectAIContextSnapshot,
   ProjectContextNotFoundError,
-  type ProjectAIContext,
 } from "@/lib/project-context";
-import { AIJsonParseError, parseAIJson } from "@/lib/json-utils";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
-import { renderPrompt } from "@/lib/prompt-renderer";
-import { devLog, devWarn, devError } from "@/lib/dev-log";
-import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
+import { devLog, devError } from "@/lib/dev-log";
 import { prisma } from "@/lib/prisma";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
@@ -18,15 +13,25 @@ import {
   reconcileTrainingAnalysisInputVersion,
 } from "@/lib/training-analysis-input";
 import { acquireAsyncJob, releaseAsyncJob } from "@/lib/async-job";
-import { isFallbackTrainingAnalysis } from "@/lib/training-analysis-fallback";
+import {
+  isFallbackTrainingAnalysis,
+} from "@/lib/training-analysis-fallback";
 import { publishTrainingAnalysis } from "@/lib/training-analysis-publication.mjs";
 import { getTrainingAnalysisGenerationContract } from "@/lib/training-analysis-version.mjs";
 import {
-  validateTrainingAnalysisResult,
   type TrainingAnalysisResult,
   type QaReview,
   type DynamicFollowupReview,
 } from "@/lib/training-analysis-validator";
+import {
+  buildFallbackTrainingAnalysis,
+  type TrainingAnalysisQuestionData as AnalysisQuestionData,
+} from "@/lib/training-analysis-fallback-builder";
+import {
+  buildStoredTrainingAnalysisResult,
+  buildTrainingAnalysisPrompt,
+  generateTrainingAnalysisFromAI,
+} from "@/lib/training-analysis-ai";
 
 type TrainingAnalysisRouteContext = Readonly<{
   params: Promise<{
@@ -40,112 +45,9 @@ type TrainingAnalysisRecord = NonNullable<
 
 const PITCH_ANALYSIS_TYPE = "PITCH";
 const ANALYSIS_GENERATION_CONTRACT = getTrainingAnalysisGenerationContract();
-const PITCH_ANALYSIS_MAX_OUTPUT_TOKENS =
-  ANALYSIS_GENERATION_CONTRACT.maxOutputTokens;
-const PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS =
-  ANALYSIS_GENERATION_CONTRACT.repairMaxOutputTokens;
 const PROCESSING_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1_000;
 const TRANSCRIPT_WAIT_TIMEOUT_MS = 90_000;
-const CONTEXT_EXPERT_COMMENT_LIMIT = 10;
-const CONTEXT_HISTORICAL_QUESTION_LIMIT = 10;
-const FALLBACK_ANALYSIS_SCORE = 15;
-const DEBUG_RAW_AI_OUTPUT_LIMIT = 4_000;
 const analysisJobKey = (sessionId: string) => `training-analysis:${sessionId}`;
-const COVERAGE_ITEMS = [
-  "项目背景",
-  "痛点问题",
-  "技术方案",
-  "核心创新",
-  "应用场景",
-  "市场空间",
-  "商业模式",
-  "团队能力",
-  "融资/合作需求",
-] as const;
-
-type AnalysisQuestionData = {
-  questionId: string;
-  orderIndex: number;
-  questionType: string | null;
-  source: string;
-  questionText: string;
-  answerDurationSec: number | null;
-  answerText: string | null;
-  transcribeText: string | null;
-  transcribeStatus: string | null;
-  transcribeFailed: boolean;
-  transcribePending: boolean;
-  transcribeNote: string | null;
-};
-
-type JsonParseFailureDetails = {
-  message: string;
-  originalLength?: number;
-  extractedLength?: number;
-  parsePosition?: number | null;
-};
-
-type EmptyContentDetails = {
-  message: string;
-  responseFormat: "json_object" | null;
-  finishReason: string | null;
-};
-
-type RetryWithoutJsonModeDebug = {
-  attempted: true;
-  rawAiOutputLength: number;
-  rawAiOutput: string;
-  emptyContent: boolean;
-  finishReason: string | null;
-};
-
-type AnalysisParseFailureDebug = {
-  reason: "AI_STRUCTURED_OUTPUT_INVALID" | "AI_EMPTY_CONTENT";
-  finalFallbackReason:
-    | "STRUCTURED_OUTPUT_INVALID_AFTER_REPAIR"
-    | "RETRY_WITHOUT_JSON_MODE_EMPTY_CONTENT";
-  generatedAt: string;
-  initialParseError?: JsonParseFailureDetails;
-  repairError?: JsonParseFailureDetails;
-  callError?: JsonParseFailureDetails;
-  rawAiOutputLength: number;
-  rawAiOutput: string;
-  emptyContent?: true;
-  responseFormat?: "json_object" | null;
-  finishReason?: string | null;
-  jsonModeEmptyContent?: EmptyContentDetails;
-  retryWithoutJsonMode?: RetryWithoutJsonModeDebug;
-};
-type AnalysisJsonParseFailureDebug = AnalysisParseFailureDebug & {
-  reason: "AI_STRUCTURED_OUTPUT_INVALID";
-  finalFallbackReason: "STRUCTURED_OUTPUT_INVALID_AFTER_REPAIR";
-  initialParseError: JsonParseFailureDetails;
-  repairError: JsonParseFailureDetails;
-};
-type AnalysisEmptyContentDebug = AnalysisParseFailureDebug & {
-  reason: "AI_EMPTY_CONTENT";
-  finalFallbackReason: "RETRY_WITHOUT_JSON_MODE_EMPTY_CONTENT";
-  callError: JsonParseFailureDetails;
-  emptyContent: true;
-};
-
-class AnalysisJsonRepairError extends Error {
-  debug: AnalysisParseFailureDebug;
-
-  constructor(message: string, debug: AnalysisParseFailureDebug) {
-    super(message);
-    this.name = "AnalysisJsonRepairError";
-    this.debug = debug;
-  }
-}
-
-function truncateDebugText(text: string) {
-  if (text.length <= DEBUG_RAW_AI_OUTPUT_LIMIT) {
-    return text;
-  }
-
-  return `${text.slice(0, DEBUG_RAW_AI_OUTPUT_LIMIT)}...[truncated]`;
-}
 
 function parseStoredJson<T>(value: string, fallback: T): T {
   try {
@@ -173,6 +75,7 @@ function serializeAnalysis(analysis: TrainingAnalysisRecord) {
     slideEventCount: analysis.slideEventCount,
     overallScore: analysis.overallScore,
     isFallbackReport: isFallbackTrainingAnalysis(analysis),
+    fallbackReason: analysis.fallbackReason,
     summary: analysis.summary,
     strengths: parseStoredJson<string[]>(analysis.strengthsJson, []),
     weaknesses: parseStoredJson<string[]>(analysis.weaknessesJson, []),
@@ -238,17 +141,6 @@ async function findLatestAnalysis(sessionId: string) {
   });
 }
 
-function compactContext(context: ProjectAIContext): ProjectAIContext {
-  return {
-    ...context,
-    expertComments: context.expertComments.slice(0, CONTEXT_EXPERT_COMMENT_LIMIT),
-    historicalQuestions: context.historicalQuestions.slice(
-      0,
-      CONTEXT_HISTORICAL_QUESTION_LIMIT,
-    ),
-  };
-}
-
 function isDynamicFollowupQuestion(question: {
   source?: string | null;
   questionType?: string | null;
@@ -282,264 +174,6 @@ function hasTranscriptWaitTimedOut(
     : false;
 }
 
-function summarizeAnswer(question: AnalysisQuestionData) {
-  const answerText =
-    question.transcribeText?.trim() || question.answerText?.trim();
-
-  if (answerText) {
-    return answerText.length > 120 ? `${answerText.slice(0, 120)}...` : answerText;
-  }
-
-  if (question.transcribePending) {
-    return "回答转写尚未完成，当前降级报告无法准确概括回答内容。";
-  }
-
-  if (question.transcribeFailed) {
-    return "回答转写失败，当前降级报告无法准确概括回答内容。";
-  }
-
-  return "未检测到可用于复盘的有效回答文本。";
-}
-
-function buildFallbackQaReview(question: AnalysisQuestionData): QaReview {
-  const hasAnswerText = Boolean(
-    question.transcribeText?.trim() || question.answerText?.trim(),
-  );
-
-  return {
-    questionId: question.questionId,
-    questionIndex: question.orderIndex,
-    dimension: "OTHER",
-    question: question.questionText,
-    judgeIntent: "评委意图暂未能由 AI 结构化结果稳定解析，当前为降级复盘。",
-    answerSummary: summarizeAnswer(question),
-    responseQuality: hasAnswerText ? "PARTIAL" : "WEAK",
-    responseQualityLabel: hasAnswerText
-      ? "降级复盘，需人工复核"
-      : "回答依据不足",
-    missingPoints: [
-      "结构化报告生成失败，当前无法完整判断回答覆盖情况",
-      "建议补充数据、案例或验证依据来支撑回答",
-    ],
-    evidenceUse: hasAnswerText
-      ? "检测到回答文本，但证据使用情况需人工复核。"
-      : "未能提取到有效回答证据。",
-    improvementAdvice:
-      "建议围绕评委问题先给出直接结论，再补充关键事实、数据或案例支撑。",
-    betterAnswerOutline: [
-      "先正面回答问题核心",
-      "补充项目相关数据、案例或验证结果",
-      "总结对落地、风险或商业化的影响",
-    ],
-  };
-}
-
-function buildFallbackAnalysis(input: {
-  durationSec: number;
-  pageCount: number | null;
-  slideEventCount: number;
-  transcriptMissing: boolean;
-  qaData: AnalysisQuestionData[];
-  dynamicFollowupData: AnalysisQuestionData | null;
-  failureReason?: "STRUCTURED_OUTPUT_INVALID" | "AI_EMPTY_CONTENT" | "NO_ANALYZABLE_TEXT";
-}) {
-  const fallbackSummary =
-    input.failureReason === "AI_EMPTY_CONTENT"
-      ? "报告生成时 AI 未返回有效内容，系统已基于可用转写和答辩数据生成基础报告，并保留排查信息。"
-      : input.failureReason === "NO_ANALYZABLE_TEXT"
-        ? "本轮训练缺少可分析的转写或回答文本，系统已根据录音元信息生成基础报告。"
-        : "报告生成时 AI 结构化输出不符合报告 Schema，修复重试失败后系统已生成基础报告，并保留排查信息。";
-  const fallbackAnalysis = {
-    overallScore: FALLBACK_ANALYSIS_SCORE,
-    summary: fallbackSummary,
-    strengths: [],
-    weaknesses: [
-      "结构化报告生成失败，当前报告为降级版本，细节判断可能不完整。",
-      input.transcriptMissing
-        ? "路演转写缺失或不可用，无法充分评估项目表达。"
-        : "当前降级报告未能完整抽取路演中的证据覆盖情况。",
-      "答辩复盘仅基于已有问题、回答文本和转写状态生成，建议人工复核关键判断。",
-    ],
-    suggestions: [
-      "本次报告为降级版本，建议先结合录音回放人工复核关键判断。",
-      "下一轮路演中请用数字、客户案例、测试结果或合同订单支撑关键结论。",
-      "答辩时先直接回应评委问题，再补充证据和下一步计划。",
-      "如系统持续生成降级报告，请由管理员查看诊断信息并调整分析配置。",
-    ],
-    contentCoverage: COVERAGE_ITEMS.map((item) => ({
-      item,
-      covered: "false",
-      evidence: input.transcriptMissing
-        ? "路演转写缺失，无法确认覆盖情况。"
-        : "降级报告未能稳定解析该维度证据。",
-      suggestion: `建议补充${item}相关的可验证事实、数据或案例。`,
-    })),
-    timing: {
-      durationSec: input.durationSec,
-      targetDurationSec: 540,
-      assessment: "当前为降级报告，仅保留基础时长信息。",
-      opening: "降级报告未能细分开场节奏。",
-      middle: "降级报告未能细分中段表达节奏。",
-      ending: "降级报告未能细分结尾收束情况。",
-      suggestion: "建议按背景、方案、验证、商业化和需求拆分路演时间。",
-    },
-    slideSync: {
-      slideEventCount: input.slideEventCount,
-      pageCount: input.pageCount ?? 0,
-      assessment: "当前为降级报告，仅保留基础翻页信息。",
-      frequentFlipRisk: "降级报告未能判断是否频繁翻页。",
-      longStayRisk: "降级报告未能判断是否长时间停留。",
-      suggestion: "建议按核心章节控制翻页节奏，避免讲述与页面信息脱节。",
-    },
-    riskQuestions: [
-      "请说明项目当前最关键的验证指标是什么，以及已有数据是否达标？",
-      "如果客户转化或落地进度低于预期，你们准备如何调整？",
-      "项目在技术实现、交付和运营过程中最大的风险是什么？",
-      "后续融资或合作需求将如何对应到明确的里程碑？",
-    ],
-    qaReviews: input.qaData.map(buildFallbackQaReview),
-    dynamicFollowupReview: input.dynamicFollowupData
-      ? {
-          questionId: input.dynamicFollowupData.questionId,
-          question: input.dynamicFollowupData.questionText,
-          answerSummary: summarizeAnswer(input.dynamicFollowupData),
-          targetWeakness:
-            "动态追问表现未能由 AI 结构化结果稳定解析，当前为降级复盘。",
-          evidenceSupplement:
-            "请人工复核该回答是否补充了数据、案例或验证依据。",
-          improvementAdvice:
-            "建议围绕动态追问的核心点补充直接结论、关键证据和下一步计划。",
-        }
-      : null,
-  };
-
-  return validateTrainingAnalysisResult(fallbackAnalysis);
-}
-
-function buildAnalysisPrompt(
-  context: ProjectAIContext,
-  template: string,
-  input: {
-    session: unknown;
-    slideEvents: unknown;
-    transcript: unknown;
-    qaData: unknown;
-    dynamicFollowupData: unknown;
-  },
-) {
-  return renderPrompt(template, {
-    session: input.session,
-    slideEvents: input.slideEvents,
-    transcript: input.transcript,
-    qaData: input.qaData,
-    dynamicFollowupData: input.dynamicFollowupData,
-    project: context.project,
-    files: context.files.map((file) => ({
-      id: file.id,
-      originalName: file.originalName,
-      fileType: file.fileType,
-      extractedText: file.extractedText,
-      truncated: file.truncated,
-    })),
-    evaluationRule: context.evaluationRule,
-    criteria: context.criteria,
-    expertComments: context.expertComments,
-    historicalQuestions: context.historicalQuestions,
-  });
-}
-
-function buildRepairPrompt(rawText: string, error: unknown) {
-  const details = getJsonParseFailureDetails(error);
-  return renderPrompt(
-    [
-      "请修复下面这段 AI 输出，使其成为一个合法 JSON 对象。",
-      "只输出修复后的 JSON，不要输出 Markdown、代码块或解释文字。",
-      "必须返回完整 JSON object，不能省略字段。",
-      "输出结构必须符合 TrainingAnalysisResult。",
-      "不能新增 schema 外字段。",
-      "不要新增事实，不要补充转写文本中没有的表达。",
-      "如果原文被截断或字段不完整，请在保持结构合法的前提下，用短句补齐未闭合的字符串、数组和对象。",
-      "所有字符串必须闭合，所有数组和对象必须闭合。",
-      "所有字符串必须是合法 JSON string，不能包含未转义换行或未转义双引号。",
-      "如果某字段无法修复，用空字符串、空数组、false、null 或安全默认值补齐。",
-      "必须保留原始内容中可恢复的信息。",
-      "",
-      "解析错误：{{parseError}}",
-      "原始返回长度：{{originalLength}}",
-      "截取后长度：{{extractedLength}}",
-      "解析失败位置：{{parsePosition}}",
-      "",
-      "目标 JSON 结构：",
-      "{",
-      '  "overallScore": 0,',
-      '  "summary": "",',
-      '  "strengths": [],',
-      '  "weaknesses": [],',
-      '  "suggestions": [],',
-      '  "onePageSummary": {',
-      '    "conclusion": "",',
-      '    "strongestPoint": "",',
-      '    "biggestWeakness": "",',
-      '    "nextTrainingFocus": "",',
-      '    "readinessAdvice": ""',
-      "  },",
-      '  "diagnostics": {',
-      '    "content": [],',
-      '    "delivery": [],',
-      '    "qa": []',
-      "  },",
-      '  "actionItems": [',
-      "    {",
-      '      "issue": "",',
-      '      "whyItMatters": "",',
-      '      "howToFix": "",',
-      '      "sampleWording": ""',
-      "    }",
-      "  ],",
-      '  "nextTrainingTasks": [],',
-      '  "contentCoverage": [',
-      "    {",
-      '      "item": "",',
-      '      "covered": "true",',
-      '      "evidence": "",',
-      '      "suggestion": ""',
-      "    }",
-      "  ],",
-      '  "timing": {',
-      '    "durationSec": 0,',
-      '    "targetDurationSec": 540,',
-      '    "assessment": "",',
-      '    "opening": "",',
-      '    "middle": "",',
-      '    "ending": "",',
-      '    "suggestion": ""',
-      "  },",
-      '  "slideSync": {',
-      '    "slideEventCount": 0,',
-      '    "pageCount": 0,',
-      '    "assessment": "",',
-      '    "frequentFlipRisk": "",',
-      '    "longStayRisk": "",',
-      '    "suggestion": ""',
-      "  },",
-      '  "riskQuestions": [],',
-      '  "qaReviews": [],',
-      '  "dynamicFollowupReview": null',
-      "}",
-      "",
-      "需要修复的原始返回：",
-      "{{rawText}}",
-    ].join("\n"),
-    {
-      parseError: details.message,
-      originalLength: details.originalLength ?? "unknown",
-      extractedLength: details.extractedLength ?? "unknown",
-      parsePosition: details.parsePosition ?? "unknown",
-      rawText,
-    },
-  );
-}
-
 async function findCurrentAnalysis(sessionId: string) {
   const session = await prisma.trainingSession.findUnique({
     where: { id: sessionId },
@@ -563,179 +197,6 @@ async function findCurrentAnalysis(sessionId: string) {
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
   });
-}
-
-function getJsonParseFailureDetails(error: unknown): JsonParseFailureDetails {
-  if (error instanceof AIJsonParseError) {
-    return {
-      message: error.message,
-      originalLength: error.originalLength,
-      extractedLength: error.extractedLength,
-      parsePosition: error.parsePosition,
-    };
-  }
-
-  return {
-    message: error instanceof Error ? error.message : String(error),
-  };
-}
-
-function formatJsonParseFailure(details: JsonParseFailureDetails) {
-  return JSON.stringify({
-    message: details.message,
-    originalLength: details.originalLength ?? null,
-    extractedLength: details.extractedLength ?? null,
-    parsePosition: details.parsePosition ?? null,
-  });
-}
-
-function buildAnalysisParseFailureDebug({
-  rawText,
-  initialError,
-  repairError,
-  jsonModeEmptyContent,
-  retryWithoutJsonMode,
-}: {
-  rawText: string;
-  initialError: unknown;
-  repairError: unknown;
-  jsonModeEmptyContent?: EmptyContentDetails | null;
-  retryWithoutJsonMode?: RetryWithoutJsonModeDebug | null;
-}): AnalysisJsonParseFailureDebug {
-  return {
-    reason: "AI_STRUCTURED_OUTPUT_INVALID",
-    finalFallbackReason: "STRUCTURED_OUTPUT_INVALID_AFTER_REPAIR",
-    generatedAt: new Date().toISOString(),
-    initialParseError: getJsonParseFailureDetails(initialError),
-    repairError: getJsonParseFailureDetails(repairError),
-    rawAiOutputLength: rawText.length,
-    rawAiOutput: truncateDebugText(rawText),
-    ...(jsonModeEmptyContent ? { jsonModeEmptyContent } : {}),
-    ...(retryWithoutJsonMode ? { retryWithoutJsonMode } : {}),
-  };
-}
-
-function getEmptyContentDetails(
-  error: AIEmptyContentError,
-): EmptyContentDetails {
-  return {
-    message: error.message,
-    responseFormat: error.responseFormat,
-    finishReason: error.finishReason,
-  };
-}
-
-function buildAnalysisEmptyContentDebug({
-  error,
-  jsonModeEmptyContent,
-}: {
-  error: AIEmptyContentError;
-  jsonModeEmptyContent?: EmptyContentDetails | null;
-}): AnalysisEmptyContentDebug {
-  return {
-    reason: "AI_EMPTY_CONTENT",
-    finalFallbackReason: "RETRY_WITHOUT_JSON_MODE_EMPTY_CONTENT",
-    generatedAt: new Date().toISOString(),
-    callError: {
-      message: error.message,
-    },
-    rawAiOutputLength: 0,
-    rawAiOutput: truncateDebugText(""),
-    emptyContent: true,
-    responseFormat: error.responseFormat,
-    finishReason: error.finishReason,
-    ...(jsonModeEmptyContent ? { jsonModeEmptyContent } : {}),
-    retryWithoutJsonMode: {
-      attempted: true,
-      rawAiOutputLength: 0,
-      rawAiOutput: truncateDebugText(""),
-      emptyContent: true,
-      finishReason: error.finishReason,
-    },
-  };
-}
-
-function buildStoredAnalysisResult(
-  analysisJson: TrainingAnalysisResult,
-  debug: AnalysisParseFailureDebug | null,
-) {
-  if (!debug) {
-    return JSON.stringify(analysisJson, null, 2);
-  }
-
-  return JSON.stringify(
-    {
-      ...analysisJson,
-      _debug: debug,
-    },
-    null,
-    2,
-  );
-}
-
-async function parseAnalysisJsonWithRepair(
-  rawText: string,
-  debugContext?: {
-    sessionId?: string;
-    jsonModeEmptyContent?: EmptyContentDetails | null;
-    retryWithoutJsonMode?: RetryWithoutJsonModeDebug | null;
-  },
-) {
-  try {
-    return validateTrainingAnalysisResult(parseAIJson(rawText));
-  } catch (error) {
-    devError(
-      `路演表现分析结构化输出校验失败，开始一次修复重试。${formatJsonParseFailure(
-        getJsonParseFailureDetails(error),
-      )}`,
-    );
-
-    try {
-      const repairResult = await callAI({
-        task: "pitchAnalysis",
-        systemPrompt:
-          "你是严格的 JSON 修复器。只输出合法 JSON，不输出 Markdown 或解释。",
-        userPrompt: buildRepairPrompt(rawText, error),
-        temperature: 0,
-        maxOutputTokens: PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS,
-      });
-
-      const repairedAnalysis = validateTrainingAnalysisResult(
-        parseAIJson(repairResult.text),
-      );
-      devLog("路演表现分析 JSON 修复重试成功。");
-      return repairedAnalysis;
-    } catch (repairError) {
-      const debug = buildAnalysisParseFailureDebug({
-        rawText,
-        initialError: error,
-        repairError,
-        jsonModeEmptyContent: debugContext?.jsonModeEmptyContent,
-        retryWithoutJsonMode: debugContext?.retryWithoutJsonMode,
-      });
-      devError(
-        `路演表现分析 JSON 修复重试失败。${formatJsonParseFailure(
-          debug.repairError,
-        )}`,
-      );
-      void writeDiagnosticEvent({
-        type: "REPORT_ERROR",
-        message: "Pitch analysis structured output validation and repair failed",
-        meta: {
-          sessionId: debugContext?.sessionId ?? null,
-          initialError: debug.initialParseError.message,
-          repairError: debug.repairError.message,
-          rawAiOutputLength: debug.rawAiOutputLength,
-          initialParsePosition: debug.initialParseError.parsePosition ?? null,
-          repairParsePosition: debug.repairError.parsePosition ?? null,
-        },
-      });
-      throw new AnalysisJsonRepairError(
-        "路演表现分析结构化输出校验失败，修复重试后仍不符合报告 Schema。",
-        debug,
-      );
-    }
-  }
 }
 
 function getFriendlyErrorMessage(error: unknown) {
@@ -782,6 +243,8 @@ async function createOrUpdateProcessingAnalysis(input: {
     riskQuestionsJson: "[]",
     rawResultJson: "{}",
     errorMessage: null,
+    isFallback: false,
+    fallbackReason: null,
     inputHash: input.inputHash,
     promptVersion: ANALYSIS_GENERATION_CONTRACT.promptVersion,
     schemaVersion: ANALYSIS_GENERATION_CONTRACT.schemaVersion,
@@ -1197,7 +660,7 @@ export async function POST(
       Boolean(dynamicFollowupData?.transcribeText?.trim());
 
     if (!hasAnalyzableText) {
-      const fallbackAnalysis = buildFallbackAnalysis({
+      const fallbackAnalysis = buildFallbackTrainingAnalysis({
         durationSec,
         pageCount,
         slideEventCount: session.slideEvents.length,
@@ -1253,6 +716,8 @@ export async function POST(
           ),
           rawResultJson: JSON.stringify(fallbackAnalysis, null, 2),
           errorMessage: null,
+          isFallback: true,
+          fallbackReason: "NO_ANALYZABLE_TEXT",
         },
       });
       processingAnalysisId = null;
@@ -1269,8 +734,7 @@ export async function POST(
       snapshotContext ?? buildProjectAIContext(session.projectId),
       loadPromptTemplate("pitch-performance-analysis"),
     ]);
-    const aiContext = compactContext(contextResult);
-    const userPrompt = buildAnalysisPrompt(aiContext, template, {
+    const userPrompt = buildTrainingAnalysisPrompt(contextResult, template, {
       session: {
         id: session.id,
         status: session.status,
@@ -1305,133 +769,19 @@ export async function POST(
       qaData,
       dynamicFollowupData,
     });
-    let analysisJson: TrainingAnalysisResult;
-    let analysisParseFailureDebug: AnalysisParseFailureDebug | null = null;
-    let aiResult: Awaited<ReturnType<typeof callAI>> | null = null;
-    let jsonModeEmptyContent: EmptyContentDetails | null = null;
-    let retryWithoutJsonMode: RetryWithoutJsonModeDebug | null = null;
-
-    try {
-      aiResult = await callAI({
-        task: "pitchAnalysis",
-        systemPrompt:
-          "你是严格遵守 JSON 输出约束的专业路演训练教练。只输出合法 JSON，不输出 Markdown 或额外解释。",
-        userPrompt,
-        temperature: 0.2,
-        maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
-      });
-    } catch (aiCallError) {
-      if (!(aiCallError instanceof AIEmptyContentError)) {
-        throw aiCallError;
-      }
-
-      jsonModeEmptyContent = getEmptyContentDetails(aiCallError);
-      devWarn(
-        `路演表现分析 JSON mode 返回空内容，开始普通模式重试。${JSON.stringify({
-          sessionId,
-          responseFormat: jsonModeEmptyContent.responseFormat,
-          finishReason: jsonModeEmptyContent.finishReason,
-        })}`,
-      );
-      void writeDiagnosticEvent({
-        type: "REPORT_ERROR",
-        message:
-          "Pitch analysis JSON mode returned empty content; retrying without response_format",
-        meta: {
-          responseFormat: jsonModeEmptyContent.responseFormat,
-          finishReason: jsonModeEmptyContent.finishReason,
-        },
-      });
-
-      try {
-        aiResult = await callAI({
-          task: "pitchAnalysis",
-          systemPrompt:
-            "你是严格遵守 JSON 输出约束的专业路演训练教练。只输出合法 JSON，不输出 Markdown 或额外解释。",
-          userPrompt,
-          temperature: 0.2,
-          maxOutputTokens: PITCH_ANALYSIS_MAX_OUTPUT_TOKENS,
-          disableJsonResponseFormat: true,
-        });
-        retryWithoutJsonMode = {
-          attempted: true,
-          rawAiOutputLength: aiResult.text.length,
-          rawAiOutput: truncateDebugText(aiResult.text),
-          emptyContent: false,
-          finishReason: null,
-        };
-      } catch (retryError) {
-        if (!(retryError instanceof AIEmptyContentError)) {
-          throw retryError;
-        }
-
-        analysisParseFailureDebug = buildAnalysisEmptyContentDebug({
-          error: retryError,
-          jsonModeEmptyContent,
-        });
-        devError(
-          `路演表现分析普通模式重试仍返回空内容，使用降级 fallback。${JSON.stringify({
-            sessionId,
-            finishReason: retryError.finishReason,
-          })}`,
-        );
-        void writeDiagnosticEvent({
-          type: "REPORT_ERROR",
-          message: "Pitch analysis retry without response_format returned empty content",
-          meta: {
-            finishReason: retryError.finishReason,
-          },
-        });
-      }
-    }
-
-    try {
-      if (aiResult) {
-        analysisJson = await parseAnalysisJsonWithRepair(aiResult.text, {
-          sessionId,
-          jsonModeEmptyContent,
-          retryWithoutJsonMode,
-        });
-      } else {
-        analysisJson = buildFallbackAnalysis({
-          durationSec,
-          pageCount,
-          slideEventCount: session.slideEvents.length,
-          transcriptMissing,
-          qaData,
-          dynamicFollowupData,
-          failureReason: "AI_EMPTY_CONTENT",
-        });
-      }
-    } catch (analysisParseError) {
-      if (analysisParseError instanceof AnalysisJsonRepairError) {
-        analysisParseFailureDebug = analysisParseError.debug;
-      }
-      devError(
-        `路演表现分析 JSON 修复后仍失败，使用降级 fallback。${JSON.stringify({
-          sessionId,
-          error:
-            analysisParseError instanceof Error
-              ? analysisParseError.message
-              : String(analysisParseError),
-          rawAiOutputLength: analysisParseFailureDebug?.rawAiOutputLength ?? null,
-        })}`,
-      );
-      analysisJson = buildFallbackAnalysis({
-        durationSec,
-        pageCount,
-        slideEventCount: session.slideEvents.length,
-        transcriptMissing,
-        qaData,
-        dynamicFollowupData,
-        failureReason: "STRUCTURED_OUTPUT_INVALID",
-      });
-      devLog("[analysis:POST] fallback analysis created", {
-        sessionId,
-        qaReviewCount: analysisJson.qaReviews?.length ?? 0,
-        hasDynamicFollowupReview: analysisJson.dynamicFollowupReview !== null,
-      });
-    }
+    const generation = await generateTrainingAnalysisFromAI({
+      sessionId,
+      userPrompt,
+      durationSec,
+      pageCount,
+      slideEventCount: session.slideEvents.length,
+      transcriptMissing,
+      qaData,
+      dynamicFollowupData,
+    });
+    const analysisJson = generation.analysis;
+    const analysisParseFailureDebug = generation.debug;
+    const analysisFallbackReason = generation.fallbackReason;
 
     // 空回答/无效回答容错：确保每个 QA 问题都有合理的 qaReview
     const noAnswerQuestionIds = new Set(
@@ -1590,7 +940,7 @@ export async function POST(
           null,
           2,
         ),
-        rawResultJson: buildStoredAnalysisResult(
+        rawResultJson: buildStoredTrainingAnalysisResult(
           analysisJson,
           analysisParseFailureDebug,
         ),
@@ -1599,6 +949,8 @@ export async function POST(
             ? "AI 返回内容为空，已生成降级报告。详情见 rawResultJson._debug。"
             : "AI 结构化输出不符合报告 Schema，修复重试失败后已生成降级报告。详情见 rawResultJson._debug。"
           : null,
+        isFallback: analysisFallbackReason !== null,
+        fallbackReason: analysisFallbackReason,
       },
     });
     processingAnalysisId = null;

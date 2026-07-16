@@ -65,6 +65,7 @@ export type ReportTrainingAnalysis = {
   status: string;
   overallScore: number | null;
   isFallbackReport: boolean;
+  fallbackReason: string | null;
   summary: string;
   errorMessage: string | null;
   updatedAt: string;

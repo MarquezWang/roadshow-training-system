@@ -1,3 +1,5 @@
+import { isRecord } from "@/lib/type-guards";
+
 const allowedQuestionTypes = new Set([
   "TECHNICAL",
   "MARKET",
@@ -13,10 +15,6 @@ export type GeneratedTrainingQuestion = {
   questionText: string;
   basis: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function readString(value: unknown, fieldName: string) {
   if (typeof value !== "string" || !value.trim()) {

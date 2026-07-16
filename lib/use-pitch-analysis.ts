@@ -24,6 +24,8 @@ export type TrainingAnalysis = {
   pageCount: number | null;
   slideEventCount: number | null;
   overallScore: number | null;
+  isFallbackReport: boolean;
+  fallbackReason: string | null;
   summary: string;
   strengths: string[];
   weaknesses: string[];

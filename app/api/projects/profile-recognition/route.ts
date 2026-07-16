@@ -16,6 +16,7 @@ import {
   parseTrlEvidence,
   type TrlEvidence,
 } from "@/lib/trl-assessment";
+import { isRecord } from "@/lib/type-guards";
 
 const MATERIAL_PARSE_FAILURE_MESSAGE =
   "材料解析失败，请更换文件或手动填写项目档案。";
@@ -77,10 +78,6 @@ function debugLog(stage: string, details: unknown) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function asRecognitionRecord(value: unknown): Record<string, unknown> {

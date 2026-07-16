@@ -41,6 +41,12 @@ jobs:
       - name: Production auth guard tests
         run: npm run test:prod-guard
 
+      - name: File security and lifecycle tests
+        run: npm run test:files
+
+      - name: Deterministic scoring tests
+        run: npm run test:scoring-v2
+
       - name: Stability tests
         env:
           STABILITY_TEST_DATABASE_URL: file:./ci-stability-test.db

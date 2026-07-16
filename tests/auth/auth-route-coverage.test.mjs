@@ -65,3 +65,20 @@ test("proxy rotates previous-secret cookies and leaves database validation to lo
   assert.match(proxySource, /response\.cookies\.set\(authCookieName/);
   assert.match(loginSource, /getCurrentAuthUser\(\)/);
 });
+
+test("large recording uploads bypass proxy buffering but keep route ownership checks", () => {
+  const proxySource = read("proxy.ts");
+  const recordingRouteSource = read(
+    "app/training/[sessionId]/recordings/route.ts",
+  );
+
+  assert.match(
+    proxySource,
+    /\/training\/\(\(\?!\[\^\/\]\+\/recordings\/\?\$\)\.\*\)/,
+  );
+  assert.match(
+    recordingRouteSource,
+    /isSessionOwnedByCurrentUser\(sessionId\)/,
+    "recording upload route must authorize requests without relying on Proxy",
+  );
+});

@@ -1,4 +1,5 @@
 import { deriveDeterministicMaterialScore } from "@/lib/scoring-v2";
+import { isRecord } from "@/lib/type-guards";
 
 type CriterionInput = {
   category: string | null;
@@ -51,10 +52,6 @@ export type ValidatedScoreResult = {
 const factPattern =
   /(\d+(\.\d+)?\s*(年|月|日|万元|亿元|元|%|％|亩|项|件|个|家|省|市|页|轮|次|吨|公斤|kg|KG|m²|㎡|万|亿)?)|([一二三四五六七八九十百千万亿]+(年|月|项|件|个|家|省|市|轮|次))/;
 const normalizedMissingEvidenceText = "材料未提供相关证据。";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function assertString(value: unknown, fieldName: string) {
   if (typeof value !== "string") {

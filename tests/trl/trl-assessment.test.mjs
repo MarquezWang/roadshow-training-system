@@ -3,9 +3,25 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-const source = await readFile(
+const typeGuardsSource = await readFile(
+  new URL("../../lib/type-guards.ts", import.meta.url),
+  "utf8",
+);
+const typeGuardsTranspiled = ts.transpileModule(typeGuardsSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+const typeGuardsUrl = `data:text/javascript;base64,${Buffer.from(typeGuardsTranspiled).toString("base64")}`;
+const source = (
+  await readFile(
   new URL("../../lib/trl-assessment.ts", import.meta.url),
   "utf8",
+  )
+).replace(
+  'import { isRecord } from "@/lib/type-guards";',
+  `import { isRecord } from "${typeGuardsUrl}";`,
 );
 const transpiled = ts.transpileModule(source, {
   compilerOptions: {

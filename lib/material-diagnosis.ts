@@ -1,3 +1,5 @@
+import { isRecord } from "@/lib/type-guards";
+
 export const evidenceStatuses = [
   "SUFFICIENT",
   "PARTIAL",
@@ -90,10 +92,6 @@ export const evidenceStatusLabel: Record<EvidenceStatus, string> = {
   MISSING: "证据不足",
   UNKNOWN: "无法判断",
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function asString(value: unknown, fallback = "") {
   return typeof value === "string" ? value.trim() : fallback;

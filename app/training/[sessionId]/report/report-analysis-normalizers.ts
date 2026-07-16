@@ -13,6 +13,8 @@ type SourceAnalysis = Readonly<{
   id: string;
   status: string;
   overallScore: number | null;
+  isFallback: boolean;
+  fallbackReason: string | null;
   summary: string;
   errorMessage: string | null;
   updatedAt: Date;
@@ -40,6 +42,7 @@ export function normalizeReportAnalysis(
     status: analysis.status,
     overallScore: analysis.overallScore,
     isFallbackReport: isFallbackTrainingAnalysis(analysis),
+    fallbackReason: analysis.fallbackReason,
     summary: analysis.summary,
     errorMessage: analysis.errorMessage,
     updatedAt: analysis.updatedAt.toISOString(),

@@ -118,6 +118,8 @@ export default async function TrainingSessionPage({
           pageCount: true,
           slideEventCount: true,
           overallScore: true,
+          isFallback: true,
+          fallbackReason: true,
           summary: true,
           strengthsJson: true,
           weaknessesJson: true,
@@ -249,6 +251,8 @@ export default async function TrainingSessionPage({
           latestAnalysis.riskQuestionsJson,
           [],
         ),
+        isFallbackReport: latestAnalysis.isFallback,
+        fallbackReason: latestAnalysis.fallbackReason,
         rawResult: parseStoredJson<Record<string, unknown>>(
           latestAnalysis.rawResultJson,
           {},

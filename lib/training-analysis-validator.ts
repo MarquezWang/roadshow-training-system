@@ -1,3 +1,5 @@
+import { isRecord } from "@/lib/type-guards";
+
 const coverageItems = [
   "项目背景",
   "痛点问题",
@@ -94,10 +96,6 @@ export type TrainingAnalysisResult = {
   qaReviews?: QaReview[];
   dynamicFollowupReview?: DynamicFollowupReview | null;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function readString(value: unknown, fieldName: string) {
   if (typeof value !== "string" || !value.trim()) {

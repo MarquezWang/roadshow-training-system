@@ -16,6 +16,7 @@ async function tsModuleUrl(relativePath, transformSource = (source) => source) {
 }
 
 const scoringV2Url = await tsModuleUrl("../../lib/scoring-v2.ts");
+const typeGuardsUrl = await tsModuleUrl("../../lib/type-guards.ts");
 const { deriveDeterministicMaterialScore } = await import(scoringV2Url);
 const validatorUrl = await tsModuleUrl(
   "../../lib/scoring-validator.ts",
@@ -23,6 +24,9 @@ const validatorUrl = await tsModuleUrl(
     source.replace(
       'import { deriveDeterministicMaterialScore } from "@/lib/scoring-v2";',
       `import { deriveDeterministicMaterialScore } from "${scoringV2Url}";`,
+    ).replace(
+      'import { isRecord } from "@/lib/type-guards";',
+      `import { isRecord } from "${typeGuardsUrl}";`,
     ),
 );
 const { validateScoreResult } = await import(validatorUrl);

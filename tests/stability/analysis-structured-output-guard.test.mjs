@@ -6,6 +6,10 @@ const routePath = new URL(
   "../../app/training/[sessionId]/analysis/route.ts",
   import.meta.url,
 );
+const generationPath = new URL(
+  "../../lib/training-analysis-ai.ts",
+  import.meta.url,
+);
 const hookPath = new URL(
   "../../app/training/[sessionId]/report/use-report-analysis-generation.ts",
   import.meta.url,
@@ -24,7 +28,7 @@ const reportDataPath = new URL(
 );
 
 test("报告 Schema 校验失败进入修复流程并保存可定位诊断", async () => {
-  const source = await readFile(routePath, "utf8");
+  const source = await readFile(generationPath, "utf8");
 
   assert.doesNotMatch(
     source,
@@ -33,8 +37,8 @@ test("报告 Schema 校验失败进入修复流程并保存可定位诊断", asy
   assert.match(source, /AI_STRUCTURED_OUTPUT_INVALID/);
   assert.match(source, /initialError:\s*debug\.initialParseError\.message/);
   assert.match(source, /repairError:\s*debug\.repairError\.message/);
-  assert.match(source, /sessionId:\s*debugContext\?\.sessionId/);
-  assert.match(source, /rawAiOutput:\s*truncateDebugText\(rawText\)/);
+  assert.match(source, /sessionId:\s*debugContext\.sessionId/);
+  assert.match(source, /rawAiOutput:\s*truncateDebugText\(input\.rawText\)/);
 });
 
 test("降级报告支持显式重新生成且保留旧版本", async () => {
@@ -47,6 +51,8 @@ test("降级报告支持显式重新生成且保留旧版本", async () => {
   assert.match(route, /searchParams\.get\("force"\) === "true"/);
   assert.match(route, /!staleCheck\.stale && !forceRegeneration/);
   assert.match(route, /isFallbackReport:\s*isFallbackTrainingAnalysis\(analysis\)/);
+  assert.match(route, /isFallback:\s*analysisFallbackReason !== null/);
+  assert.match(route, /fallbackReason:\s*analysisFallbackReason/);
   assert.match(hook, /\?force=true/);
   assert.match(overview, /重新生成完整报告/);
 });

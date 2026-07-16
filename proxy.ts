@@ -90,7 +90,11 @@ export const config = {
     "/logout",
     "/admin/:path*",
     "/projects/:path*",
-    "/training/:path*",
+    "/training",
+    // The recording POST route streams up to 100MB directly to disk and performs
+    // its own ownership check. Excluding only that exact route prevents Proxy
+    // from cloning and buffering the entire recording body in memory.
+    "/training/((?![^/]+/recordings/?$).*)",
     "/api/files/:path*",
     "/api/projects/:path*",
     "/api/admin/:path*",

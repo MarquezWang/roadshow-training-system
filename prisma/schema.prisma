@@ -239,6 +239,8 @@ model TrainingAnalysis {
   riskQuestionsJson String
   rawResultJson     String
   errorMessage      String?
+  isFallback        Boolean             @default(false)
+  fallbackReason    String?
   inputHash         String              @default("")
   promptVersion     String              @default("")
   schemaVersion     String              @default("")

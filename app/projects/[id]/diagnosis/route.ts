@@ -11,6 +11,7 @@ import { buildMockDiagnosis } from "@/lib/mock-diagnosis";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
+import { isRecord } from "@/lib/type-guards";
 
 type DiagnosisRouteContext = Readonly<{
   params: Promise<{
@@ -55,10 +56,6 @@ function redirectToProject(
   });
 
   return NextResponse.redirect(url, 303);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function assertString(value: unknown, fieldName: string) {
