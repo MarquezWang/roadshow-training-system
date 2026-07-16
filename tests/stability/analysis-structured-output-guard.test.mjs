@@ -10,6 +10,14 @@ const generationPath = new URL(
   "../../lib/training-analysis-ai.ts",
   import.meta.url,
 );
+const recordsPath = new URL(
+  "../../app/training/[sessionId]/analysis/training-analysis-records.ts",
+  import.meta.url,
+);
+const persistencePath = new URL(
+  "../../app/training/[sessionId]/analysis/training-analysis-persistence.ts",
+  import.meta.url,
+);
 const hookPath = new URL(
   "../../app/training/[sessionId]/report/use-report-analysis-generation.ts",
   import.meta.url,
@@ -42,17 +50,22 @@ test("报告 Schema 校验失败进入修复流程并保存可定位诊断", asy
 });
 
 test("降级报告支持显式重新生成且保留旧版本", async () => {
-  const [route, hook, overview] = await Promise.all([
+  const [route, records, persistence, hook, overview] = await Promise.all([
     readFile(routePath, "utf8"),
+    readFile(recordsPath, "utf8"),
+    readFile(persistencePath, "utf8"),
     readFile(hookPath, "utf8"),
     readFile(overviewPath, "utf8"),
   ]);
 
   assert.match(route, /searchParams\.get\("force"\) === "true"/);
   assert.match(route, /!staleCheck\.stale && !forceRegeneration/);
-  assert.match(route, /isFallbackReport:\s*isFallbackTrainingAnalysis\(analysis\)/);
-  assert.match(route, /isFallback:\s*analysisFallbackReason !== null/);
-  assert.match(route, /fallbackReason:\s*analysisFallbackReason/);
+  assert.match(
+    records,
+    /isFallbackReport:\s*isFallbackTrainingAnalysis\(analysis\)/,
+  );
+  assert.match(persistence, /isFallback:\s*input\.fallbackReason !== null/);
+  assert.match(persistence, /fallbackReason:\s*input\.fallbackReason/);
   assert.match(hook, /\?force=true/);
   assert.match(overview, /重新生成完整报告/);
 });
