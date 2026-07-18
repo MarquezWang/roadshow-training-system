@@ -6,6 +6,7 @@ import {
   acquireTrainingTranscriptionJob,
   completeTrainingTranscriptionJob,
   failTrainingTranscriptionJob,
+  renewTrainingTranscriptionLease,
   trainingTranscriptionJobKey,
 } from "../../lib/training-transcription-job.mjs";
 
@@ -35,7 +36,7 @@ test(
     const testTime = (offsetMs = 0) =>
       new Date(simulatedClockStart + offsetMs);
 
-    async function createRecording(name) {
+    async function createRecording(name, { withTranscript = true } = {}) {
       const recordingId = `${prefix}-${name}`;
       recordingIds.push(recordingId);
       await prisma.trainingRecording.create({
@@ -48,15 +49,19 @@ test(
           filePath: `uploads/${name}.webm`,
           mimeType: "audio/webm",
           sizeBytes: 1,
-          transcript: {
-            create: {
-              sessionId,
-              projectId,
-              status: "PENDING",
-              source: "ASR_PROVIDER",
-              text: "",
-            },
-          },
+          ...(withTranscript
+            ? {
+                transcript: {
+                  create: {
+                    sessionId,
+                    projectId,
+                    status: "PENDING",
+                    source: "ASR_PROVIDER",
+                    text: "",
+                  },
+                },
+              }
+            : {}),
         },
       });
       await prisma.asyncJob.create({
@@ -97,6 +102,251 @@ test(
       });
       await prisma.trainingSession.create({
         data: { id: sessionId, projectId, status: "QA_ENDED" },
+      });
+
+      await t.test("不存在的录音返回 missing 且不创建任务", async () => {
+        const recordingId = `${prefix}-missing`;
+        const result = await acquireTrainingTranscriptionJob(prisma, {
+          recordingId,
+          sessionId,
+          now: testTime(),
+        });
+
+        assert.deepEqual(result, {
+          state: "missing",
+          job: null,
+          transcript: null,
+        });
+        assert.equal(
+          await prisma.asyncJob.findUnique({
+            where: { jobKey: trainingTranscriptionJobKey(recordingId) },
+          }),
+          null,
+        );
+      });
+
+      await t.test("已有完成转写会短路并结清遗留任务", async () => {
+        const recordingId = await createRecording("already-completed");
+        const jobKey = trainingTranscriptionJobKey(recordingId);
+        await prisma.trainingTranscript.update({
+          where: { recordingId },
+          data: {
+            status: "COMPLETED",
+            text: "已有可用文本",
+            completedAt: testTime(-1_000),
+          },
+        });
+        await prisma.asyncJob.update({
+          where: { jobKey },
+          data: {
+            status: "RUNNING",
+            ownerToken: "stale-owner",
+            attempt: 1,
+            leaseExpiresAt: testTime(60_000),
+            errorMessage: "old error",
+          },
+        });
+
+        const result = await acquireTrainingTranscriptionJob(prisma, {
+          recordingId,
+          sessionId,
+          now: testTime(),
+        });
+
+        assert.equal(result.state, "completed");
+        assert.equal(result.transcript.text, "已有可用文本");
+        assert.equal(result.job.status, "COMPLETED");
+        assert.equal(result.job.leaseExpiresAt, null);
+        assert.equal(result.job.nextAttemptAt, null);
+        assert.equal(result.job.errorMessage, null);
+      });
+
+      await t.test("未过期 RUNNING 任务保持现有 owner", async () => {
+        const recordingId = await createRecording("active");
+        const jobKey = trainingTranscriptionJobKey(recordingId);
+        await prisma.asyncJob.update({
+          where: { jobKey },
+          data: {
+            status: "RUNNING",
+            ownerToken: "active-owner",
+            attempt: 1,
+            leaseExpiresAt: testTime(60_000),
+          },
+        });
+
+        const result = await acquireTrainingTranscriptionJob(prisma, {
+          recordingId,
+          sessionId,
+          now: testTime(),
+        });
+
+        assert.equal(result.state, "active");
+        assert.equal(result.job.ownerToken, "active-owner");
+        assert.equal(result.job.attempt, 1);
+      });
+
+      await t.test("领取前发现次数耗尽会同步失败任务和转写", async () => {
+        const recordingId = await createRecording("attempt-limit");
+        const jobKey = trainingTranscriptionJobKey(recordingId);
+        await prisma.asyncJob.update({
+          where: { jobKey },
+          data: {
+            status: "RETRY_WAIT",
+            ownerToken: "previous-owner",
+            attempt: 3,
+            maxAttempts: 3,
+            nextAttemptAt: testTime(-1),
+          },
+        });
+
+        const result = await acquireTrainingTranscriptionJob(prisma, {
+          recordingId,
+          sessionId,
+          now: testTime(),
+        });
+
+        assert.equal(result.state, "exhausted");
+        assert.equal(result.job.status, "FAILED");
+        assert.equal(result.transcript.status, "FAILED");
+        assert.match(result.job.errorMessage, /重试次数已用尽/);
+        assert.equal(result.transcript.errorMessage, result.job.errorMessage);
+      });
+
+      await t.test("只有当前 owner 能续租", async () => {
+        const recordingId = await createRecording("renew");
+        const jobKey = trainingTranscriptionJobKey(recordingId);
+        const acquired = await acquireTrainingTranscriptionJob(prisma, {
+          recordingId,
+          sessionId,
+          now: testTime(3 * 60 * 60_000),
+        });
+        assert.equal(acquired.state, "acquired");
+
+        const renewedAt = testTime(3 * 60 * 60_000 + 1_000);
+        assert.equal(
+          await renewTrainingTranscriptionLease(prisma, {
+            jobKey,
+            ownerToken: acquired.ownerToken,
+            now: renewedAt,
+            leaseMs: 12_345,
+          }),
+          true,
+        );
+        assert.equal(
+          await renewTrainingTranscriptionLease(prisma, {
+            jobKey,
+            ownerToken: "stale-owner",
+            now: renewedAt,
+          }),
+          false,
+        );
+        assert.equal(
+          (
+            await prisma.asyncJob.findUniqueOrThrow({ where: { jobKey } })
+          ).leaseExpiresAt.getTime(),
+          renewedAt.getTime() + 12_345,
+        );
+      });
+
+      await t.test("当前 owner 完成任务并写入 ASR 文本", async () => {
+        const recordingId = await createRecording("complete");
+        const jobKey = trainingTranscriptionJobKey(recordingId);
+        const acquired = await acquireTrainingTranscriptionJob(prisma, {
+          recordingId,
+          sessionId,
+          now: testTime(4 * 60 * 60_000),
+        });
+        assert.equal(acquired.state, "acquired");
+
+        const completed = await completeTrainingTranscriptionJob(prisma, {
+          jobKey,
+          ownerToken: acquired.ownerToken,
+          recordingId,
+          revision: acquired.transcript.revision,
+          text: "ASR 完成文本",
+          segmentsJson: '[{"startMs":0,"endMs":1000}]',
+          now: testTime(4 * 60 * 60_000 + 1_000),
+        });
+
+        assert.equal(completed.state, "completed");
+        assert.equal(completed.transcript.status, "COMPLETED");
+        assert.equal(completed.transcript.text, "ASR 完成文本");
+        assert.equal(
+          completed.transcript.segmentsJson,
+          '[{"startMs":0,"endMs":1000}]',
+        );
+        assert.equal(
+          (
+            await prisma.asyncJob.findUniqueOrThrow({ where: { jobKey } })
+          ).status,
+          "COMPLETED",
+        );
+        assert.deepEqual(
+          await completeTrainingTranscriptionJob(prisma, {
+            jobKey,
+            ownerToken: acquired.ownerToken,
+            recordingId,
+            revision: acquired.transcript.revision,
+            text: "重复完成",
+            now: testTime(4 * 60 * 60_000 + 2_000),
+          }),
+          { state: "owner-lost", transcript: null },
+        );
+      });
+
+      await t.test("终止失败会截断错误且拒绝失效 owner", async () => {
+        const recordingId = await createRecording("terminal-failure");
+        const jobKey = trainingTranscriptionJobKey(recordingId);
+        const acquired = await acquireTrainingTranscriptionJob(prisma, {
+          recordingId,
+          sessionId,
+          now: testTime(5 * 60 * 60_000),
+        });
+        assert.equal(acquired.state, "acquired");
+
+        const rejected = await failTrainingTranscriptionJob(prisma, {
+          jobKey,
+          ownerToken: "stale-owner",
+          recordingId,
+          revision: acquired.transcript.revision,
+          retryable: false,
+          errorMessage: "ignored",
+          now: testTime(5 * 60 * 60_000 + 1_000),
+        });
+        assert.equal(rejected.state, "owner-lost");
+        assert.equal(rejected.transcript, null);
+
+        const failed = await failTrainingTranscriptionJob(prisma, {
+          jobKey,
+          ownerToken: acquired.ownerToken,
+          recordingId,
+          revision: acquired.transcript.revision,
+          retryable: false,
+          errorMessage: "x".repeat(600),
+          now: testTime(5 * 60 * 60_000 + 2_000),
+        });
+        assert.equal(failed.state, "failed");
+        assert.equal(failed.job.status, "FAILED");
+        assert.equal(failed.job.errorMessage.length, 500);
+        assert.equal(failed.transcript.status, "FAILED");
+        assert.equal(failed.transcript.errorMessage.length, 500);
+      });
+
+      await t.test("领取时会创建缺失的转写记录", async () => {
+        const recordingId = await createRecording("without-transcript", {
+          withTranscript: false,
+        });
+        const acquired = await acquireTrainingTranscriptionJob(prisma, {
+          recordingId,
+          sessionId,
+          now: testTime(6 * 60 * 60_000),
+        });
+
+        assert.equal(acquired.state, "acquired");
+        assert.equal(acquired.transcript.recordingId, recordingId);
+        assert.equal(acquired.transcript.status, "PROCESSING");
+        assert.equal(acquired.transcript.source, "ASR_PROVIDER");
+        assert.equal(acquired.transcript.revision, 1);
       });
 
       await t.test("并发领取只有一个 owner", async () => {
