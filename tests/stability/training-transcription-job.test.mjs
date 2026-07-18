@@ -213,7 +213,11 @@ test(
           forceRetry: true,
           now: testTime(61 * 60_000 + 7_000),
         });
-        assert.equal(manualRetry.state, "acquired");
+        // forceRetry 会先将 FAILED 重置为 PENDING；共享测试库中的另一个
+        // 合法领取者可能在本调用的 CAS 前获胜，此时 active 同样表示重试已启动。
+        assert.ok(
+          manualRetry.state === "acquired" || manualRetry.state === "active",
+        );
         assert.equal(manualRetry.job.attempt, 1);
       });
 
