@@ -126,6 +126,26 @@ export function usePitchTranscript({
     }
   }, [activeRecordingId, sessionId, transcriptDraft]);
 
+  const startTranscriptEditing = useCallback(() => {
+    if (!transcript) {
+      return;
+    }
+
+    setTranscriptDraft(transcript.text);
+    setIsTranscriptEditing(true);
+    setTranscriptMessage("");
+  }, [transcript]);
+
+  const cancelTranscriptEditing = useCallback(() => {
+    if (!transcript) {
+      return;
+    }
+
+    setTranscriptDraft(transcript.text);
+    setIsTranscriptEditing(false);
+    setTranscriptMessage("");
+  }, [transcript]);
+
   const triggerTranscribe = useCallback(
     async (targetRecordingId?: string) => {
       const rid = targetRecordingId ?? activeRecordingId;
@@ -223,6 +243,8 @@ export function usePitchTranscript({
     transcribeStatus,
     transcribeErrorMessage,
     saveTranscript,
+    startTranscriptEditing,
+    cancelTranscriptEditing,
     triggerTranscribe,
     resetTranscriptAfterRecordingSaved,
   };
