@@ -18,16 +18,57 @@ async function tsModuleUrl(relativePath, transformSource = (source) => source) {
 const scoringV2Url = await tsModuleUrl("../../lib/scoring-v2.ts");
 const typeGuardsUrl = await tsModuleUrl("../../lib/type-guards.ts");
 const { deriveDeterministicMaterialScore } = await import(scoringV2Url);
-const validatorUrl = await tsModuleUrl(
-  "../../lib/scoring-validator.ts",
+const validatorPrimitivesUrl = await tsModuleUrl(
+  "../../lib/scoring-validator/primitives.ts",
+);
+const validatorCategoriesUrl = await tsModuleUrl(
+  "../../lib/scoring-validator/categories.ts",
+);
+const validatorEvidenceUrl = await tsModuleUrl(
+  "../../lib/scoring-validator/evidence.ts",
   (source) =>
-    source.replace(
-      'import { deriveDeterministicMaterialScore } from "@/lib/scoring-v2";',
-      `import { deriveDeterministicMaterialScore } from "${scoringV2Url}";`,
-    ).replace(
-      'import { isRecord } from "@/lib/type-guards";',
-      `import { isRecord } from "${typeGuardsUrl}";`,
-    ),
+    source
+      .replace(
+        'from "@/lib/type-guards"',
+        `from "${typeGuardsUrl}"`,
+      )
+      .replace(
+        'from "./primitives"',
+        `from "${validatorPrimitivesUrl}"`,
+      ),
+);
+const validatorItemUrl = await tsModuleUrl(
+  "../../lib/scoring-validator/item.ts",
+  (source) =>
+    source
+      .replace('from "@/lib/scoring-v2"', `from "${scoringV2Url}"`)
+      .replace('from "./evidence"', `from "${validatorEvidenceUrl}"`)
+      .replace(
+        'from "./primitives"',
+        `from "${validatorPrimitivesUrl}"`,
+      )
+      .replace(
+        'from "./categories"',
+        `from "${validatorCategoriesUrl}"`,
+      ),
+);
+const validatorUrl = await tsModuleUrl(
+  "../../lib/scoring-validator/validate.ts",
+  (source) =>
+    source
+      .replace(
+        'from "@/lib/type-guards"',
+        `from "${typeGuardsUrl}"`,
+      )
+      .replace(
+        'from "./categories"',
+        `from "${validatorCategoriesUrl}"`,
+      )
+      .replace('from "./item"', `from "${validatorItemUrl}"`)
+      .replace(
+        'from "./primitives"',
+        `from "${validatorPrimitivesUrl}"`,
+      ),
 );
 const { validateScoreResult } = await import(validatorUrl);
 const scoreDetailUrl = await tsModuleUrl(
