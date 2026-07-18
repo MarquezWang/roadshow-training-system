@@ -7,7 +7,19 @@ const routePath = new URL(
   import.meta.url,
 );
 const generationPath = new URL(
-  "../../lib/training-analysis-ai.ts",
+  "../../lib/training-analysis-ai/generation.ts",
+  import.meta.url,
+);
+const parserPath = new URL(
+  "../../lib/training-analysis-ai/parser.ts",
+  import.meta.url,
+);
+const debugPath = new URL(
+  "../../lib/training-analysis-ai/debug.ts",
+  import.meta.url,
+);
+const debugTypesPath = new URL(
+  "../../lib/training-analysis-ai/types.ts",
   import.meta.url,
 );
 const recordsPath = new URL(
@@ -36,10 +48,16 @@ const reportDataPath = new URL(
 );
 
 test("报告 Schema 校验失败进入修复流程并保存可定位诊断", async () => {
-  const source = await readFile(generationPath, "utf8");
+  const [generation, parser, debug, debugTypes] = await Promise.all([
+    readFile(generationPath, "utf8"),
+    readFile(parserPath, "utf8"),
+    readFile(debugPath, "utf8"),
+    readFile(debugTypesPath, "utf8"),
+  ]);
+  const source = [generation, parser, debug, debugTypes].join("\n");
 
   assert.doesNotMatch(
-    source,
+    parser,
     /if\s*\(\s*!\(error instanceof AIJsonParseError\)\s*\)\s*\{\s*throw error;/,
   );
   assert.match(source, /AI_STRUCTURED_OUTPUT_INVALID/);
