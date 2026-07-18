@@ -3,40 +3,68 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-const typeGuardsSource = await readFile(
-  new URL("../../lib/type-guards.ts", import.meta.url),
-  "utf8",
-);
-const typeGuardsTranspiled = ts.transpileModule(typeGuardsSource, {
-  compilerOptions: {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
+async function transpileModule(relativePath, replacements = {}) {
+  let source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+
+  for (const [specifier, replacement] of Object.entries(replacements)) {
+    source = source.replaceAll(
+      JSON.stringify(specifier),
+      JSON.stringify(replacement),
+    );
+  }
+
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+
+  return `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
+}
+
+const typeGuardsUrl = await transpileModule("../../lib/type-guards.ts");
+const typesUrl = await transpileModule("../../lib/trl-assessment/types.ts");
+const utilsUrl = await transpileModule("../../lib/trl-assessment/utils.ts");
+const normalizationUrl = await transpileModule(
+  "../../lib/trl-assessment/normalization.ts",
+  {
+    "@/lib/type-guards": typeGuardsUrl,
+    "./types": typesUrl,
+    "./utils": utilsUrl,
   },
-}).outputText;
-const typeGuardsUrl = `data:text/javascript;base64,${Buffer.from(typeGuardsTranspiled).toString("base64")}`;
-const source = (
-  await readFile(
-  new URL("../../lib/trl-assessment.ts", import.meta.url),
-  "utf8",
-  )
-).replace(
-  'import { isRecord } from "@/lib/type-guards";',
-  `import { isRecord } from "${typeGuardsUrl}";`,
 );
-const transpiled = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
+const recognitionInputUrl = await transpileModule(
+  "../../lib/trl-assessment/recognition-input.ts",
+);
+const evidenceVerificationUrl = await transpileModule(
+  "../../lib/trl-assessment/evidence-verification.ts",
+  {
+    "./types": typesUrl,
+    "./utils": utilsUrl,
   },
-}).outputText;
+);
+const assessmentUrl = await transpileModule(
+  "../../lib/trl-assessment/assessment.ts",
+  {
+    "./evidence-verification": evidenceVerificationUrl,
+    "./types": typesUrl,
+    "./utils": utilsUrl,
+  },
+);
+const facadeUrl = await transpileModule("../../lib/trl-assessment.ts", {
+  "./trl-assessment/assessment": assessmentUrl,
+  "./trl-assessment/normalization": normalizationUrl,
+  "./trl-assessment/recognition-input": recognitionInputUrl,
+  "./trl-assessment/types": typesUrl,
+});
 const {
   assessTrlFromEvidence,
+  buildLayeredRecognitionInput,
   createDefaultTrlEvidence,
   inspectTrlEvidencePayload,
   parseTrlEvidence,
-} = await import(
-  `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`
-);
+} = await import(facadeUrl);
 const jsonSource = await readFile(
   new URL("../../lib/json-utils.ts", import.meta.url),
   "utf8",
@@ -167,6 +195,15 @@ test("trlEvidence 包装字段为空时不会被默认结构伪装成有效证�
   assert.match(inspection.reason, /缺失或不是 JSON 对象/);
 });
 
+test("分层识别输入会从材料全文保留后部成熟度证据", () => {
+  const sourceText = `${"基础档案。".repeat(6_000)}系统已在真实客户现场持续稳定运行并完成验收。`;
+  const input = buildLayeredRecognitionInput("项目材料.pdf", sourceText);
+
+  assert.match(input, /【项目基础信息区：材料前部】/);
+  assert.match(input, /【TRL 成熟度证据区：从全文检索得到/);
+  assert.match(input, /真实客户现场持续稳定运行并完成验收/);
+});
+
 test("字符串形式的技术关键词可按常见分隔符归一化", () => {
   assert.deepEqual(
     normalizeTechnicalKeywords("数字孪生、故障诊断，智能运维\n边缘计算"),
@@ -195,7 +232,8 @@ test("页面原型和功能构想保持在 TRL 2-3", () => {
 });
 
 test("AI 布尔值或无来源摘录波动不会改变后端最终等级", () => {
-  const text = "项目已形成应用设想、页面原型和产品流程图，所有订单与评价均为演示数据。";
+  const text =
+    "项目已形成应用设想、页面原型和产品流程图，所有订单与评价均为演示数据。";
   const baseline = assess(text, "软件系统/平台/App/SaaS");
   const noisyEvidence = emptyEvidence("软件系统/平台/App/SaaS");
 
@@ -437,10 +475,7 @@ test("利润、盈亏平衡和投资回报等 TIRL 10-13 变量不抬升 TRL", (
 });
 
 test("判断依据包含推荐等级、关键证据、缺失证据和置信度", () => {
-  const result = assess(
-    "项目已形成应用设想和功能模型。",
-    "其他",
-  );
+  const result = assess("项目已形成应用设想和功能模型。", "其他");
 
   assert.match(result.reason, /推荐 TRL：TRL [1-9]/);
   assert.match(result.reason, /关键支撑证据：/);
