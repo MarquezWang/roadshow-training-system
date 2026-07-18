@@ -75,6 +75,19 @@ test("upload lifecycle staging supports rollback, commit and concurrent deletion
     assert.equal(await exists(source), false);
   });
 
+  await t.test("an active staging lock classifies a late competitor as contended", async () => {
+    const source = path.join(projectRoot, "late-competitor.pdf");
+    await writeFile(source, "late competitor");
+    const winner = await stageUploadEntries({ workspaceRoot, paths: [source] });
+    const loser = await stageUploadEntries({ workspaceRoot, paths: [source] });
+
+    assert.equal(winner.stagedCount, 1);
+    assert.equal(loser.contendedCount, 1);
+    assert.equal(loser.missingCount, 0);
+    await Promise.all([winner.commit(), loser.commit()]);
+    assert.equal(await exists(source), false);
+  });
+
   await t.test("paths outside uploads are rejected", async () => {
     await assert.rejects(
       stageUploadEntries({
