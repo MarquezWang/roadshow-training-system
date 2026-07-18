@@ -31,6 +31,9 @@ test(
     const projectId = `${prefix}-project`;
     const sessionId = `${prefix}-session`;
     const recordingIds = [];
+    const simulatedClockStart = Date.now() + 24 * 60 * 60_000;
+    const testTime = (offsetMs = 0) =>
+      new Date(simulatedClockStart + offsetMs);
 
     async function createRecording(name) {
       const recordingId = `${prefix}-${name}`;
@@ -61,10 +64,14 @@ test(
           jobKey: trainingTranscriptionJobKey(recordingId),
           jobType: "TRAINING_TRANSCRIPTION",
           resourceId: recordingId,
-          status: "PENDING",
+          // The dev server recovery worker shares this test database. Keep the
+          // fixture in future backoff so only explicit simulated-time calls
+          // can acquire it.
+          status: "RETRY_WAIT",
           ownerToken: "",
           attempt: 0,
           maxAttempts: 3,
+          nextAttemptAt: testTime(-1),
         },
       });
       return recordingId;
@@ -94,7 +101,7 @@ test(
 
       await t.test("并发领取只有一个 owner", async () => {
         const recordingId = await createRecording("concurrent");
-        const now = new Date("2026-07-13T00:00:00.000Z");
+        const now = testTime();
         const results = await Promise.all([
           acquireTrainingTranscriptionJob(prisma, { recordingId, sessionId, now }),
           acquireTrainingTranscriptionJob(prisma, { recordingId, sessionId, now }),
@@ -117,13 +124,13 @@ test(
             status: "RUNNING",
             ownerToken: "stale-owner",
             attempt: 1,
-            leaseExpiresAt: new Date("2026-07-12T23:59:00.000Z"),
+            leaseExpiresAt: testTime(-60_000),
           },
         });
         const acquired = await acquireTrainingTranscriptionJob(prisma, {
           recordingId,
           sessionId,
-          now: new Date("2026-07-13T00:00:00.000Z"),
+          now: testTime(),
         });
         assert.equal(acquired.state, "acquired");
         assert.notEqual(acquired.ownerToken, "stale-owner");
@@ -133,7 +140,7 @@ test(
       await t.test("可重试失败持久化退避，到上限后停止", async () => {
         const recordingId = await createRecording("backoff");
         const jobKey = trainingTranscriptionJobKey(recordingId);
-        const startedAt = new Date("2026-07-13T01:00:00.000Z");
+        const startedAt = testTime(60 * 60_000);
         const first = await acquireTrainingTranscriptionJob(prisma, {
           recordingId,
           sessionId,
@@ -148,21 +155,21 @@ test(
           retryable: true,
           retryDelayMs: 60_000,
           errorMessage: "temporary",
-          now: new Date("2026-07-13T01:00:01.000Z"),
+          now: testTime(60 * 60_000 + 1_000),
         });
         assert.equal(failedFirst.state, "retry-scheduled");
         assert.equal(
           (await acquireTrainingTranscriptionJob(prisma, {
             recordingId,
             sessionId,
-            now: new Date("2026-07-13T01:00:30.000Z"),
+            now: testTime(60 * 60_000 + 30_000),
           })).state,
           "backoff",
         );
         const second = await acquireTrainingTranscriptionJob(prisma, {
           recordingId,
           sessionId,
-          now: new Date("2026-07-13T01:01:02.000Z"),
+          now: testTime(61 * 60_000 + 2_000),
         });
         assert.equal(second.state, "acquired");
         await failTrainingTranscriptionJob(prisma, {
@@ -173,12 +180,12 @@ test(
           retryable: true,
           retryDelayMs: 1,
           errorMessage: "temporary 2",
-          now: new Date("2026-07-13T01:01:03.000Z"),
+          now: testTime(61 * 60_000 + 3_000),
         });
         const third = await acquireTrainingTranscriptionJob(prisma, {
           recordingId,
           sessionId,
-          now: new Date("2026-07-13T01:01:04.000Z"),
+          now: testTime(61 * 60_000 + 4_000),
         });
         assert.equal(third.state, "acquired");
         const finalFailure = await failTrainingTranscriptionJob(prisma, {
@@ -189,14 +196,14 @@ test(
           retryable: true,
           retryDelayMs: 1,
           errorMessage: "temporary 3",
-          now: new Date("2026-07-13T01:01:05.000Z"),
+          now: testTime(61 * 60_000 + 5_000),
         });
         assert.equal(finalFailure.state, "failed");
         assert.equal(
           (await acquireTrainingTranscriptionJob(prisma, {
             recordingId,
             sessionId,
-            now: new Date("2026-07-13T01:01:06.000Z"),
+            now: testTime(61 * 60_000 + 6_000),
           })).state,
           "exhausted",
         );
@@ -204,7 +211,7 @@ test(
           recordingId,
           sessionId,
           forceRetry: true,
-          now: new Date("2026-07-13T01:01:07.000Z"),
+          now: testTime(61 * 60_000 + 7_000),
         });
         assert.equal(manualRetry.state, "acquired");
         assert.equal(manualRetry.job.attempt, 1);
@@ -215,7 +222,7 @@ test(
         const acquired = await acquireTrainingTranscriptionJob(prisma, {
           recordingId,
           sessionId,
-          now: new Date("2026-07-13T02:00:00.000Z"),
+          now: testTime(2 * 60 * 60_000),
         });
         assert.equal(acquired.state, "acquired");
         await prisma.trainingTranscript.update({
@@ -233,7 +240,7 @@ test(
           recordingId,
           revision: acquired.transcript.revision,
           text: "迟到的 ASR 文本",
-          now: new Date("2026-07-13T02:00:01.000Z"),
+          now: testTime(2 * 60 * 60_000 + 1_000),
         });
         assert.equal(completed.state, "superseded");
         assert.equal(completed.transcript.text, "用户确认的文本");
