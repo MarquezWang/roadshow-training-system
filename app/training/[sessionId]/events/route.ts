@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import { readLimitedJson } from "@/lib/input-limits";
 
 type TrainingEventRouteContext = Readonly<{
   params: Promise<{
@@ -36,12 +37,12 @@ export async function POST(
   }
 
   try {
-    const body = (await request.json()) as {
+    const body = await readLimitedJson<{
       eventType?: unknown;
       pageIndex?: unknown;
       elapsedSec?: unknown;
       fileId?: unknown;
-    };
+    }>(request);
     const eventType =
       typeof body.eventType === "string" ? body.eventType.trim() : "";
     const pageIndex = readPageIndex(body.pageIndex);

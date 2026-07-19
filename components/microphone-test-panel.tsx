@@ -42,7 +42,7 @@ export function MicrophoneTestPanel({
   } = useAudioInput();
 
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
-  const [testStatus, setTestStatus] = useState<MicrophoneStatus>("requesting");
+  const [testStatus, setTestStatus] = useState<MicrophoneStatus>("unchecked");
   const [errorMessage, setErrorMessage] = useState("");
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [gain, setGain] = useState(loadPreferredGain);
@@ -121,15 +121,6 @@ export function MicrophoneTestPanel({
     }
   }, [getStream, refreshDevices, stopTestStream]);
 
-  // 挂载时自动启动测试
-  const startedRef = useRef(false);
-  useEffect(() => {
-    if (!startedRef.current) {
-      startedRef.current = true;
-      void startTest();
-    }
-  }, [startTest]);
-
   const handleDeviceChange = useCallback(
     (deviceId: string) => {
       setSelectedDeviceId(deviceId);
@@ -168,7 +159,8 @@ export function MicrophoneTestPanel({
     onReady();
   }, [onReady, gain, stopTestStream]);
 
-  const isTesting = testStream !== null || isSwitchingDevice;
+  const isTesting =
+    testStream !== null || isSwitchingDevice || testStatus === "requesting";
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -280,7 +272,7 @@ export function MicrophoneTestPanel({
           <button
             type="button"
             onClick={handleConfirm}
-            disabled={isPreparing}
+            disabled={isPreparing || !testStream || isSwitchingDevice}
             className="inline-flex h-10 w-full items-center justify-center rounded-md bg-slate-950 px-4 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             确认麦克风，准备训练
@@ -289,11 +281,21 @@ export function MicrophoneTestPanel({
       ) : null}
 
       {!isTesting && !isConfirmed ? (
-        <div className="mt-3">
-          <p className="text-sm text-slate-500">正在启动麦克风测试...</p>
+        <div className="mt-3 space-y-2">
+          <p className="text-sm text-slate-500">
+            点击开始检测后，浏览器才会申请麦克风权限。
+          </p>
           {errorMessage ? (
-            <p className="mt-2 text-sm text-red-600">{errorMessage}</p>
+            <p className="text-sm text-red-600">{errorMessage}</p>
           ) : null}
+          <button
+            type="button"
+            onClick={() => void startTest()}
+            disabled={isPreparing}
+            className="inline-flex h-10 w-full items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            开始麦克风检测
+          </button>
         </div>
       ) : null}
 

@@ -14,7 +14,7 @@
 | `dynamic-followup-content.md` | 动态追问兜底：内容充足但主 Prompt 未生成 | `app/training/[sessionId]/qa/questions/dynamic-followup/route.ts` | strong | 项目上下文、路演转写、已有问题 | 一个追问 | 可能生成与已问问题重复的追问 |
 | `pitch-performance-analysis.md` | 训练报告 / 路演表现分析 | `app/training/[sessionId]/analysis/route.ts` | strong | 项目档案、材料、路演转写、QA 记录 | 评分、结论、优势、短板、改进建议 | 报告泛化、建议不可执行、证据不足时幻觉 |
 | `question-generation.md` | 项目详情页模拟评委问题生成 | `app/projects/[id]/questions/generate/route.ts` | strong | 项目 AI 上下文 | 模拟评委问题 | 和训练问题体系不一致 |
-| `material-diagnosis.md` | 材料诊断 | `app/projects/[id]/diagnosis/route.ts` | strong | 项目材料上下文 | 材料问题、优化建议 | 建议过泛、材料证据引用不足 |
+| `material-diagnosis.md` | 材料诊断 | `app/api/projects/[id]/material-diagnosis/route.ts` | strong | 项目材料上下文 | 材料问题、优化建议 | 建议过泛、材料证据引用不足 |
 | `scoring.md` | 评分规则生成/评分辅助 | `app/projects/[id]/scoring/route.ts` | strong | 项目上下文 | 评分维度或评分建议 | 与训练报告评分口径不一致 |
 
 ## 辅助 Prompt
@@ -39,4 +39,3 @@
 - 是否会导致模型更容易虚构？
 - 是否有至少 2 个样本可验证修改效果？
 - 是否记录在 `prompts/changelog.md`？
-

@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import {
+  InvalidJsonBodyError,
+  MAX_ANSWER_TEXT_LENGTH,
+  readLimitedJson,
+  RequestBodyTooLargeError,
+} from "@/lib/input-limits";
 import { prisma } from "@/lib/prisma";
+import { resolveQaDurationSec } from "@/lib/qa-duration";
 
 type SaveTrainingAnswerContext = Readonly<{
   params: Promise<{
@@ -14,7 +21,12 @@ function readAnswerText(value: unknown) {
     return "";
   }
 
-  return value.trim();
+  const text = value.trim();
+  if (text.length > MAX_ANSWER_TEXT_LENGTH) {
+    throw new Error(`答辩文本不能超过 ${MAX_ANSWER_TEXT_LENGTH} 个字符。`);
+  }
+
+  return text;
 }
 
 function readOptionalDate(value: unknown) {
@@ -25,14 +37,6 @@ function readOptionalDate(value: unknown) {
   const parsed = new Date(value);
 
   return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function readOptionalDuration(value: unknown) {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    return null;
-  }
-
-  return value;
 }
 
 function readOptionalId(value: unknown) {
@@ -54,7 +58,7 @@ function getDurationSec(startedAt: Date | null, endedAt: Date) {
 async function finishQa(
   sessionId: string,
   endedAt: Date,
-  clientQaDurationSec: number | null,
+  clientQaDurationSec: unknown,
 ) {
   const session = await prisma.trainingSession.findUnique({
     where: {
@@ -65,14 +69,11 @@ async function finishQa(
     },
   });
 
-  const qaDurationSec =
-    clientQaDurationSec ??
-    (session?.qaStartedAt
-      ? Math.max(
-          0,
-          Math.round((endedAt.getTime() - session.qaStartedAt.getTime()) / 1000),
-        )
-      : null);
+  const qaDurationSec = resolveQaDurationSec(
+    session?.qaStartedAt ?? null,
+    endedAt,
+    clientQaDurationSec,
+  );
 
   const transition = await prisma.trainingSession.updateMany({
     where: { id: sessionId, status: "QAING" },
@@ -104,7 +105,7 @@ export async function POST(
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as {
+  let body: {
     answerText?: unknown;
     finish?: unknown;
     answerStartedAt?: unknown;
@@ -113,11 +114,31 @@ export async function POST(
     recordingId?: unknown;
     preferredNextQuestionId?: unknown;
   };
-  const answerText = readAnswerText(body.answerText);
+
+  try {
+    body = await readLimitedJson(request);
+  } catch (error) {
+    const message =
+      error instanceof RequestBodyTooLargeError ||
+      error instanceof InvalidJsonBodyError
+        ? error.message
+        : "请求正文无效。";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+
+  let answerText: string;
+  try {
+    answerText = readAnswerText(body.answerText);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "答辩文本无效。" },
+      { status: 400 },
+    );
+  }
   const shouldFinish = body.finish === true;
   const answerStartedAt = readOptionalDate(body.answerStartedAt);
   const revealedQuestionText = body.revealedQuestionText === true;
-  const clientQaDurationSec = readOptionalDuration(body.qaDurationSec);
+  const clientQaDurationSec = body.qaDurationSec;
   const recordingId = readOptionalId(body.recordingId);
   const preferredNextQuestionId = readOptionalId(body.preferredNextQuestionId);
   const session = await prisma.trainingSession.findUnique({

@@ -76,6 +76,7 @@ export async function releaseAsyncJob(params: {
       leaseExpiresAt: null,
       nextAttemptAt: null,
       errorMessage: params.errorMessage?.slice(0, 500) ?? null,
+      payloadJson: null,
     },
   });
 

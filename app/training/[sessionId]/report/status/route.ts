@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import { reconcileTrainingAnalysisInputVersion } from "@/lib/training-analysis-input";
+import { trainingAnalysisJobKey } from "@/lib/training-analysis-job.mjs";
 import { recoverTrainingTranscriptionsForSession } from "@/lib/training-transcribe-task";
 
 export const dynamic = "force-dynamic";
@@ -75,6 +76,15 @@ export async function GET(
       errorMessage: true,
       updatedAt: true,
       inputHash: true,
+    },
+  });
+  const analysisJob = await prisma.asyncJob.findUnique({
+    where: { jobKey: trainingAnalysisJobKey(sessionId) },
+    select: {
+      status: true,
+      leaseExpiresAt: true,
+      nextAttemptAt: true,
+      errorMessage: true,
     },
   });
   const pointedAnalysis =
@@ -278,10 +288,20 @@ export async function GET(
     analysis?.status === "PROCESSING" &&
     analysis.updatedAt !== null &&
     nowMs - analysis.updatedAt.getTime() > PROCESSING_ANALYSIS_TIMEOUT_MS;
+  const analysisJobActive = Boolean(
+    analysisJob?.status === "PENDING" ||
+      analysisJob?.status === "RETRY_WAIT" ||
+      (analysisJob?.status === "RUNNING" &&
+        analysisJob.leaseExpiresAt &&
+        analysisJob.leaseExpiresAt.getTime() > nowMs),
+  );
   return NextResponse.json({
     analysisStatus: analysis?.status ?? "NONE",
     analysisId: analysis?.id ?? null,
     analysisError: analysis?.errorMessage ?? null,
+    analysisJobStatus: analysisJob?.status ?? "NONE",
+    analysisJobError: analysisJob?.errorMessage ?? null,
+    analysisJobActive,
     currentAnalysisId: currentAnalysis?.id ?? null,
     hasCurrentAnalysis: Boolean(currentAnalysis),
     pitchTranscriptStatus: pitchTranscript?.status ?? "MISSING",

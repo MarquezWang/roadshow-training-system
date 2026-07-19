@@ -5,6 +5,12 @@ export const evidenceStatuses = [
   "UNKNOWN",
 ] as const;
 
+export const MATERIAL_DIAGNOSIS_SCHEMA_VERSION =
+  "material-diagnosis-result:2026-07-19.1";
+export const MATERIAL_DIAGNOSIS_LEGACY_SCHEMA_VERSION =
+  "material-diagnosis-result:legacy-v0";
+export const LEGACY_DIAGNOSIS_SCHEMA_VERSION = "diagnosis-result:legacy-v1";
+
 export const readinessLevels = [
   "HIGH",
   "MEDIUM",

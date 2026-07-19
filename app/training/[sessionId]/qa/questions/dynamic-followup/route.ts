@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import { readOptionalLimitedJson } from "@/lib/input-limits";
 import { devLog, devWarn } from "@/lib/dev-log";
 import {
   DynamicFollowupSessionClosedError,
@@ -57,9 +58,12 @@ export async function POST(
 
     let body: DynamicFollowupBody = {};
     try {
-      body = (await request.json()) as DynamicFollowupBody;
-    } catch {
-      // An empty body keeps the legacy defaults.
+      body = await readOptionalLimitedJson(request, {});
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "请求正文无效。" },
+        { status: 400 },
+      );
     }
 
     debug = body.debug === true;
@@ -73,6 +77,7 @@ export async function POST(
         projectId: true,
         status: true,
         projectContextSnapshot: true,
+        contextSchemaVersion: true,
       },
     });
 

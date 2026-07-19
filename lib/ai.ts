@@ -1,6 +1,14 @@
 import OpenAI from "openai";
 import { getAiModel, type AiModelTask } from "@/lib/ai-models";
+import {
+  acquireAIResources,
+  AIResourceLimitError,
+  reconcileAIUsage,
+  recordAIProviderFailure,
+  recordAIProviderSuccess,
+} from "@/lib/ai-resource-guard";
 import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
+import { UNTRUSTED_DATA_SYSTEM_POLICY } from "@/lib/prompt-data-boundary";
 
 type CallAIOptions = {
   systemPrompt: string;
@@ -10,10 +18,12 @@ type CallAIOptions = {
   maxOutputTokens?: number;
   seed?: number;
   disableJsonResponseFormat?: boolean;
+  projectId?: string;
 };
 
 type CallAIResult = {
   text: string;
+  model: string;
   raw?: unknown;
 };
 
@@ -54,6 +64,23 @@ function getRequiredEnv(name: string) {
   return value;
 }
 
+function getBoundedIntegerEnv(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} 必须是 ${minimum} 到 ${maximum} 之间的整数。`);
+  }
+
+  return value;
+}
+
 function getAIConfig(task: AiModelTask) {
   const provider = process.env.AI_PROVIDER?.trim() || "openai";
 
@@ -64,9 +91,18 @@ function getAIConfig(task: AiModelTask) {
   const apiKey = getRequiredEnv("AI_API_KEY");
   const model = getAiModel(task);
   const baseURL = process.env.AI_BASE_URL?.trim() || undefined;
-  const timeoutMs = Number(process.env.AI_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
-  const maxOutputTokens =
-    Number(process.env.AI_MAX_OUTPUT_TOKENS) || DEFAULT_MAX_OUTPUT_TOKENS;
+  const timeoutMs = getBoundedIntegerEnv(
+    "AI_TIMEOUT_MS",
+    DEFAULT_TIMEOUT_MS,
+    1_000,
+    5 * 60_000,
+  );
+  const maxOutputTokens = getBoundedIntegerEnv(
+    "AI_MAX_OUTPUT_TOKENS",
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    100,
+    100_000,
+  );
 
   return {
     apiKey,
@@ -155,6 +191,32 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     apiKey: config.apiKey,
     baseURL: config.baseURL,
   });
+  let userKey = "system";
+  try {
+    const { getCurrentAuthUser } = await import("@/lib/auth-server");
+    userKey = (await getCurrentAuthUser())?.id ?? "local";
+  } catch {
+    userKey = "system";
+  }
+  const projectKey = options.projectId?.trim() || "unscoped";
+  const requestedOutputTokens = options.maxOutputTokens ?? config.maxOutputTokens;
+  if (
+    !Number.isInteger(requestedOutputTokens) ||
+    requestedOutputTokens < 1 ||
+    requestedOutputTokens > 100_000
+  ) {
+    throw new Error("AI maxOutputTokens 必须是 1 到 100000 之间的整数。");
+  }
+  const estimatedInputTokens = Math.ceil(
+    (options.systemPrompt.length + options.userPrompt.length) / 2,
+  );
+  const reservedTokens = requestedOutputTokens + estimatedInputTokens;
+  const resources = await acquireAIResources({
+    userKey,
+    projectKey,
+    task,
+    reservedTokens,
+  });
   let completed = false;
 
   try {
@@ -167,7 +229,7 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
         messages: [
           {
             role: "system",
-            content: options.systemPrompt,
+            content: `${options.systemPrompt}\n\n${UNTRUSTED_DATA_SYSTEM_POLICY}`,
           },
           {
             role: "user",
@@ -195,11 +257,26 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     }
 
     completed = true;
+    recordAIProviderSuccess();
+    await reconcileAIUsage({
+      userKey,
+      projectKey,
+      task,
+      dayKey: resources.dayKey,
+      reservedTokens,
+      actualTokens: completion.usage?.total_tokens ?? null,
+    }).catch(() => undefined);
     return {
       text,
+      model: config.model,
       raw: completion,
     };
   } catch (error) {
+    if (error instanceof AIResourceLimitError) {
+      throw error;
+    }
+
+    recordAIProviderFailure();
     const isTimeout = controller.signal.aborted;
     logAICall({
       task,
@@ -219,6 +296,7 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
 
     throw new Error(`AI 调用失败：${sanitizeAIError(error)}`);
   } finally {
+    resources.release();
     if (completed) {
       logAICall({
         task,

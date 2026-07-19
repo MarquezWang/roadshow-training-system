@@ -12,6 +12,7 @@ type UseMicrophoneMonitorOptions = {
 };
 
 export const PREFERRED_GAIN_KEY = "roadshow:preferred-audio-gain";
+const VOLUME_UPDATE_INTERVAL_MS = 100;
 
 export function loadPreferredGain(): number {
   if (typeof window === "undefined") return 1;
@@ -48,6 +49,8 @@ export function useMicrophoneMonitor({
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastVolumeTimeRef = useRef<number>(0);
+  const lastUiUpdateTimeRef = useRef<number>(0);
+  const publishedStatusRef = useRef<MicrophoneStatus>("unchecked");
   const gainRef = useRef(gain);
   const sidetoneRef = useRef(sidetone);
 
@@ -103,6 +106,7 @@ export function useMicrophoneMonitor({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- 响应 stream 变化重置状态
       setVolume(0);
       setStatus("unchecked");
+      publishedStatusRef.current = "unchecked";
       cleanupAudioGraph();
       return;
     }
@@ -114,6 +118,7 @@ export function useMicrophoneMonitor({
     if (!hasLiveTrack) {
       setStatus("no-input");
       setVolume(0);
+      publishedStatusRef.current = "no-input";
       cleanupAudioGraph();
       return;
     }
@@ -147,6 +152,8 @@ export function useMicrophoneMonitor({
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       lastVolumeTimeRef.current = Date.now();
+      lastUiUpdateTimeRef.current = 0;
+      publishedStatusRef.current = "connected";
 
       const tick = () => {
         if (!analyserRef.current) return;
@@ -161,15 +168,23 @@ export function useMicrophoneMonitor({
         const avg = sum / dataArray.length;
         const normalizedVolume = Math.min(1, avg / 128);
 
-        setVolume(normalizedVolume);
-
+        let nextStatus: MicrophoneStatus = "connected";
         if (normalizedVolume > 0.01) {
           lastVolumeTimeRef.current = Date.now();
-          setStatus("connected");
         } else {
           const silenceDuration = Date.now() - lastVolumeTimeRef.current;
           if (silenceDuration > 2000) {
-            setStatus("no-input");
+            nextStatus = "no-input";
+          }
+        }
+
+        const now = performance.now();
+        if (now - lastUiUpdateTimeRef.current >= VOLUME_UPDATE_INTERVAL_MS) {
+          lastUiUpdateTimeRef.current = now;
+          setVolume(normalizedVolume);
+          if (publishedStatusRef.current !== nextStatus) {
+            publishedStatusRef.current = nextStatus;
+            setStatus(nextStatus);
           }
         }
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
-  runTranscriptionWithLock,
+  runOrQueueTranscription,
   TranscribeHttpError,
 } from "@/lib/training-transcribe-task";
 
@@ -22,7 +22,9 @@ export async function POST(
   }
 
   try {
-    const result = await runTranscriptionWithLock(sessionId, recordingId);
+    const result = await runOrQueueTranscription(sessionId, recordingId, {
+      forceRetry: true,
+    });
 
     if (result.kind === "pending") {
       return NextResponse.json({

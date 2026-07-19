@@ -61,14 +61,12 @@ export function MicrophoneStatusBar() {
     }
   }, [getStream]);
 
-  // 启动时自动获取监控流
+  // 组件卸载时清理；麦克风权限只在用户打开设置时申请。
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 启动时获取监控流
-    void startMonitorStream();
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
-  }, [startMonitorStream]);
+  }, []);
 
   // 切换设备时重新获取监控流
   useEffect(() => {
@@ -95,11 +93,19 @@ export function MicrophoneStatusBar() {
     void refreshDevices();
   }, [refreshDevices]);
 
+  const handleToggleSettings = useCallback(() => {
+    const nextVisible = !showSettings;
+    setShowSettings(nextVisible);
+    if (nextVisible && !streamRef.current) {
+      void startMonitorStream();
+    }
+  }, [showSettings, startMonitorStream]);
+
   return (
     <div className="relative inline-flex items-center gap-2">
       <button
         type="button"
-        onClick={() => setShowSettings((v) => !v)}
+        onClick={handleToggleSettings}
         className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
         title="麦克风设置"
       >

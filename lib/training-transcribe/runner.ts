@@ -1,6 +1,10 @@
 import { devError } from "@/lib/dev-log";
+import { usesExternalBackgroundWorker } from "@/lib/background-task-mode.mjs";
 import { prisma } from "@/lib/prisma";
-import { acquireTrainingTranscriptionJob } from "@/lib/training-transcription-job.mjs";
+import {
+  acquireTrainingTranscriptionJob,
+  queueTrainingTranscriptionJob,
+} from "@/lib/training-transcription-job.mjs";
 
 import { getErrorSummary, TranscribeHttpError } from "./errors";
 import { executeAcquiredTranscription } from "./execution";
@@ -78,4 +82,53 @@ export async function startTranscriptionTask(
     state: acquired.state,
     transcript: acquired.transcript,
   };
+}
+
+export async function queueTranscriptionTask(
+  sessionId: string,
+  recordingId: string,
+  options: { forceRetry?: boolean } = {},
+) {
+  await findTranscriptionTarget(sessionId, recordingId);
+  const queued = await queueTrainingTranscriptionJob(prisma, {
+    sessionId,
+    recordingId,
+    forceRetry: options.forceRetry ?? false,
+  });
+
+  if (!queued.transcript) {
+    throw new TranscribeHttpError("无法创建转写任务。", 500);
+  }
+  return {
+    started: false,
+    state: queued.state,
+    transcript: queued.transcript,
+  };
+}
+
+export function startOrQueueTranscriptionTask(
+  sessionId: string,
+  recordingId: string,
+  options: { forceRetry?: boolean } = {},
+) {
+  return usesExternalBackgroundWorker()
+    ? queueTranscriptionTask(sessionId, recordingId, options)
+    : startTranscriptionTask(sessionId, recordingId, options);
+}
+
+export async function runOrQueueTranscription(
+  sessionId: string,
+  recordingId: string,
+  options: { forceRetry?: boolean } = {},
+): Promise<TranscriptionRunResult> {
+  if (!usesExternalBackgroundWorker()) {
+    return runTranscriptionWithLock(sessionId, recordingId, options);
+  }
+
+  const queued = await queueTranscriptionTask(sessionId, recordingId, options);
+  return resultForUnacquiredJob(
+    queued.state,
+    queued.transcript,
+    queued.transcript.errorMessage,
+  );
 }

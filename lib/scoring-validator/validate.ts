@@ -1,7 +1,6 @@
 import { isRecord } from "@/lib/type-guards";
 import {
   assertMappedScoreInvariants,
-  normalizeCategory,
   sumByCategory,
 } from "./categories";
 import { validateScoreItemFields } from "./item";

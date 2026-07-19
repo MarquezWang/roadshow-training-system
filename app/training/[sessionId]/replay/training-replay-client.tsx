@@ -105,10 +105,12 @@ export function TrainingReplayClient({
         recording?.transcript?.segmentsJson,
         currentReplaySegment,
         replayTotalDurationSec,
+        recording?.transcript?.segmentsSchemaVersion,
       ),
     [
       currentReplaySegment,
       recording?.transcript?.segmentsJson,
+      recording?.transcript?.segmentsSchemaVersion,
       recording?.transcript?.text,
       replayTotalDurationSec,
     ],

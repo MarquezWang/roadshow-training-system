@@ -76,7 +76,7 @@ const promptAssets: Readonly<Record<string, PromptAsset>> = {
   "material-diagnosis.md": {
     file: "material-diagnosis.md",
     task: "材料诊断",
-    route: "app/projects/[id]/diagnosis/route.ts",
+    route: "app/api/projects/[id]/material-diagnosis/route.ts",
     model: "strong",
     risk: "中",
     output: "材料问题、优化建议",

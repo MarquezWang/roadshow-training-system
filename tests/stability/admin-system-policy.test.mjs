@@ -10,12 +10,22 @@ const source = await readFile(
   ),
   "utf8",
 );
-const transpiled = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
+const backgroundTaskModeUrl = new URL(
+  "../../lib/background-task-mode.mjs",
+  import.meta.url,
+).href;
+const transpiled = ts.transpileModule(
+  source.replace(
+    "@/lib/background-task-mode.mjs",
+    backgroundTaskModeUrl,
+  ),
+  {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+    },
   },
-}).outputText;
+).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 const {
   displayConfigValue,
@@ -45,6 +55,7 @@ test("OpenAI 转写只依赖通用转写密钥，登录开关保持严格匹配"
   });
 
   assert.equal(configured.authEnabled, true);
+  assert.equal(configured.backgroundTaskMode, "embedded");
   assert.equal(configured.aiConfigured, true);
   assert.equal(configured.aiProvider, "openai");
   assert.equal(configured.asrCredentialReady, true);
@@ -57,6 +68,18 @@ test("OpenAI 转写只依赖通用转写密钥，登录开关保持严格匹配"
       TRANSCRIPTION_API_KEY: "asr-secret",
     }).authEnabled,
     false,
+  );
+});
+
+test("后台任务模式仅接受 embedded 或 external", () => {
+  assert.equal(
+    status("openai", { BACKGROUND_TASK_MODE: "external" })
+      .backgroundTaskMode,
+    "external",
+  );
+  assert.throws(
+    () => status("openai", { BACKGROUND_TASK_MODE: "sidecar-ish" }),
+    /BACKGROUND_TASK_MODE/,
   );
 });
 

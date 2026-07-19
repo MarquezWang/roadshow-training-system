@@ -65,6 +65,7 @@ function transcript(overrides = {}) {
     language: "zh-CN",
     text: "",
     segmentsJson: null,
+    segmentsSchemaVersion: "training-transcript-segments:legacy-v0",
     errorMessage: null,
     startedAt: now,
     completedAt: null,
@@ -85,6 +86,7 @@ test("transcript selection keeps the route response contract", () => {
     "language",
     "text",
     "segmentsJson",
+    "segmentsSchemaVersion",
     "errorMessage",
     "startedAt",
     "completedAt",
@@ -230,6 +232,11 @@ test("unacquired pending results distinguish backoff from active ownership", () 
   assert.deepEqual(results.resultForUnacquiredJob("active", pending), {
     kind: "pending",
     message: "转写任务已由其他处理器接管。",
+    transcript: pending,
+  });
+  assert.deepEqual(results.resultForUnacquiredJob("queued", pending), {
+    kind: "pending",
+    message: "转写任务已加入后台队列。",
     transcript: pending,
   });
   assert.equal(

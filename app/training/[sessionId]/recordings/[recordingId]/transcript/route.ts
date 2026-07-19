@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import {
+  MAX_MANUAL_TRANSCRIPT_LENGTH,
+  readLimitedJson,
+} from "@/lib/input-limits";
 import { prisma } from "@/lib/prisma";
+import { TRANSCRIPT_SEGMENTS_SCHEMA_VERSION } from "@/lib/persisted-json-versions";
 import { trainingTranscriptionJobKey } from "@/lib/training-transcription-job.mjs";
 
 type TranscriptRouteContext = Readonly<{
@@ -72,6 +77,7 @@ export async function GET(
       language: true,
       text: true,
       segmentsJson: true,
+      segmentsSchemaVersion: true,
       errorMessage: true,
       startedAt: true,
       completedAt: true,
@@ -99,15 +105,29 @@ export async function POST(
     return NextResponse.json({ error: "录音不存在。" }, { status: 404 });
   }
 
-  const body = (await request.json().catch(() => null)) as {
+  let body: {
     text?: unknown;
     source?: unknown;
     language?: unknown;
   } | null;
+  try {
+    body = await readLimitedJson(request);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "请求正文无效。" },
+      { status: 400 },
+    );
+  }
   const text = typeof body?.text === "string" ? body.text.trim() : "";
 
   if (!text) {
     return NextResponse.json({ error: "转写文本不能为空。" }, { status: 400 });
+  }
+  if (text.length > MAX_MANUAL_TRANSCRIPT_LENGTH) {
+    return NextResponse.json(
+      { error: `转写文本不能超过 ${MAX_MANUAL_TRANSCRIPT_LENGTH} 个字符。` },
+      { status: 400 },
+    );
   }
 
   const now = new Date();
@@ -126,6 +146,7 @@ export async function POST(
         language: normalizeLanguage(body?.language),
         text,
         segmentsJson: null,
+        segmentsSchemaVersion: TRANSCRIPT_SEGMENTS_SCHEMA_VERSION,
         completedAt: now,
         revision: 1,
       },
@@ -135,6 +156,7 @@ export async function POST(
         language: normalizeLanguage(body?.language),
         text,
         segmentsJson: null,
+        segmentsSchemaVersion: TRANSCRIPT_SEGMENTS_SCHEMA_VERSION,
         errorMessage: null,
         completedAt: now,
         revision: { increment: 1 },
@@ -148,6 +170,7 @@ export async function POST(
         language: true,
         text: true,
         segmentsJson: true,
+        segmentsSchemaVersion: true,
         errorMessage: true,
         startedAt: true,
         completedAt: true,

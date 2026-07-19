@@ -371,3 +371,62 @@ test("stored parsing keeps zero scores and propagates malformed JSON", () => {
     SyntaxError,
   );
 });
+
+test("stored parsing migrates the retired Diagnosis payload without data loss", () => {
+  const result = parseStoredMaterialDiagnosis(
+    storedDiagnosis({
+      summary: "placeholder",
+      schemaVersion: "diagnosis-result:legacy-v1",
+      rawResultJson: JSON.stringify({
+        projectSummary: "旧版项目总结",
+        materialCompleteness: "核心材料基本齐全",
+        issuesJson: JSON.stringify({
+          criterionAnalysis: [
+            {
+              category: "技术",
+              criterion: "技术优势",
+              maxScore: 10,
+              materialStatus: "有描述但缺少测试数据",
+              problems: ["缺少对比测试"],
+              suggestions: ["补充第三方测试报告"],
+            },
+          ],
+          keyIssues: ["关键参数缺少来源"],
+        }),
+        risksJson: JSON.stringify(["客户验证不足"]),
+        suggestionsJson: JSON.stringify({
+          priorityActions: ["补充测试证据"],
+          slideSuggestions: ["增加证据索引页"],
+        }),
+      }),
+    }),
+  );
+
+  assert.match(result.summary, /旧版项目总结/);
+  assert.match(result.summary, /核心材料基本齐全/);
+  assert.deepEqual(result.weaknesses, [
+    "关键参数缺少来源",
+    "客户验证不足",
+  ]);
+  assert.equal(result.priorityTasks[0].action, "补充测试证据");
+  assert.deepEqual(result.criteriaResults[0], {
+    category: "技术",
+    criterionName: "技术优势",
+    weight: 10,
+    evidenceStatus: "UNKNOWN",
+    evidenceSummary: "有描述但缺少测试数据",
+    issueSummary: "缺少对比测试",
+    improvementAdvice: "补充第三方测试报告",
+    likelyJudgeQuestions: [],
+  });
+});
+
+test("stored parsing rejects unknown future diagnosis schemas", () => {
+  assert.throws(
+    () =>
+      parseStoredMaterialDiagnosis(
+        storedDiagnosis({ schemaVersion: "material-diagnosis-result:v999" }),
+      ),
+    /不支持的材料诊断 schemaVersion/,
+  );
+});

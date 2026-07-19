@@ -38,6 +38,17 @@ jobs:
       - name: Auth boundary tests
         run: npm run test:auth
 
+      - name: Auth-enabled multi-user E2E
+        env:
+          AUTH_E2E_DATABASE_URL: file:./ci-auth-e2e-test.db
+          AUTH_E2E_PORT: "3001"
+        run: npm run test:auth:e2e:local
+
+      - name: Standalone background worker smoke test
+        env:
+          BACKGROUND_WORKER_TEST_DATABASE_URL: file:./ci-background-worker-test.db
+        run: npm run test:worker:local
+
       - name: Production auth guard tests
         run: npm run test:prod-guard
 
@@ -46,6 +57,9 @@ jobs:
 
       - name: Deterministic scoring tests
         run: npm run test:scoring-v2
+
+      - name: Review fix regression tests
+        run: npm run test:review-fixes
 
       - name: Stability tests
         env:

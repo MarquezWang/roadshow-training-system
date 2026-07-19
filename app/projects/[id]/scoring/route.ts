@@ -10,7 +10,12 @@ import { parseAIJson } from "@/lib/json-utils";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
-import { buildMaterialScoreDetail } from "@/lib/scoring-result-detail";
+import { calculateProjectContextHash } from "@/lib/project-context-hash";
+import { calculatePromptVersion } from "@/lib/result-provenance";
+import {
+  buildMaterialScoreDetail,
+  MATERIAL_SCORE_SCHEMA_VERSION,
+} from "@/lib/scoring-result-detail";
 import { validateScoreResult } from "@/lib/scoring-validator";
 
 type ScoringRouteContext = Readonly<{
@@ -103,6 +108,7 @@ export async function POST(
     }
 
     const aiContext = await buildProjectAIContext(id);
+    const inputHash = calculateProjectContextHash(aiContext);
 
     if (!aiContext.evaluationRule) {
       throw new Error("未找到可用于评分的评审规则。");
@@ -113,9 +119,11 @@ export async function POST(
     }
 
     const template = await loadPromptTemplate("scoring");
+    const promptVersion = calculatePromptVersion("scoring", template);
     const userPrompt = buildScoringPrompt(aiContext, template);
     const aiResult = await callAI({
       task: "scoring",
+      projectId: id,
       systemPrompt:
         "你是严格遵循 JSON 输出约束的路演大赛评分专家。只输出合法 JSON，不输出 Markdown 或额外解释。",
       userPrompt,
@@ -130,6 +138,10 @@ export async function POST(
         weight: criterion.weight,
       })),
     );
+    const latestContext = await buildProjectAIContext(id);
+    if (calculateProjectContextHash(latestContext) !== inputHash) {
+      throw new Error("评分生成期间项目材料发生变化，请重新生成。");
+    }
 
     await prisma.scoreResult.create({
       data: {
@@ -138,6 +150,11 @@ export async function POST(
         totalScore: scoreJson.totalScore,
         scoreDetail: JSON.stringify(buildMaterialScoreDetail(scoreJson), null, 2),
         comments: scoreJson.overallComment,
+        inputHash,
+        promptVersion,
+        schemaVersion: MATERIAL_SCORE_SCHEMA_VERSION,
+        modelVersion: aiResult.model,
+        ruleVersion: aiContext.evaluationRule.version,
       },
     });
 

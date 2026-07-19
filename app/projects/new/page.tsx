@@ -2,13 +2,22 @@ import { redirect } from "next/navigation";
 import { NewProjectWizard } from "@/components/new-project-wizard";
 import { PageHeader } from "@/components/page-header";
 import { getCurrentAuthUserId } from "@/lib/auth-server";
-import { parseFileToText } from "@/lib/file-parser";
+import { removeProjectUpload } from "@/lib/file-upload";
 import {
-  removeProjectUpload,
-  saveProjectUpload,
-  validateInitialProjectMaterial,
-} from "@/lib/file-upload";
+  assertTextLength,
+  MAX_MATERIAL_TOKEN_LENGTH,
+  MAX_PROJECT_CONTACT_LENGTH,
+  MAX_PROJECT_DETAIL_LENGTH,
+  MAX_PROJECT_NAME_LENGTH,
+  MAX_PROJECT_SUMMARY_LENGTH,
+} from "@/lib/input-limits";
 import { prisma } from "@/lib/prisma";
+import {
+  deleteProjectMaterialRecord,
+  discardReservedProjectMaterial,
+  finalizeProjectMaterial,
+  reserveProjectMaterial,
+} from "@/lib/project-material-staging";
 import {
   generatePowerPointPreviewPdf,
   isPowerPointFile,
@@ -21,9 +30,7 @@ import {
 const getValue = (formData: FormData, key: string) =>
   String(formData.get(key) ?? "").trim();
 
-async function findProjectOwnerId() {
-  const currentUserId = await getCurrentAuthUserId();
-
+async function findProjectOwnerId(currentUserId: string | null) {
   if (currentUserId) {
     return currentUserId;
   }
@@ -74,11 +81,27 @@ async function findProjectOwnerId() {
 async function createProject(formData: FormData) {
   "use server";
 
-  const name = getValue(formData, "name");
-  const summary = getValue(formData, "summary");
+  const name = assertTextLength(
+    getValue(formData, "name"),
+    "项目名称",
+    MAX_PROJECT_NAME_LENGTH,
+  );
+  const summary = assertTextLength(
+    getValue(formData, "summary"),
+    "项目摘要",
+    MAX_PROJECT_SUMMARY_LENGTH,
+  );
   const field = getValue(formData, "field");
-  const applicationScenario = getValue(formData, "applicationScenario");
-  const technicalKeywords = getValue(formData, "technicalKeywords");
+  const applicationScenario = assertTextLength(
+    getValue(formData, "applicationScenario"),
+    "应用场景",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
+  const technicalKeywords = assertTextLength(
+    getValue(formData, "technicalKeywords"),
+    "技术关键词",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
   const trl = getValue(formData, "trl");
   const cooperationDemands = [
     ...new Set(
@@ -88,17 +111,44 @@ async function createProject(formData: FormData) {
         .filter(Boolean),
     ),
   ];
-  const otherDemandDetail = getValue(formData, "otherDemandDetail");
+  const otherDemandDetail = assertTextLength(
+    getValue(formData, "otherDemandDetail"),
+    "其他合作需求",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
   const conversionSupport = getValue(formData, "conversionSupport");
   const needsConversionSupport = conversionSupport === "需要";
-  const projectContact = getValue(formData, "projectContact");
+  const projectContact = assertTextLength(
+    getValue(formData, "projectContact"),
+    "项目联系人",
+    MAX_PROJECT_CONTACT_LENGTH,
+  );
   const contactPhone = getValue(formData, "contactPhone");
-  const materials = formData
-    .getAll("materials")
-    .filter(
-      (value): value is File =>
-        value instanceof File && value.size > 0 && value.name.trim() !== "",
-    );
+  const materialToken = assertTextLength(
+    getValue(formData, "materialToken"),
+    "材料令牌",
+    MAX_MATERIAL_TOKEN_LENGTH,
+  );
+  const businessModel = assertTextLength(
+    getValue(formData, "businessModel"),
+    "商业模式",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
+  const productForm = assertTextLength(
+    getValue(formData, "productForm"),
+    "产品形态",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
+  const trlBasis = assertTextLength(
+    getValue(formData, "trlReason"),
+    "TRL 判断依据",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
+  const teamInfo = assertTextLength(
+    getValue(formData, "teamInfo"),
+    "团队信息",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
 
   if (
     !name ||
@@ -130,52 +180,40 @@ async function createProject(formData: FormData) {
     throw new Error("请填写项目联系人和有效的 11 位手机号。");
   }
 
-  const material = validateInitialProjectMaterial(materials);
+  if (!materialToken) {
+    throw new Error("材料令牌无效，请重新上传材料。");
+  }
 
-  const ownerId = await findProjectOwnerId();
-  const project = await prisma.project.create({
-    data: {
-      ownerId,
-      name,
-      field,
-      stage: trl,
-      summary,
-      coreTechnology: technicalKeywords,
-      applicationScenario,
-      businessModel: getValue(formData, "businessModel"),
-      cooperationDemand: cooperationDemands.join("、"),
-      productForm: getValue(formData, "productForm"),
-      trlBasis: getValue(formData, "trlReason"),
-      teamInfo: getValue(formData, "teamInfo"),
-      cooperationDemandDetail: cooperationDemands.includes("其他")
-        ? otherDemandDetail
-        : "",
-      needsConversionSupport,
-      projectContact: needsConversionSupport ? projectContact : "",
-      contactPhone: needsConversionSupport ? contactPhone : "",
-    },
-    select: {
-      id: true,
-    },
-  });
-
-  let savedFile: Awaited<ReturnType<typeof saveProjectUpload>> | null = null;
+  const currentUserId = await getCurrentAuthUserId();
+  const ownerId = await findProjectOwnerId(currentUserId);
+  const material = await reserveProjectMaterial(materialToken, currentUserId);
+  let project: { id: string } | null = null;
+  let savedFile: Awaited<ReturnType<typeof finalizeProjectMaterial>> | null = null;
   try {
-    savedFile = await saveProjectUpload(project.id, material);
-    let extractedText: string | null = null;
-    let parseStatus = "SUCCESS";
-    let parseError: string | null = null;
-
-    try {
-      extractedText = await parseFileToText(
-        savedFile.filePath,
-        savedFile.fileType,
-      );
-    } catch (error) {
-      parseStatus = "FAILED";
-      parseError =
-        error instanceof Error ? error.message : "文件解析失败，请稍后重试。";
-    }
+    project = await prisma.project.create({
+      data: {
+        ownerId,
+        name,
+        field,
+        stage: trl,
+        summary,
+        coreTechnology: technicalKeywords,
+        applicationScenario,
+        businessModel,
+        cooperationDemand: cooperationDemands.join("、"),
+        productForm,
+        trlBasis,
+        teamInfo,
+        cooperationDemandDetail: cooperationDemands.includes("其他")
+          ? otherDemandDetail
+          : "",
+        needsConversionSupport,
+        projectContact: needsConversionSupport ? projectContact : "",
+        contactPhone: needsConversionSupport ? contactPhone : "",
+      },
+      select: { id: true },
+    });
+    savedFile = await finalizeProjectMaterial(project.id, material);
 
     const fileAsset = await prisma.fileAsset.create({
       data: {
@@ -184,9 +222,9 @@ async function createProject(formData: FormData) {
         fileType: savedFile.fileType,
         filePath: savedFile.filePath,
         fileSize: savedFile.fileSize,
-        extractedText,
-        parseStatus,
-        parseError,
+        extractedText: material.extractedText,
+        parseStatus: material.parseStatus,
+        parseError: material.parseError,
       },
     });
 
@@ -199,14 +237,21 @@ async function createProject(formData: FormData) {
         filePath: savedFile.filePath,
       });
     }
+    await deleteProjectMaterialRecord(material.id);
   } catch (error) {
     await Promise.allSettled([
-      prisma.project.delete({ where: { id: project.id } }),
+      ...(project ? [prisma.project.delete({ where: { id: project.id } })] : []),
       ...(savedFile ? [removeProjectUpload(savedFile.filePath)] : []),
+      ...(!savedFile
+        ? [discardReservedProjectMaterial(material.id, material.filePath)]
+        : [deleteProjectMaterialRecord(material.id)]),
     ]);
     throw error;
   }
 
+  if (!project) {
+    throw new Error("项目创建失败。");
+  }
   redirect(`/projects/${project.id}`);
 }
 

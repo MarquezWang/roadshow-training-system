@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import {
+  InvalidJsonBodyError,
+  MAX_ANSWER_TEXT_LENGTH,
+  readLimitedJson,
+  RequestBodyTooLargeError,
+} from "@/lib/input-limits";
 import { prisma } from "@/lib/prisma";
+import { resolveQaDurationSec } from "@/lib/qa-duration";
 
 type EndQaContext = Readonly<{
   params: Promise<{
@@ -13,7 +20,12 @@ function readNonEmptyText(value: unknown) {
     return null;
   }
 
-  return value.trim() || null;
+  const text = value.trim();
+  if (text.length > MAX_ANSWER_TEXT_LENGTH) {
+    throw new Error(`答辩文本不能超过 ${MAX_ANSWER_TEXT_LENGTH} 个字符。`);
+  }
+
+  return text || null;
 }
 
 function readOptionalDate(value: unknown) {
@@ -23,14 +35,6 @@ function readOptionalDate(value: unknown) {
 
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function readOptionalDuration(value: unknown) {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    return null;
-  }
-
-  return value;
 }
 
 function readOptionalId(value: unknown) {
@@ -55,7 +59,7 @@ export async function POST(request: NextRequest, context: EndQaContext) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as {
+  let body: {
     questionId?: unknown;
     answerText?: unknown;
     answerStartedAt?: unknown;
@@ -63,6 +67,17 @@ export async function POST(request: NextRequest, context: EndQaContext) {
     qaDurationSec?: unknown;
     recordingId?: unknown;
   };
+
+  try {
+    body = await readLimitedJson(request);
+  } catch (error) {
+    const message =
+      error instanceof RequestBodyTooLargeError ||
+      error instanceof InvalidJsonBodyError
+        ? error.message
+        : "请求正文无效。";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
   const session = await prisma.trainingSession.findUnique({
     where: { id: sessionId },
     select: { id: true, status: true, qaStartedAt: true },
@@ -81,7 +96,15 @@ export async function POST(request: NextRequest, context: EndQaContext) {
 
   const questionId = readOptionalId(body.questionId);
   const recordingId = readOptionalId(body.recordingId);
-  const answerText = readNonEmptyText(body.answerText);
+  let answerText: string | null;
+  try {
+    answerText = readNonEmptyText(body.answerText);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "答辩文本无效。" },
+      { status: 400 },
+    );
+  }
   const answerStartedAt = readOptionalDate(body.answerStartedAt);
   const revealedQuestionText = body.revealedQuestionText === true;
 
@@ -119,14 +142,11 @@ export async function POST(request: NextRequest, context: EndQaContext) {
   }
 
   const now = new Date();
-  const qaDurationSec =
-    readOptionalDuration(body.qaDurationSec) ??
-    (session.qaStartedAt
-      ? Math.max(
-          0,
-          Math.round((now.getTime() - session.qaStartedAt.getTime()) / 1000),
-        )
-      : null);
+  const qaDurationSec = resolveQaDurationSec(
+    session.qaStartedAt,
+    now,
+    body.qaDurationSec,
+  );
   const shouldSaveAnswer = Boolean(
     questionId && (answerText || recordingId || revealedQuestionText),
   );

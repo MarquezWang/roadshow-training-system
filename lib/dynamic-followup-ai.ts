@@ -30,6 +30,7 @@ export async function callMainDynamicFollowup({
 
   return callAI({
     task: "dynamicFollowup",
+    projectId: aiContext?.project.id,
     systemPrompt: DYNAMIC_FOLLOWUP_SYSTEM_PROMPT,
     userPrompt: followupPrompt,
     temperature: 0.3,
@@ -38,10 +39,12 @@ export async function callMainDynamicFollowup({
 }
 
 export async function callMismatchDynamicFollowup({
+  projectId,
   projectTitle,
   projectContext,
   pitchTranscript,
 }: {
+  projectId: string;
   projectTitle: string;
   projectContext: string;
   pitchTranscript: string;
@@ -57,6 +60,7 @@ export async function callMismatchDynamicFollowup({
 
   return callAI({
     task: "dynamicFollowup",
+    projectId,
     systemPrompt: DYNAMIC_FOLLOWUP_OR_EMPTY_SYSTEM_PROMPT,
     userPrompt: mismatchPrompt,
     temperature: 0.3,
@@ -65,11 +69,13 @@ export async function callMismatchDynamicFollowup({
 }
 
 export async function callContentDynamicFollowup({
+  projectId,
   projectTitle,
   projectContext,
   pitchTranscript,
   existingQuestions,
 }: {
+  projectId: string;
   projectTitle: string;
   projectContext: string;
   pitchTranscript: string;
@@ -85,6 +91,7 @@ export async function callContentDynamicFollowup({
 
   return callAI({
     task: "dynamicFollowup",
+    projectId,
     systemPrompt: DYNAMIC_FOLLOWUP_SYSTEM_PROMPT,
     userPrompt: contentPrompt,
     temperature: 0.3,

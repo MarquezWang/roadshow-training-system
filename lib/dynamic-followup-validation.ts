@@ -45,7 +45,6 @@ function isMismatchStyleQuestion(text: string) {
     "偏离了提交项目",
     "本轮路演内容",
     "现场讲述和项目材料",
-    "智能咖啡机",
   ];
 
   return (
@@ -116,56 +115,42 @@ function duplicatesRegularQuestion(
   });
 }
 
-function hasUnsupportedTranscriptClaim(text: string, transcriptText: string) {
-  const claimGroups = [
-    {
-      outputMarkers: ["小范围试点", "试点阶段", "进入试点"],
-      transcriptMarkers: ["小范围试点", "试点阶段", "试点"],
-    },
-    {
-      outputMarkers: ["有效数据"],
-      transcriptMarkers: ["有效数据"],
-    },
-    {
-      outputMarkers: ["规模化复制", "规模化复制条件"],
-      transcriptMarkers: ["规模化", "复制"],
-    },
-    {
-      outputMarkers: ["客户反馈"],
-      transcriptMarkers: ["客户反馈"],
-    },
-    {
-      outputMarkers: ["付费客户"],
-      transcriptMarkers: ["付费客户"],
-    },
-    {
-      outputMarkers: ["数据指标"],
-      transcriptMarkers: ["数据指标"],
-    },
-  ];
-
-  return claimGroups.some(
-    ({ outputMarkers, transcriptMarkers }) =>
-      outputMarkers.some((marker) => text.includes(marker)) &&
-      !transcriptMarkers.some((marker) => transcriptText.includes(marker)),
-  );
+function normalizeForAttribution(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[\s，。！？、；：,.!?;:'"“”‘’（）()【】\[\]-]/g, "");
 }
 
-const unsupportedExampleLeakMarkers = [
-  "供电所",
-  "线路",
-  "运维人员",
-  "故障点",
-  "天气条件",
-  "识别准确率",
-  "两个县区",
-  "县区",
-] as const;
+function bigrams(text: string) {
+  const normalized = normalizeForAttribution(text);
+  const result = new Set<string>();
 
-function hasUnsupportedExampleLeak(text: string, transcriptText: string) {
-  return unsupportedExampleLeakMarkers.some(
-    (marker) => text.includes(marker) && !transcriptText.includes(marker),
+  for (let index = 0; index < normalized.length - 1; index += 1) {
+    result.add(normalized.slice(index, index + 2));
+  }
+
+  return result;
+}
+
+function hasUnsupportedTranscriptAttribution(
+  text: string,
+  transcriptText: string,
+) {
+  const match = text.match(
+    /(?:你|你们)(?:在)?刚才(?:提到|讲到|说到|介绍到)([^。；？?]{4,100})/,
   );
+  if (!match) return false;
+
+  const claim = match[1].split(/请(?:说明|介绍|补充)|能否|如何/)[0];
+  const claimBigrams = bigrams(claim);
+  if (claimBigrams.size < 3) return false;
+
+  const transcriptBigrams = bigrams(transcriptText);
+  const supportedCount = [...claimBigrams].filter((part) =>
+    transcriptBigrams.has(part),
+  ).length;
+
+  return supportedCount / claimBigrams.size < 0.4;
 }
 
 export function validateMainFollowupText({
@@ -177,11 +162,8 @@ export function validateMainFollowupText({
   if (text.length > 180) return "main_output_too_long";
   if (hasContextLeak(text)) return "main_output_context_leak";
   if (countQuestionMarks(text) > 1) return "main_output_multiple_questions";
-  if (hasUnsupportedTranscriptClaim(text, transcriptText)) {
-    return "main_output_unsupported_transcript_claim";
-  }
-  if (hasUnsupportedExampleLeak(text, transcriptText)) {
-    return "main_output_unsupported_example_leak";
+  if (hasUnsupportedTranscriptAttribution(text, transcriptText)) {
+    return "main_output_unsupported_transcript_attribution";
   }
   if (duplicatesRegularQuestion(text, regularQuestions)) {
     return "main_output_duplicate_regular_question";
@@ -200,11 +182,8 @@ export function validateFallbackFollowupText({
   if (countQuestionMarks(text) > 1) {
     return "fallback_output_multiple_questions";
   }
-  if (hasUnsupportedTranscriptClaim(text, transcriptText)) {
-    return "fallback_output_unsupported_transcript_claim";
-  }
-  if (hasUnsupportedExampleLeak(text, transcriptText)) {
-    return "fallback_output_unsupported_example_leak";
+  if (hasUnsupportedTranscriptAttribution(text, transcriptText)) {
+    return "fallback_output_unsupported_transcript_attribution";
   }
   if (duplicatesRegularQuestion(text, regularQuestions)) {
     return "fallback_output_duplicate_regular_question";

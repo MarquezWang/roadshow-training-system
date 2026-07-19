@@ -3,17 +3,19 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-async function importTsModule(relativePath) {
+async function tsModuleUrl(relativePath, transform = (source) => source) {
   const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {
+  const output = ts.transpileModule(transform(source), {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
-  const url = `data:text/javascript;base64,${Buffer.from(output).toString("base64")}`;
+  return `data:text/javascript;base64,${Buffer.from(output).toString("base64")}`;
+}
 
-  return import(url);
+async function importTsModule(relativePath, transform = (source) => source) {
+  return import(await tsModuleUrl(relativePath, transform));
 }
 
 const fileSelection = await importTsModule(
@@ -25,8 +27,16 @@ const expertSelection = await importTsModule(
 const historicalSelection = await importTsModule(
   "../../lib/project-context/historical-questions.ts",
 );
+const persistedJsonVersionsUrl = await tsModuleUrl(
+  "../../lib/persisted-json-versions.ts",
+);
 const snapshot = await importTsModule(
   "../../lib/project-context/snapshot.ts",
+  (source) =>
+    source.replace(
+      'from "@/lib/persisted-json-versions"',
+      `from "${persistedJsonVersionsUrl}"`,
+    ),
 );
 
 function expertComment(
@@ -85,6 +95,20 @@ test("project context snapshot only accepts the required structural arrays", () 
   assert.deepEqual(
     snapshot.parseProjectAIContextSnapshot(JSON.stringify(valid)),
     valid,
+  );
+  assert.deepEqual(
+    snapshot.parseProjectAIContextSnapshot(
+      JSON.stringify(valid),
+      "project-ai-context:2026-07-19.1",
+    ),
+    valid,
+  );
+  assert.equal(
+    snapshot.parseProjectAIContextSnapshot(
+      JSON.stringify(valid),
+      "project-ai-context:v999",
+    ),
+    null,
   );
   assert.equal(snapshot.parseProjectAIContextSnapshot(undefined), null);
   assert.equal(snapshot.parseProjectAIContextSnapshot("{"), null);

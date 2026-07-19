@@ -3,6 +3,7 @@ import { mkdir, rename, rm, writeFile } from "fs/promises";
 import path from "path";
 
 export const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
+export const MAX_FILE_NAME_LENGTH = 255;
 
 const ALLOWED_EXTENSIONS = new Set([".pdf", ".pptx", ".docx", ".txt"]);
 const INITIAL_MATERIAL_EXTENSIONS = new Set([".pdf", ".pptx"]);
@@ -26,7 +27,10 @@ export function isSupportedUploadFile(fileName: string) {
   return ALLOWED_EXTENSIONS.has(path.extname(fileName).toLowerCase());
 }
 
-export function validateProjectUpload(file: File) {
+export function validateProjectUploadMetadata(file: {
+  name: string;
+  size: number;
+}) {
   if (!file || file.size === 0) {
     throw new Error("请选择需要上传的文件。");
   }
@@ -35,9 +39,17 @@ export function validateProjectUpload(file: File) {
     throw new Error("文件大小不能超过 50MB。");
   }
 
+  if (file.name.length > MAX_FILE_NAME_LENGTH) {
+    throw new Error(`文件名不能超过 ${MAX_FILE_NAME_LENGTH} 个字符。`);
+  }
+
   if (!isSupportedUploadFile(file.name)) {
     throw new Error("仅支持上传 PDF、PPTX、DOCX 或 TXT 文件。");
   }
+}
+
+export function validateProjectUpload(file: File) {
+  validateProjectUploadMetadata(file);
 }
 
 export class InitialProjectMaterialValidationError extends Error {
@@ -47,15 +59,23 @@ export class InitialProjectMaterialValidationError extends Error {
   }
 }
 
-export function validateInitialProjectMaterial(files: File[]) {
-  if (files.length !== 1 || files[0].size === 0) {
+export function validateInitialProjectMaterialMetadata(file: {
+  name: string;
+  size: number;
+}) {
+  if (!file || file.size === 0) {
     throw new InitialProjectMaterialValidationError(
       "仅支持上传 1 个 PPTX 或 PDF 文件。",
     );
   }
 
-  const file = files[0];
   const extension = path.extname(file.name).toLowerCase();
+
+  if (file.name.length > MAX_FILE_NAME_LENGTH) {
+    throw new InitialProjectMaterialValidationError(
+      `文件名不能超过 ${MAX_FILE_NAME_LENGTH} 个字符。`,
+    );
+  }
 
   if (!INITIAL_MATERIAL_EXTENSIONS.has(extension)) {
     throw new InitialProjectMaterialValidationError(
@@ -70,6 +90,16 @@ export function validateInitialProjectMaterial(files: File[]) {
   }
 
   return file;
+}
+
+export function validateInitialProjectMaterial(files: File[]) {
+  if (files.length !== 1) {
+    throw new InitialProjectMaterialValidationError(
+      "仅支持上传 1 个 PPTX 或 PDF 文件。",
+    );
+  }
+
+  return validateInitialProjectMaterialMetadata(files[0]);
 }
 
 function sanitizeProjectId(projectId: string) {

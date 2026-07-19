@@ -1,5 +1,6 @@
 import { devError, devLog } from "@/lib/dev-log";
 import { prisma } from "@/lib/prisma";
+import { cleanupExpiredProjectMaterials } from "@/lib/project-material-staging";
 import { runUploadMaintenancePass } from "@/lib/upload-maintenance-job.mjs";
 
 const DEFAULT_INITIAL_DELAY_MS = 30_000;
@@ -39,8 +40,24 @@ export function getConfiguredUploadMaintenanceOptions() {
   };
 }
 
-export function isUploadMaintenanceEnabled() {
-  return process.env.UPLOAD_MAINTENANCE_ENABLED?.trim().toLowerCase() === "true";
+export function isUploadMaintenanceEnabled(env = process.env) {
+  return env.UPLOAD_MAINTENANCE_ENABLED?.trim().toLowerCase() === "true";
+}
+
+export function getUploadMaintenanceSchedule(env = process.env) {
+  return {
+    initialDelayMs: Math.max(
+      5_000,
+      positiveNumber(
+        env.UPLOAD_MAINTENANCE_INITIAL_DELAY_MS,
+        DEFAULT_INITIAL_DELAY_MS,
+      ),
+    ),
+    intervalMs: Math.max(
+      60_000,
+      hoursToMs(env.UPLOAD_MAINTENANCE_INTERVAL_HOURS, 6),
+    ),
+  };
 }
 
 let maintenancePassRunning = false;
@@ -53,6 +70,7 @@ export async function runConfiguredUploadMaintenancePass() {
       prisma,
       getConfiguredUploadMaintenanceOptions(),
     );
+    await cleanupExpiredProjectMaterials(100);
     if (result.state === "completed" && result.report && result.reconciled) {
       devLog("[upload-maintenance] pass completed", {
         deleted: result.report.deleted.length,
@@ -85,17 +103,7 @@ export function startUploadMaintenanceWorker() {
     return true;
   }
 
-  const initialDelayMs = Math.max(
-    5_000,
-    positiveNumber(
-      process.env.UPLOAD_MAINTENANCE_INITIAL_DELAY_MS,
-      DEFAULT_INITIAL_DELAY_MS,
-    ),
-  );
-  const intervalMs = Math.max(
-    60_000,
-    hoursToMs(process.env.UPLOAD_MAINTENANCE_INTERVAL_HOURS, 6),
-  );
+  const { initialDelayMs, intervalMs } = getUploadMaintenanceSchedule();
   const initialTimer = setTimeout(() => {
     globalForUploadMaintenance.uploadMaintenanceInitialTimer = undefined;
     void runConfiguredUploadMaintenancePass();

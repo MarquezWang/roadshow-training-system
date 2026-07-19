@@ -7,10 +7,12 @@ import {
   type ProjectAIContext,
 } from "@/lib/project-context";
 import { parseAIJson } from "@/lib/json-utils";
+import { parseStoredMaterialDiagnosis } from "@/lib/material-diagnosis";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
 import { validateGeneratedQuestions } from "@/lib/question-validator";
+import { parseStoredMaterialScoreDetail } from "@/lib/scoring-result-detail";
 
 type QuestionGenerationRouteContext = Readonly<{
   params: Promise<{
@@ -29,18 +31,6 @@ function redirectToProject(
   });
 
   return NextResponse.redirect(url, 303);
-}
-
-function parseStoredJson(value: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
 }
 
 function buildQuestionPrompt(
@@ -68,7 +58,7 @@ function buildQuestionPrompt(
 }
 
 async function findLatestDiagnosis(projectId: string) {
-  const diagnosis = await prisma.diagnosis.findFirst({
+  const diagnosis = await prisma.materialDiagnosis.findFirst({
     where: {
       projectId,
     },
@@ -76,11 +66,22 @@ async function findLatestDiagnosis(projectId: string) {
       createdAt: "desc",
     },
     select: {
+      ruleName: true,
+      totalWeight: true,
       summary: true,
-      completeness: true,
-      issues: true,
-      risks: true,
-      suggestions: true,
+      readinessLevel: true,
+      readinessScore: true,
+      strengths: true,
+      weaknesses: true,
+      priorityTasks: true,
+      judgeQuestions: true,
+      criteriaResults: true,
+      rawResultJson: true,
+      inputHash: true,
+      promptVersion: true,
+      schemaVersion: true,
+      modelVersion: true,
+      ruleVersion: true,
       createdAt: true,
     },
   });
@@ -89,14 +90,28 @@ async function findLatestDiagnosis(projectId: string) {
     return null;
   }
 
-  return {
-    summary: diagnosis.summary,
-    completeness: diagnosis.completeness,
-    issues: parseStoredJson(diagnosis.issues),
-    risks: parseStoredJson(diagnosis.risks),
-    suggestions: parseStoredJson(diagnosis.suggestions),
-    createdAt: diagnosis.createdAt,
-  };
+  try {
+    return {
+      ...parseStoredMaterialDiagnosis(diagnosis),
+      ruleName: diagnosis.ruleName,
+      totalWeight: diagnosis.totalWeight,
+      provenance: {
+        inputHash: diagnosis.inputHash,
+        promptVersion: diagnosis.promptVersion,
+        schemaVersion: diagnosis.schemaVersion,
+        modelVersion: diagnosis.modelVersion,
+        ruleVersion: diagnosis.ruleVersion,
+      },
+      createdAt: diagnosis.createdAt,
+    };
+  } catch (error) {
+    console.warn("忽略无法解析的历史材料诊断。", {
+      projectId,
+      schemaVersion: diagnosis.schemaVersion,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 async function findLatestScoreResult(projectId: string) {
@@ -111,6 +126,11 @@ async function findLatestScoreResult(projectId: string) {
       totalScore: true,
       scoreDetail: true,
       comments: true,
+      inputHash: true,
+      promptVersion: true,
+      schemaVersion: true,
+      modelVersion: true,
+      ruleVersion: true,
       createdAt: true,
       rule: {
         select: {
@@ -126,13 +146,32 @@ async function findLatestScoreResult(projectId: string) {
     return null;
   }
 
-  return {
-    totalScore: scoreResult.totalScore,
-    scoreDetail: parseStoredJson(scoreResult.scoreDetail),
-    comments: scoreResult.comments,
-    rule: scoreResult.rule,
-    createdAt: scoreResult.createdAt,
-  };
+  try {
+    return {
+      totalScore: scoreResult.totalScore,
+      scoreDetail: parseStoredMaterialScoreDetail(
+        scoreResult.scoreDetail,
+        scoreResult.schemaVersion,
+      ),
+      comments: scoreResult.comments,
+      rule: scoreResult.rule,
+      provenance: {
+        inputHash: scoreResult.inputHash,
+        promptVersion: scoreResult.promptVersion,
+        schemaVersion: scoreResult.schemaVersion,
+        modelVersion: scoreResult.modelVersion,
+        ruleVersion: scoreResult.ruleVersion,
+      },
+      createdAt: scoreResult.createdAt,
+    };
+  } catch (error) {
+    console.warn("忽略无法解析的历史评分结果。", {
+      projectId,
+      schemaVersion: scoreResult.schemaVersion,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 export async function POST(
@@ -211,13 +250,21 @@ export async function POST(
     );
     const aiResult = await callAI({
       task: "judgeQuestionGeneration",
+      projectId: id,
       systemPrompt:
         "你是严格遵守 JSON 输出约束的路演答辩训练专家。只输出合法 JSON，不输出 Markdown 或额外解释。",
       userPrompt,
       temperature: 0.2,
       maxOutputTokens: 6_000,
     });
-    const questionJson = validateGeneratedQuestions(parseAIJson(aiResult.text));
+    const questionJson = validateGeneratedQuestions(parseAIJson(aiResult.text), {
+      sourceTexts: [
+        ...Object.values(aiContext.project).filter(
+          (value): value is string => typeof value === "string",
+        ),
+        ...aiContext.files.map((file) => file.extractedText),
+      ],
+    });
 
     await prisma.question.createMany({
       data: questionJson.questions.map((question) => ({

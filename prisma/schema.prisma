@@ -8,18 +8,39 @@ datasource db {
 }
 
 model User {
-  id             String    @id @default(cuid())
-  name           String
-  email          String    @unique
-  passwordHash   String?
-  sessionVersion Int       @default(0)
-  disabledAt     DateTime?
-  role           String    @default("TEAM")
-  projects       Project[]
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                      String                   @id @default(cuid())
+  name                    String
+  email                   String                   @unique
+  passwordHash            String?
+  sessionVersion          Int                      @default(0)
+  disabledAt              DateTime?
+  role                    String                   @default("TEAM")
+  projects                Project[]
+  pendingProjectMaterials PendingProjectMaterial[]
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
 
   @@index([role, disabledAt])
+}
+
+model PendingProjectMaterial {
+  id            String    @id
+  ownerId       String?
+  owner         User?     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  originalName  String
+  fileType      String
+  filePath      String    @unique
+  fileSize      Int
+  extractedText String?
+  parseStatus   String
+  parseError    String?
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([ownerId, expiresAt])
+  @@index([expiresAt, consumedAt])
 }
 
 model LoginThrottle {
@@ -33,23 +54,56 @@ model LoginThrottle {
 }
 
 model AsyncJob {
-  id             String    @id @default(cuid())
-  jobKey         String    @unique
-  jobType        String
-  resourceId     String
-  status         String    @default("RUNNING")
-  ownerToken     String
-  leaseExpiresAt DateTime?
-  attempt        Int       @default(1)
-  maxAttempts    Int       @default(1)
-  nextAttemptAt  DateTime?
-  errorMessage   String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                   String    @id @default(cuid())
+  jobKey               String    @unique
+  jobType              String
+  resourceId           String
+  status               String    @default("RUNNING")
+  ownerToken           String
+  leaseExpiresAt       DateTime?
+  attempt              Int       @default(1)
+  maxAttempts          Int       @default(1)
+  nextAttemptAt        DateTime?
+  errorMessage         String?
+  payloadJson          String?
+  payloadSchemaVersion String    @default("async-job-payload:v1")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   @@index([jobType, resourceId])
   @@index([status, leaseExpiresAt])
   @@index([jobType, status, nextAttemptAt])
+}
+
+model WorkerHeartbeat {
+  id                        String   @id
+  workerType                String   @default("BACKGROUND")
+  hostname                  String
+  processId                 Int
+  capabilitiesJson          String
+  capabilitiesSchemaVersion String   @default("worker-capabilities:v1")
+  startedAt                 DateTime
+  lastSeenAt                DateTime
+  expiresAt                 DateTime
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  @@index([workerType, expiresAt])
+}
+
+model AiQuotaUsage {
+  id           String   @id @default(cuid())
+  userKey      String
+  projectKey   String
+  task         String
+  dayKey       String
+  requestCount Int      @default(0)
+  tokenCount   Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userKey, projectKey, task, dayKey])
+  @@index([userKey, dayKey])
 }
 
 model Project {
@@ -72,7 +126,6 @@ model Project {
   projectContact          String               @default("")
   contactPhone            String               @default("")
   fileAssets              FileAsset[]
-  diagnoses               Diagnosis[]
   materialDiagnoses       MaterialDiagnosis[]
   scoreResults            ScoreResult[]
   questions               Question[]
@@ -105,13 +158,13 @@ model FileAsset {
   previewAttemptId   String?
   previewStartedAt   DateTime?
   includeInAIContext Boolean      @default(true)
-  uploadKey           String?
+  uploadKey          String?
   slideEvents        SlideEvent[]
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
-  @@index([projectId])
   @@unique([projectId, uploadKey])
+  @@index([projectId])
 }
 
 model TrainingSession {
@@ -128,6 +181,7 @@ model TrainingSession {
   currentPageIndex       Int                  @default(0)
   primaryFileId          String?
   projectContextSnapshot String?
+  contextSchemaVersion   String               @default("project-ai-context:legacy-v0")
   currentAnalysisId      String?              @unique
   currentAnalysis        TrainingAnalysis?    @relation("CurrentTrainingAnalysis", fields: [currentAnalysisId], references: [id], onDelete: SetNull)
   slideEvents            SlideEvent[]
@@ -180,33 +234,34 @@ model TrainingRecording {
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
+  @@unique([sessionId, uploadKey])
   @@index([sessionId])
   @@index([projectId])
   @@index([phase])
   @@index([status])
-  @@unique([sessionId, uploadKey])
 }
 
 model TrainingTranscript {
-  id           String             @id @default(cuid())
-  recordingId  String             @unique
-  recording    TrainingRecording  @relation(fields: [recordingId], references: [id], onDelete: Cascade)
-  sessionId    String
-  session      TrainingSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  projectId    String
-  project      Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  status       String             @default("PENDING")
-  source       String             @default("MANUAL")
-  language     String             @default("zh-CN")
-  text         String
-  segmentsJson String?
-  errorMessage String?
-  startedAt    DateTime?
-  completedAt  DateTime?
-  revision     Int                @default(0)
-  analyses     TrainingAnalysis[]
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  id                    String             @id @default(cuid())
+  recordingId           String             @unique
+  recording             TrainingRecording  @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+  sessionId             String
+  session               TrainingSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  projectId             String
+  project               Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status                String             @default("PENDING")
+  source                String             @default("MANUAL")
+  language              String             @default("zh-CN")
+  text                  String
+  segmentsJson          String?
+  segmentsSchemaVersion String             @default("training-transcript-segments:legacy-v0")
+  errorMessage          String?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  revision              Int                @default(0)
+  analyses              TrainingAnalysis[]
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
 
   @@index([sessionId])
   @@index([projectId])
@@ -297,21 +352,6 @@ model TrainingAnswer {
   @@index([recordingId])
 }
 
-model Diagnosis {
-  id           String   @id @default(cuid())
-  projectId    String
-  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  summary      String
-  completeness String
-  issues       String
-  risks        String
-  suggestions  String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@index([projectId])
-}
-
 model MaterialDiagnosis {
   id              String   @id @default(cuid())
   projectId       String
@@ -326,7 +366,11 @@ model MaterialDiagnosis {
   priorityTasks   String
   judgeQuestions  String
   criteriaResults String
+  rawResultJson   String   @default("{}")
   inputHash       String   @default("")
+  promptVersion   String   @default("legacy-unknown")
+  schemaVersion   String   @default("legacy-unknown")
+  modelVersion    String   @default("legacy-unknown")
   ruleVersion     String   @default("")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -336,16 +380,21 @@ model MaterialDiagnosis {
 }
 
 model ScoreResult {
-  id          String          @id @default(cuid())
-  projectId   String
-  project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  ruleId      String?
-  rule        EvaluationRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
-  totalScore  Int
-  scoreDetail String
-  comments    String
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id            String          @id @default(cuid())
+  projectId     String
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ruleId        String?
+  rule          EvaluationRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  totalScore    Int
+  scoreDetail   String
+  comments      String
+  inputHash     String          @default("")
+  promptVersion String          @default("legacy-unknown")
+  schemaVersion String          @default("legacy-unknown")
+  modelVersion  String          @default("legacy-unknown")
+  ruleVersion   String          @default("legacy-unknown")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
   @@index([projectId])
   @@index([ruleId])
@@ -435,7 +484,8 @@ model EvaluationCriterion {
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
-  @@index([ruleId])
+  @@unique([ruleId, sortOrder])
+  @@unique([ruleId, name])
 }
 
 model ExpertComment {

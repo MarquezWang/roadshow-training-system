@@ -137,7 +137,7 @@ export function TrainingQaClient({
 
       return next;
     });
-  }, []);
+  }, [setRevealedQuestionIds]);
 
   const {
     questionTextDialog,

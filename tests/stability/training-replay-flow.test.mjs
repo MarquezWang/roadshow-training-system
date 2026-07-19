@@ -126,6 +126,16 @@ test("转写时间戳解析会过滤无效项并按开始时间排序", () => {
   assert.deepEqual(parseTranscriptSegments("not-json"), []);
 });
 
+test("转写时间戳解析拒绝未知的未来 schema", () => {
+  assert.deepEqual(
+    parseTranscriptSegments(
+      '[{"startMs":0,"endMs":1000,"text":"有效文本"}]',
+      "training-transcript-segments:v999",
+    ),
+    [],
+  );
+});
+
 test("页面转写优先使用时间戳精确匹配", () => {
   const excerpt = getTranscriptExcerptForSegment(
     "完整转写不会被使用",

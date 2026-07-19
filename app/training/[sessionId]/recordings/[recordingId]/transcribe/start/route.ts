@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import {
-  startTranscriptionTask,
+  startOrQueueTranscriptionTask,
   TranscribeHttpError,
 } from "@/lib/training-transcribe-task";
 
@@ -22,7 +22,7 @@ export async function POST(
   }
 
   try {
-    const result = await startTranscriptionTask(sessionId, recordingId, {
+    const result = await startOrQueueTranscriptionTask(sessionId, recordingId, {
       // 显式调用启动端点允许用户在最终失败后开启新一轮尝试。
       forceRetry: true,
     });

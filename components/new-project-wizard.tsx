@@ -66,9 +66,18 @@ type MaterialParseResponse =
   | {
       status: "parsed";
       material: {
+        materialToken: string;
         fileName: string;
         fileType: "pdf" | "pptx";
-        extractedText: string;
+      };
+    }
+  | {
+      status: "parse_failed";
+      message: string;
+      material: {
+        materialToken: string;
+        fileName: string;
+        fileType: "pdf" | "pptx";
       };
     }
   | { status: "failed" | "validation_error"; message: string };
@@ -134,18 +143,25 @@ function uploadAndParseMaterial(
   file: File,
   onUploadComplete: () => void,
 ) {
-  return new Promise<Extract<MaterialParseResponse, { status: "parsed" }>>(
+  return new Promise<
+    Extract<MaterialParseResponse, { status: "parsed" | "parse_failed" }>
+  >(
     (resolve, reject) => {
       const request = new XMLHttpRequest();
-      const body = new FormData();
-      body.append("materials", file);
       request.open("POST", "/api/projects/material-parse");
       request.responseType = "json";
+      request.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      request.setRequestHeader("X-Material-Upload", "raw-v1");
+      request.setRequestHeader("X-Material-Name", encodeURIComponent(file.name));
+      request.setRequestHeader("X-Material-Size", String(file.size));
       request.upload.addEventListener("load", onUploadComplete);
       request.addEventListener("load", () => {
         const response = request.response as MaterialParseResponse | null;
 
-        if (response?.status === "parsed") {
+        if (
+          response?.status === "parsed" ||
+          response?.status === "parse_failed"
+        ) {
           resolve(response);
           return;
         }
@@ -164,7 +180,7 @@ function uploadAndParseMaterial(
       request.addEventListener("error", () =>
         reject(new MaterialParseError(MATERIAL_PARSE_FAILURE_MESSAGE)),
       );
-      request.send(body);
+      request.send(file);
     },
   );
 }
@@ -281,6 +297,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
   const [parsedMaterial, setParsedMaterial] = useState<ParsedMaterial | null>(
     null,
   );
+  const [materialToken, setMaterialToken] = useState("");
   const [isRecognitionOverlayVisible, setRecognitionOverlayVisible] =
     useState(false);
   const [fileNames, setFileNames] = useState<string[]>([]);
@@ -444,13 +461,12 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
 
   async function requestRecognition(
     mode: "base" | "trl",
-    fileName: string,
-    extractedText: string,
+    token: string,
   ) {
     const response = await fetch("/api/projects/profile-recognition", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName, extractedText, mode }),
+      body: JSON.stringify({ materialToken: token, mode }),
     });
     const result = (await response.json()) as RecognitionResponse;
     return { response, result };
@@ -698,6 +714,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
     setMaterialError("");
     setStepError("");
     setParsedMaterial(null);
+    setMaterialToken("");
     setProfileVisible(false);
     setProfileFormVisible(false);
 
@@ -708,10 +725,18 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
       if (recognitionRunRef.current !== runId) return;
 
       setFileType(parsed.material.fileType);
-      setParsedMaterial(parsed.material);
+      setMaterialToken(parsed.material.materialToken);
       setProfileVisible(true);
-      setProfileFormVisible(false);
-      setWorkflowStatus("ready");
+      if (parsed.status === "parse_failed") {
+        setParsedMaterial(null);
+        setMaterialError(parsed.message || MATERIAL_PARSE_FAILURE_MESSAGE);
+        setProfileFormVisible(true);
+        setWorkflowStatus("parse_failed");
+      } else {
+        setParsedMaterial(parsed.material);
+        setProfileFormVisible(false);
+        setWorkflowStatus("ready");
+      }
     } catch (error) {
       if (recognitionRunRef.current !== runId) return;
 
@@ -749,8 +774,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
     try {
       const baseRequest = await requestRecognition(
         "base",
-        parsedMaterial.fileName,
-        parsedMaterial.extractedText,
+        parsedMaterial.materialToken,
       );
       if (recognitionRunRef.current !== runId) return;
       await minimumOverlay;
@@ -771,8 +795,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
 
       const trlRequestPromise = requestRecognition(
         "trl",
-        parsedMaterial.fileName,
-        parsedMaterial.extractedText,
+        parsedMaterial.materialToken,
       );
 
       const applied = await applyBaseRecognition(
@@ -892,6 +915,11 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
       return;
     }
 
+    if (!materialToken) {
+      setStepError("材料令牌已失效，请返回上一步重新上传材料。");
+      return;
+    }
+
     if (
       conversionSupport === "需要" &&
       (!projectContact.trim() || !/^1[3-9]\d{9}$/.test(contactPhone))
@@ -954,6 +982,8 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
 
     resetProfileDraft();
     setFileNames([]);
+    setParsedMaterial(null);
+    setMaterialToken("");
     setFileType("");
     setProfileVisible(false);
     setProfileFormVisible(false);
@@ -964,6 +994,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
 
   return (
     <form ref={formRef} onSubmit={handleSubmit}>
+      <input type="hidden" name="materialToken" value={materialToken} />
       <ol className="grid gap-3 border-b border-slate-200 pb-6 sm:grid-cols-2">
         {["上传材料并确认档案", "合作需求与转化对接"].map(
           (label, index) => {
@@ -1038,7 +1069,6 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
           <input
             ref={fileInputRef}
             type="file"
-            name="materials"
             accept=".pptx,.pdf"
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
@@ -1047,6 +1077,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
                 resetProfileDraft();
                 setFileNames([]);
                 setParsedMaterial(null);
+                setMaterialToken("");
                 setMaterialError("");
                 setFileType("");
                 setProfileVisible(false);
@@ -1073,6 +1104,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
                 event.currentTarget.value = "";
                 setFileNames([]);
                 setParsedMaterial(null);
+                setMaterialToken("");
                 setFileType("");
                 setProfileVisible(false);
                 setProfileFormVisible(false);
@@ -1088,6 +1120,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
               resetProfileDraft(false);
               setFileNames([file.name]);
               setParsedMaterial(null);
+              setMaterialToken("");
               setFileType(nextFileType);
               setProfileVisible(false);
               setProfileFormVisible(false);
@@ -1228,6 +1261,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
             <input
               name="name"
               value={name}
+              maxLength={100}
               onChange={(event) => {
                 markFieldManual("name");
                 setName(event.target.value);
@@ -1246,6 +1280,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
             <textarea
               name="summary"
               value={summary}
+              maxLength={1000}
               onChange={(event) => {
                 markFieldManual("summary");
                 setSummary(event.target.value);
@@ -1290,6 +1325,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
             <textarea
               name="applicationScenario"
               value={applicationScenario}
+              maxLength={5000}
               onChange={(event) => {
                 markFieldManual("applicationScenario");
                 setApplicationScenario(event.target.value);
@@ -1338,6 +1374,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
             <div className="mt-3 flex max-w-2xl gap-2">
               <input
                 value={keywordDraft}
+                maxLength={100}
                 onChange={(event) => {
                   markFieldManual("technicalKeywords");
                   setKeywordDraft(event.target.value);
@@ -1370,6 +1407,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
             <input
               name="productForm"
               value={productForm}
+              maxLength={5000}
               onChange={(event) => {
                 markFieldManual("productForm");
                 setProductForm(event.target.value);
@@ -1495,6 +1533,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
               <textarea
                 name="otherDemandDetail"
                 value={otherDemandDetail}
+                maxLength={5000}
                 onChange={(event) => setOtherDemandDetail(event.target.value)}
                 required
                 rows={3}
@@ -1547,6 +1586,7 @@ export function NewProjectWizard({ action }: NewProjectWizardProps) {
                 <input
                   name="projectContact"
                   value={projectContact}
+                  maxLength={100}
                   onChange={(event) => setProjectContact(event.target.value)}
                   required
                   placeholder="请输入项目联系人姓名"

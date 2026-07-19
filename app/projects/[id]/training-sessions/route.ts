@@ -3,6 +3,7 @@ import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { prisma } from "@/lib/prisma";
 import { abortableTrainingStatuses } from "@/lib/training-status";
 import { buildProjectAIContext } from "@/lib/project-context";
+import { PROJECT_CONTEXT_SCHEMA_VERSION } from "@/lib/persisted-json-versions";
 
 type TrainingSessionRouteContext = Readonly<{
   params: Promise<{
@@ -45,6 +46,7 @@ export async function POST(
         projectId: id,
         status: "CREATED",
         projectContextSnapshot,
+        contextSchemaVersion: PROJECT_CONTEXT_SCHEMA_VERSION,
       },
       select: {
         id: true,

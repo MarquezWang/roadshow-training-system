@@ -10,7 +10,6 @@ async function main() {
   await prisma.question.deleteMany();
   await prisma.report.deleteMany();
   await prisma.scoreResult.deleteMany();
-  await prisma.diagnosis.deleteMany();
   await prisma.fileAsset.deleteMany();
   await prisma.project.deleteMany();
   await prisma.evaluationCriterion.deleteMany();

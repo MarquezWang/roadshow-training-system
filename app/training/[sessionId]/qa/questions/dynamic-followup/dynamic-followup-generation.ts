@@ -22,6 +22,7 @@ import type {
   DynamicFollowupGenerationResult,
   PreparedDynamicFollowupInput,
 } from "./dynamic-followup-types";
+import { wrapUntrustedPromptData } from "@/lib/prompt-data-boundary";
 
 const SHOULD_ATTEMPT_MISMATCH_FALLBACK = false;
 
@@ -57,6 +58,7 @@ async function attemptMismatchFallback(
       sessionId,
     });
     const mismatchResult = await callMismatchDynamicFollowup({
+      projectId,
       projectTitle: projectName ?? "",
       projectContext: projectContextText.slice(0, 2000),
       pitchTranscript: transcriptText,
@@ -138,13 +140,13 @@ function buildContentFallbackRetryPrompt(input: PreparedDynamicFollowupInput) {
 7. 优先追问“讲到了但没有讲透”的点，例如验证方式、数据指标、落地计划、用户反馈、商业模式。
 
 项目标题：
-${input.projectName ?? ""}
+${wrapUntrustedPromptData("projectTitle", input.projectName ?? "")}
 
 路演转写：
-${input.transcriptText.slice(0, 1200)}
+${wrapUntrustedPromptData("pitchTranscript", input.transcriptText.slice(0, 1200))}
 
 已有问题，避免完全重复：
-${input.otherQuestionsText.slice(0, 800)}`;
+${wrapUntrustedPromptData("existingQuestions", input.otherQuestionsText.slice(0, 800))}`;
 }
 
 async function attemptContentFallbackRetry(
@@ -157,6 +159,7 @@ async function attemptContentFallbackRetry(
   try {
     const retryResult = await callAI({
       task: "dynamicFollowup",
+      projectId,
       systemPrompt: "你是一名专业路演答辩评委，只输出一个问题。",
       userPrompt: buildContentFallbackRetryPrompt(input),
       temperature: 0.1,
@@ -251,6 +254,7 @@ async function attemptContentFallback(
       sessionId,
     });
     const contentResult = await callContentDynamicFollowup({
+      projectId,
       projectTitle: projectName ?? "",
       projectContext: projectContextText.slice(0, 2000),
       pitchTranscript: transcriptText,

@@ -111,30 +111,57 @@ export function analyzePitchProjectContent(params: {
   };
 }
 
-export function hasClearlyUnrelatedPitchContent(text: string) {
-  const normalizedText = normalizeForProjectSignal(text);
-  const unrelatedMarkers = [
-    "不轻信",
-    "不乱点",
-    "不泄漏",
-    "网上贷款",
-    "刷单",
-    "刷信誉",
-    "刷流水",
-    "先缴费",
-    "验证码",
-    "诈骗",
-    "反诈",
-    "杀猪盘",
-    "中奖",
-    "转账",
-    "陌生链接",
-    "不要相信",
-    "防诈骗",
-  ];
+const COMMON_CONTEXT_BIGRAMS = new Set([
+  "我们",
+  "项目",
+  "这个",
+  "可以",
+  "通过",
+  "进行",
+  "以及",
+  "已经",
+  "目前",
+  "一个",
+  "系统",
+  "平台",
+  "产品",
+  "服务",
+  "方案",
+  "技术",
+  "用户",
+]);
 
-  return unrelatedMarkers.some((marker) =>
-    normalizedText.includes(normalizeForProjectSignal(marker)),
+function contextBigrams(text: string) {
+  const normalized = normalizeForProjectSignal(text).replace(
+    /[^\p{L}\p{N}]/gu,
+    "",
+  );
+  const result = new Set<string>();
+
+  for (let index = 0; index < normalized.length - 1; index += 1) {
+    const part = normalized.slice(index, index + 2);
+    if (!COMMON_CONTEXT_BIGRAMS.has(part)) result.add(part);
+  }
+
+  return result;
+}
+
+export function hasProjectContextOverlap(text: string, projectContextText: string) {
+  const pitchParts = contextBigrams(text);
+  const contextParts = contextBigrams(projectContextText);
+  if (pitchParts.size === 0 || contextParts.size === 0) return false;
+
+  const overlap = [...pitchParts].filter((part) => contextParts.has(part)).length;
+  return overlap >= 4 && overlap / Math.min(pitchParts.size, 80) >= 0.06;
+}
+
+export function hasClearlyUnrelatedPitchContent(
+  text: string,
+  projectContextText = "",
+) {
+  return (
+    projectContextText.replace(/\s+/g, "").length >= 80 &&
+    !hasProjectContextOverlap(text, projectContextText)
   );
 }
 
@@ -153,9 +180,12 @@ export function evaluateDynamicFollowupPreflight(params: {
   const hasSparseProjectContext =
     !aiContext ||
     (projectDetailLength < 80 && (aiContext.files ?? []).length === 0);
+  const projectContextText = [projectName ?? "", projectDetailText]
+    .filter(Boolean)
+    .join("\n");
   const isClearlyUnrelatedPitch =
-    hasClearlyUnrelatedPitchContent(transcriptText) &&
-    !pitchProjectContent.hasEnoughProjectPitchContent;
+    !pitchProjectContent.hasEnoughProjectPitchContent &&
+    hasClearlyUnrelatedPitchContent(transcriptText, projectContextText);
 
   return {
     pitchProjectContent,

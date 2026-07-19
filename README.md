@@ -1,755 +1,243 @@
 # Roadshow Training System
 
-路演培训系统，基于 Next.js、TypeScript、Tailwind CSS、Prisma 和 SQLite 搭建。
+面向科技项目路演与答辩训练的内部系统。技术栈为 Next.js 16、React 19、TypeScript、Prisma 和 SQLite。
+
+系统目前支持：
+
+- 项目档案创建、编辑、所有权隔离和删除；
+- PDF、PPTX、DOCX、TXT 材料上传、解析及 PPT 预览；
+- 材料诊断、确定性规则评分、模拟评委问题和动态追问；
+- 路演计时、翻页轨迹、答辩、录音、自动转写及人工修订；
+- 版本化训练分析和综合报告，失败时保留上一版成功报告；
+- 管理员用户、Prompt、系统配置和上传目录维护页面。
+
+## 当前部署边界
+
+当前实现使用 SQLite 和本地上传目录，适合固定服务器、持久磁盘、单个 Web 实例和内部低并发使用。开发环境默认由 Web 进程执行报告、转写恢复和维护任务；生产环境支持并要求把这些后台工作放到独立 Worker 进程。
+
+不要直接部署到无状态 Serverless 或多应用实例。正式多实例部署仍需完成：
+
+- PostgreSQL/MySQL 等服务型数据库迁移；
+- S3、腾讯 COS、MinIO 等对象存储接入；
+- 把当前数据库任务队列替换为适合多实例和跨主机消费的队列基础设施；
+- 数据备份、保留、删除和敏感材料治理制度。
+
+当前独立 Worker 与 Web 进程必须在同一台主机上访问同一 SQLite 文件和上传目录。它解决进程职责和重启恢复问题，不等同于已经支持跨主机水平扩容。
 
 ## 本地启动
 
+要求 Node.js 20，并安装项目所需的 ffmpeg、ffprobe 和 LibreOffice。
+
 ```bash
-npm install
+npm ci
+```
+
+复制 `.env.example` 为 `.env`，至少配置数据库、认证、AI 和选定的 ASR 服务商。随后执行：
+
+```bash
+npx prisma migrate dev
 npm run dev
 ```
 
-打开 [http://localhost:3000](http://localhost:3000) 查看首页。
+默认地址为 [http://localhost:3000](http://localhost:3000)。
 
-## 数据库初始化
-
-项目使用 Prisma + SQLite，数据库连接配置在 `.env`：
+生产或固定测试环境应使用：
 
 ```bash
-DATABASE_URL="file:./dev.db"
+npx prisma migrate deploy
+npm run build
+# 使用仓库内 PM2 配置启动或平滑重载 Web 与独立 Worker：
+pm2 startOrReload ecosystem.config.cjs --env production
+pm2 save
+
+# Worker 写入首个心跳后执行：
+npm run check:prod
 ```
 
-首次初始化数据库：
+`ecosystem.config.cjs` 会为两个进程设置 `NODE_ENV=production`、`BACKGROUND_TASK_MODE=external` 和 `UPLOAD_MAINTENANCE_ENABLED=true`。Web 与 Worker 必须使用相同工作目录、环境变量、数据库和上传磁盘；如果改用 systemd 等其他进程管理器，也必须显式设置这些值并同时托管两个进程。`check:prod` 会检查认证密钥、AI/ASR 数值范围、ffmpeg/ffprobe、LibreOffice、上传目录写入能力、磁盘空间、自动维护配置，以及独立 Worker 的有效数据库心跳与能力声明。
+
+## 认证与用户
+
+本地开发可以设置：
+
+```dotenv
+AUTH_ENABLED=false
+```
+
+生产环境必须设置 `AUTH_ENABLED=true`，并提供至少 32 字符、独立随机生成的 `AUTH_SECRET`。
+
+登录限流默认设置 `TRUSTED_PROXY_HOPS=0`，此时会忽略可由客户端伪造的
+`X-Forwarded-For` 和 `X-Real-IP`。只有在部署层已阻断应用直连，并确认每一跳
+反向代理都会覆盖或追加转发地址时，才按实际拓扑设置可信代理跳数；系统会从
+右向左取可信链之前的地址，不会信任请求者提供的最左侧地址。
+
+创建或重置用户时，密码默认通过终端隐藏输入：
 
 ```bash
-npx prisma format
-npx prisma migrate dev
-npm run prisma:seed
+npm run user:create -- --email user@example.com --name 用户名 --role USER
 ```
 
-查看数据：
+自动化环境应从密钥管理器通过标准输入传递密码：
 
 ```bash
-npx prisma studio
+secret-manager-command | npm run user:create -- --email user@example.com --password-stdin --role USER
 ```
 
-## 项目材料上传与解析
+不再支持 `--password <明文>`，以免密码进入 shell history、进程列表或运维日志。
 
-项目详情页支持上传 `.pdf`、`.pptx`、`.docx`、`.txt`，单个文件最大 50MB。文件保存到本地：
+## 项目材料
+
+新建项目的首份材料仅接受一个 PDF 或 PPTX，最大 50MB。流程为：
 
 ```text
-uploads/projects/{projectId}/{timestamp}-{safeFileName}
+浏览器流式上传一次
+  → 服务端暂存并校验文件签名
+  → 文档工作进程解析一次
+  → 返回短期 materialToken
+  → 档案识别、TRL 和最终建档引用同一令牌
 ```
 
-真实上传文件不会提交到 git，仅保留 `uploads/.gitkeep` 和 `uploads/projects/.gitkeep`。
+材料正文不会返回浏览器，也不会在最终建档时再次上传或解析。暂存材料默认保留 2 小时，可通过 `PROJECT_MATERIAL_RETENTION_HOURS` 调整。
 
-文件解析支持：
+项目建成后可继续上传 PDF、PPTX、DOCX 或 TXT，每个文件最大 50MB。文档解析运行在受限子进程中，具有并发、排队、超时、内存、输出大小和压缩包安全边界。
 
-- `.txt`：直接读取文本内容。
-- `.pdf`：使用 `pdf-parse` 提取 PDF 文本。
-- `.docx`：使用 `mammoth` 提取 Word 文本。
-- `.pptx`：使用 `jszip` 读取幻灯片 XML 中的文本节点。
+## AI 功能
 
-解析状态：
+所有模型调用通过 `lib/ai.ts` 进入。主要任务包括：
 
-- `PENDING`：文件已上传，尚未解析。
-- `SUCCESS`：文本解析成功，`extractedText` 已写入。
-- `FAILED`：解析失败，`parseError` 会记录失败原因。
+- 项目档案与 TRL 识别；
+- 材料诊断；
+- AI 评分证据判断；
+- 模拟评委问题；
+- 动态追问；
+- 路演与答辩综合分析。
 
-材料上下文控制：
+上传材料和转写文本统一作为不可信数据封装，不能覆盖 system prompt 或改变输出协议。
 
-- `FileAsset.includeInAIContext` 表示文件是否允许进入 AI 上下文，默认 `true`。
-- 项目详情页的文件列表会显示“纳入 AI 分析 / 不纳入 AI 分析”状态。
-- 解析成功的文件可以通过“纳入分析 / 排除分析”按钮切换状态。
-- 被排除的文件仍保留文件记录、上传文件和解析结果，只是不进入后续 AI 上下文。
+AI 资源保护包括：
 
-当前不支持 OCR、图片文字识别、复杂表格结构识别、PPT 版式还原，也不会调用 AI API。
+- 每用户每分钟请求上限；
+- 每用户、项目和任务类型并发锁；
+- 全局并发上限；
+- 数据库持久化的每日请求和 Token 预算；
+- 供应商连续失败退避；
+- AI 超时和最大输出 Token 的严格范围校验。
 
-## Prompt 模板
+相关配置参见 `.env.example` 中的 `AI_*` 项。
 
-Prompt 模板位于 `prompts/`：
+材料诊断、材料评分和训练分析都会保存输入哈希、Prompt 版本、结果 Schema
+版本、实际模型版本和评审规则版本。诊断、评分、项目上下文快照及转写分段的
+JSON 读取均保留旧版兼容路径，未知的未来 Schema 不会被当前代码误读。
 
-- `project-summary.md`：根据项目基础信息和材料文本生成项目摘要。
-- `material-diagnosis.md`：诊断路演材料完整性、逻辑性、表达问题和转化风险。
-- `scoring.md`：根据评审规则和评分指标生成分项评分。
-- `question-generation.md`：根据项目材料、专家评语和历史问题生成模拟评委问题。
-- `training-qa-question-generation.md`：根据训练场次、项目材料、路演转写和路演表现分析生成本轮答辩问题。
-- `answer-feedback.md`：根据评委问题和用户回答生成答辩反馈。
-- `final-report.md`：生成综合训练报告。
+## 评分、证据与评审规则
 
-每个模板都包含角色定位、输入说明、分析任务、JSON 输出格式、中文正式表达要求，以及不得编造事实的约束。
+评分模型主要判断证据强弱和风险，最终分值由服务端确定性规则映射，不直接信任模型自由输出的总分。
 
-## AI 上下文组装
+涉及数字或具体事实的问题必须携带真实材料摘录。校验器会统一处理“未提供、未提及、未明确说明”等缺失证据表达，并验证证据文本确实来自项目材料。
 
-`lib/project-context.ts` 提供：
-
-```ts
-buildProjectAIContext(projectId: string)
-```
-
-返回内容包括：
-
-- `project`：项目基础信息。
-- `files`：已成功解析、`extractedText` 不为空且 `includeInAIContext = true` 的文件文本。
-- `evaluationRule`：评审规则，优先读取“路演大赛真实评审规则”。
-- `criteria`：默认评审规则下的评分指标。
-- `expertComments`：专家评语，优先读取与项目赛道相关的记录。
-- `historicalQuestions`：历史评委问题，优先读取与项目赛道相关的记录。
-- `limits`：上下文长度限制。
-- `truncated`：是否发生截断。
-
-上下文长度限制：
-
-- 单个文件 `extractedText` 最多取前 20000 字符。
-- 所有文件合并文本最多 60000 字符。
-- 专家评语最多 20 条。
-- 历史问题最多 20 条。
-- 超出部分会截断，并在 `truncated` 中记录。
-
-文件材料不会全量进入上下文。`buildProjectAIContext` 只读取：
-
-- `parseStatus = SUCCESS`
-- `extractedText` 不为空
-- `includeInAIContext = true`
-
-如需排除测试材料、旧版本材料或错误上传材料，可在项目详情页点击对应文件的“排除分析”。
-
-明显测试文件也可以用脚本批量排除：
-
-```bash
-node scripts/exclude-test-files-from-context.mjs
-```
-
-该脚本只会将匹配到的测试文件 `includeInAIContext` 设置为 `false`，不会删除文件或清空解析结果。当前会排除文件名中包含 `parse-check`、`upload-check` 的文件，以及明确命名为 `demo.txt`、`mode.txt` 的测试文件。
-
-专家评语不会全量进入上下文。`buildProjectAIContext` 会按项目领域、评语质量和评分维度进行筛选，最多返回 20 条：
-
-- 优先选择 `projectField` 与项目 `field` 完全匹配的评语。
-- 其次选择 `projectField = null` 的通用评语。
-- 不足时再用其他领域评语补充。
-- 会过滤空评语、过短评语和明显无意义内容。
-- 会把历史维度归一到“项目团队”“科技含量”“市场机会”“路演表达”“其他”等调试维度。
-- 会控制长评语数量，避免上下文被少数长文本占满。
-
-历史评委问题同样最多返回 20 条，会优先匹配项目领域，同时尽量覆盖技术专家、产业方、投资机构、知识产权专家、成果转化专家、合作对接方等不同视角。
-
-`/projects/{projectId}/ai-context` 返回的 `debug` 字段用于开发阶段查看筛选情况：
-
-- `debug.fileSelection`：文件总数、解析成功文件数、纳入文件数、排除文件数。
-- `debug.expertCommentSelection`：专家评语可用数量、已选数量、按归一维度统计和是否截断。
-- `debug.historicalQuestionSelection`：历史问题可用数量、已选数量、按提问视角统计和是否截断。
-
-该筛选过程只读取数据库，不调用 AI API。
-
-## 材料诊断
-
-项目详情页提供“材料诊断”区域，可以点击“生成材料诊断”触发 AI 诊断。该功能只开发材料诊断，不生成评分、模拟问题、答辩反馈或综合报告。
-
-诊断依赖以下上下文：
-
-- 项目基础信息。
-- `includeInAIContext = true`、`parseStatus = SUCCESS` 且 `extractedText` 不为空的文件文本。
-- “路演大赛真实评审规则”和 12 条评分指标。
-- 筛选后的专家评语。
-- 历史评委问题。
-
-诊断流程：
-
-1. 调用 `buildProjectAIContext(projectId)` 组装文本上下文。
-2. 加载 `prompts/material-diagnosis.md`。
-3. 通过 `lib/prompt-renderer.ts` 渲染 Prompt。
-4. 通过 `lib/ai.ts` 的 `callAI()` 调用模型。
-5. 使用 `parseAIJson()` 解析 AI 返回 JSON。
-6. 将结果写入 `Diagnosis` 表。
-
-`Diagnosis` 入库规则：
-
-- `summary` 保存 `projectSummary`。
-- `completeness` 保存 `materialCompleteness`。
-- `issues` 保存 `criterionAnalysis` 和 `keyIssues` 的 JSON 字符串。
-- `risks` 保存 `riskPoints` 的 JSON 字符串。
-- `suggestions` 保存 `slideSuggestions`、`pitchSuggestions`、`priorityActions` 的 JSON 字符串。
-
-如果未配置 `AI_API_KEY`，页面会显示明确错误，不会崩溃。AI 返回 JSON 解析失败时，不会写入错误诊断。
-
-AI 环境变量配置示例：
-
-```bash
-AI_PROVIDER=openai
-AI_API_KEY=your_api_key_here
-AI_BASE_URL=
-AI_MODEL_FAST=deepseek-v4-flash
-AI_MODEL_STRONG=deepseek-v4-pro
-AI_TIMEOUT_MS=60000
-AI_MAX_OUTPUT_TOKENS=3000
-PITCH_ANALYSIS_MAX_OUTPUT_TOKENS=12000
-PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS=16000
-DIAGNOSIS_MOCK_MODE=false
-```
-
-触发方式：
-
-```text
-打开 /projects/{projectId}
-点击“生成材料诊断”
-```
-
-诊断接口：
-
-```text
-POST /projects/{projectId}/diagnosis
-```
-
-诊断会把项目基础信息和已纳入上下文的解析文本发送给配置的大模型服务。不要上传涉密、未公开、敏感项目资料；如需处理真实项目资料，应确认模型服务的数据保留、训练、删除和私有化部署策略。
-
-### 材料诊断稳定性建议
-
-长 PDF 或页数较多的路演材料会增加模型输出长度和响应时间。材料诊断已经做了输出压缩，并会在第一次 JSON 解析失败时自动尝试 1 次 JSON 修复。
-
-建议配置：
-
-```bash
-AI_TIMEOUT_MS=120000
-AI_MAX_OUTPUT_TOKENS=5000
-```
-
-如模型支持更长输出，也可以将 `AI_MAX_OUTPUT_TOKENS` 设置为 `6000`。
-
-常见失败原因：
-
-- `Unterminated string in JSON`：通常是模型输出 JSON 字符串未闭合，或输出被截断。
-- `AI 调用超时`：通常是材料较长、模型响应较慢，或服务端超时设置偏低。
-
-处理方式：
-
-- 系统会自动尝试 1 次 JSON 修复，修复成功后正常写入 `Diagnosis`。
-- 如果仍失败，可以重试生成。
-- 如果频繁超时，建议提高 `AI_TIMEOUT_MS` 到 `120000`。
-- 如果频繁 JSON 截断，建议将 `AI_MAX_OUTPUT_TOKENS` 设置到 `5000` 到 `6000`，或减少纳入 AI 上下文的材料长度。
-
-### 材料诊断 Mock 模式
-
-开发验收时可以开启 Mock 模式，在不配置 `AI_API_KEY` 的情况下生成一条结构合法的模拟诊断结果：
-
-```bash
-DIAGNOSIS_MOCK_MODE=true
-```
-
-说明：
-
-- `DIAGNOSIS_MOCK_MODE=false`：默认行为，正常通过 `lib/ai.ts` 调用 AI。
-- `DIAGNOSIS_MOCK_MODE=true`：使用 `lib/mock-diagnosis.ts` 本地生成模拟诊断，不调用 AI API。
-- Mock 诊断会按当前 `buildProjectAIContext` 返回的评分指标生成 `criterionAnalysis`，数量应等于真实评审规则的 12 条指标。
-- Mock 诊断仅用于开发验收，不代表真实 AI 诊断质量。
-- 页面会显示“Mock 诊断”标签。
-- 正式测试前应关闭 Mock 模式，并配置 `AI_API_KEY`。如需覆盖默认模型，可配置 `AI_MODEL_FAST` / `AI_MODEL_STRONG`，或继续使用旧的 `AI_MODEL` 作为 fallback。
-
-## AI 评分
-
-项目详情页提供“AI 评分”区域，可以点击“生成 AI 评分”触发评分。该功能只生成评分结果，不生成模拟问题、答辩反馈或综合报告。
-
-证据链是指模型在给出评分、扣分或追问时，同时给出来自项目材料的短句依据和材料位置。它用于降低数字、年份、金额、比例、专利数量、客户数量等事实被误读或编造的风险。
-
-评分依据：
-
-- “路演大赛真实评审规则”。
-- 12 条 `EvaluationCriterion`，包括一级指标 `category`、二级指标 `name` 和分值 `weight`。
-- `includeInAIContext = true`、`parseStatus = SUCCESS` 且 `extractedText` 不为空的项目材料。
-- 筛选后的专家评语。
-- 历史评委问题。
-
-评分接口：
-
-```text
-POST /projects/{projectId}/scoring
-```
-
-评分流程：
-
-1. 调用 `buildProjectAIContext(projectId)` 组装文本上下文。
-2. 加载 `prompts/scoring.md`。
-3. 通过 `lib/prompt-renderer.ts` 渲染 Prompt。
-4. 通过 `lib/ai.ts` 的 `callAI()` 调用模型。
-5. 使用 `parseAIJson()` 解析 AI 返回 JSON。
-6. 使用 `validateScoreResult()` 校验评分结构、分值范围、总分和一级指标汇总。
-7. 将结果写入 `ScoreResult` 表。
-
-`ScoreResult` 入库规则：
-
-- `projectId` 保存当前项目。
-- `ruleId` 保存当前 `evaluationRule.id`。
-- `totalScore` 保存 AI 输出总分。
-- `scoreDetail` 保存 `{ categoryScores, scoreItems, scoreWarnings }` 的 JSON 字符串，其中每个 `scoreItems[]` 会包含 `evidence.evidenceText` 和 `evidence.evidenceLocation`。
-- `comments` 保存 `overallComment`。
-
-评分校验要求：
-
-- `scoreItems` 必须有且仅有 12 条，对应真实评审规则的 12 条指标。
-- 每项 `maxScore` 必须等于对应 `EvaluationCriterion.weight`。
-- 每项 `score` 必须是 0 到 `maxScore` 之间的整数。
-- `totalScore` 必须等于 12 条 `scoreItems.score` 之和。
-- `categoryScores` 必须按一级指标汇总：项目团队 `/20`、科技含量 `/30`、市场机会 `/50`。
-- 每个 `scoreItems[]` 必须包含证据摘录。
-- 涉及数字、年份、金额、比例、专利数量、客户数量等事实时，证据摘录必须能提供材料依据。
-- 校验失败时不会写入 `ScoreResult`。
-
-触发方式：
-
-```text
-打开 /projects/{projectId}
-点击“生成 AI 评分”
-```
-
-如果未配置 `AI_API_KEY`，页面会显示明确错误，不会崩溃。
-
-AI 评分会把项目基础信息和已纳入上下文的解析文本发送给配置的大模型服务。不要上传涉密、未公开、敏感项目资料；如需处理真实项目资料，应确认模型服务的数据保留、训练、删除和私有化部署策略。
-
-## 模拟评委问题
-
-项目详情页提供“模拟评委问题”区域，可以点击“生成模拟评委问题”触发问题生成。该功能只生成问题，不开发答辩反馈或综合报告。
-
-模拟问题同样会记录证据链。问题生成不等于事实审计，模型仍可能误读 PDF 中的数字、表格或跨页信息，重要结论需要人工复核。
-
-问题生成依据：
-
-- 项目基础信息。
-- `includeInAIContext = true`、`parseStatus = SUCCESS` 且 `extractedText` 不为空的项目材料。
-- “路演大赛真实评审规则”和 12 条 `EvaluationCriterion`。
-- 筛选后的专家评语。
-- 历史评委问题。
-- 最近一次材料诊断。
-- 最近一次 AI 评分结果。
-
-问题生成接口：
-
-```text
-POST /projects/{projectId}/questions/generate
-```
-
-生成流程：
-
-1. 调用 `buildProjectAIContext(projectId)` 组装文本上下文。
-2. 读取当前项目最近一次 `Diagnosis` 和最近一次 `ScoreResult`。
-3. 加载 `prompts/question-generation.md`。
-4. 通过 `lib/prompt-renderer.ts` 渲染 Prompt。
-5. 通过 `lib/ai.ts` 的 `callAI()` 调用模型。
-6. 使用 `parseAIJson()` 解析 AI 返回 JSON。
-7. 使用 `validateGeneratedQuestions()` 校验问题结构和视角数量。
-8. 校验通过后写入 `Question` 表。
-
-`Question` 入库结构：
-
-- `projectId` 保存当前项目。
-- `type` 保存问题类型，例如技术验证、市场验证、团队能力、知识产权、转化落地、融资计划。
-- `perspective` 保存评审视角，例如技术专家、产业方、投资机构、知识产权专家、成果转化专家、合作对接方。
-- `content` 保存问题内容。
-- `focus` 保存考察重点。
-- `suggestedDirection` 保存建议回答方向。
-- `evidenceText` 保存支撑该问题的材料证据短句。
-- `evidenceLocation` 保存证据位置，例如页码、章节、文件名或材料位置。
-- `factCheckNote` 保存事实校验说明，例如“来自材料原文”“需人工复核”或“口径可能不一致”。
-
-校验要求：
-
-- AI 必须返回合法 JSON。
-- `questions` 必须正好 10 条。
-- 视角分布必须为：技术专家 2 条、产业方 2 条、投资机构 2 条、知识产权专家 1 条、成果转化专家 2 条、合作对接方 1 条。
-- 每条问题必须包含 `type`、`perspective`、`content`、`focus`、`suggestedDirection`。
-- 每条问题必须包含证据摘录。
-- 如果问题内容出现数字、年份、金额、比例、专利数量、客户数量、销售区域或营收预测，必须有材料证据，不能用“材料未提供相关证据”替代。
-- 如果问题涉及具体事实，`factCheckNote` 应说明依据来自材料原文或需要人工复核。
-- 校验失败时不会写入 `Question`。
-
-触发方式：
-
-```text
-打开 /projects/{projectId}
-点击“生成模拟评委问题”
-```
-
-如果未配置 `AI_API_KEY`，页面会显示明确错误，不会崩溃。
-
-模拟评委问题生成会把项目基础信息、已纳入上下文的解析文本、诊断摘要和评分结果发送给配置的大模型服务。不要上传涉密、未公开、敏感项目资料；如需处理真实项目资料，应确认模型服务的数据保留、训练、删除和私有化部署策略。
-
-涉及真实项目材料时，仍需确认模型服务的数据保留、训练、删除和私有化部署策略。证据链只能降低事实幻觉风险，不能替代人工核验。
-
-## AI 上下文调试接口
-
-开发阶段可访问：
-
-```text
-/projects/{projectId}/ai-context
-```
-
-该接口只返回 JSON，用于检查上下文是否正确组装，不会调用 AI API。
-
-项目详情页提供“查看 AI 上下文”入口。
-
-## 当前功能阶段说明
-
-当前已完成 Prompt 模板、AI 上下文组装、统一 AI 调用封装、材料诊断、AI 评分和模拟评委问题生成。系统仍未生成答辩反馈或综合报告。
-
-后续 Prompt 将继续用于：
-
-- 模拟评委提问
-- 答辩反馈
-- 综合训练报告生成
-
-## AI 调用配置
-
-统一 AI 调用封装位于 `lib/ai.ts`，所有模型调用都应通过 `callAI()` 进入。当前只支持 `AI_PROVIDER=openai`，使用 OpenAI 官方 Node SDK，非流式返回。
-
-`.env.example` 提供了配置模板：
-
-```bash
-AI_PROVIDER=openai
-AI_API_KEY=
-AI_BASE_URL=
-AI_MODEL=
-AI_MODEL_FAST=deepseek-v4-flash
-AI_MODEL_STRONG=deepseek-v4-pro
-AI_TIMEOUT_MS=60000
-AI_MAX_OUTPUT_TOKENS=3000
-PITCH_ANALYSIS_MAX_OUTPUT_TOKENS=12000
-PITCH_ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS=16000
-```
-
-`.env.local` 示例：
-
-```bash
-AI_PROVIDER=openai
-AI_API_KEY=your_api_key_here
-AI_BASE_URL=
-AI_MODEL_FAST=deepseek-v4-flash
-AI_MODEL_STRONG=deepseek-v4-pro
-AI_TIMEOUT_MS=60000
-AI_MAX_OUTPUT_TOKENS=3000
-```
-
-说明：
-
-- `AI_API_KEY` 不得写死在代码中。
-- `AI_BASE_URL` 可为空；为空时使用 SDK 默认配置。
-- `AI_MODEL_FAST` 用于连通性测试等轻量任务，默认 `deepseek-v4-flash`。
-- `AI_MODEL_STRONG` 用于项目档案识别、TRL、评委问题、动态追问和分析报告等关键任务，默认 `deepseek-v4-pro`。
-- 旧的 `AI_MODEL` 可继续作为 `AI_MODEL_FAST` / `AI_MODEL_STRONG` 未配置时的 fallback。
-- 缺少 `AI_API_KEY` 时会返回明确错误。
-- 错误信息不会主动输出 API Key。
-
-## Prompt 渲染
-
-`lib/prompt-renderer.ts` 提供：
-
-```ts
-renderPrompt(template, variables)
-```
-
-支持 `{{projectName}}`、`{{project.name}}` 这类简单变量替换。对象和数组会以格式化 JSON 插入模板。变量不存在时保留原占位符。
-
-## AI 测试接口
-
-开发测试接口：
-
-```text
-/api/ai/test
-```
-
-该接口会读取 `prompts/project-summary.md`，构造一段不包含真实上传文件的测试输入，并调用 `callAI()` 返回模型文本。
-
-如果未配置 `AI_API_KEY`，接口会返回明确错误 JSON。
-
-## 数据安全提醒
-
-- 测试阶段不要上传涉密、未公开、敏感项目资料。
-- 当前 AI 调用会把文本 Prompt 发送给配置的大模型服务。
-- 如涉及真实项目资料，需确认模型服务的数据保留、训练、删除和私有化部署策略。
-- 当前测试接口不会读取真实上传文件，也不会自动分析项目材料。
-
-## 核心数据表用途
-
-- `User`：系统用户，暂时支持 `ADMIN`、`TEAM`、`COACH` 三类角色。
-- `Project`：路演项目基础信息，包括赛道、阶段、简介、技术、场景、商业模式和合作诉求。
-- `FileAsset`：项目上传材料，记录文件路径、类型、大小、解析文本、解析状态和是否纳入 AI 上下文。
-- `Diagnosis`：材料诊断结果，保存项目摘要、完整度、核心问题、风险点和修改建议。
-- `ScoreResult`：评分结果，记录总分、分项评分 JSON、综合评价，并可关联评审规则。
-- `Question`：模拟评委问题，记录问题类型、评审视角、考察重点和建议回答方向。
-- `Answer`：用户对模拟评委问题的回答。
-- `Feedback`：答辩反馈，记录回答评价、遗漏点、风险点和建议回答版本。
-- `Report`：综合训练报告，可保存 Markdown 或 HTML 正文。
-- `TrainingQuestion`：训练场次内的模拟答辩问题，记录问题顺序、类型、来源和提问依据。
-- `TrainingAnswer`：训练场次内每题答辩回答，记录回答文本、是否查看过问题文字、开始时间、结束时间和本题用时。
-- `EvaluationRule`：大赛评审规则，支持不同大赛和不同版本。
-- `EvaluationCriterion`：评分指标，用于拆解评审规则中的一级指标、具体维度、分值和评分参考。
-- `ExpertComment`：往期专家评语样本，用于后续材料诊断、模拟提问和答辩反馈。
-- `HistoricalQuestion`：历史评委问题样本，用于后续模拟评委问题生成。
-- `KnowledgeSource`：知识来源材料，记录评审规则、专家评语、历史问题、优秀案例等来源和处理状态。
-
-## 真实评审规则与专家语料整理
-
-本阶段只整理真实评审规则、专家评语样例和导入准备，不调用 AI API，不开发材料诊断、评分或模拟问答功能。
-
-### 真实评审规则
-
-真实路演大赛评审规则文件位于：
+真实评审规则文件位于：
 
 ```text
 data/knowledge/rules/roadshow-review-rule-100.json
 ```
 
-该规则采用“一级指标、二级指标、评价标准、最高分值”的结构：
-
-- `EvaluationRule` 保存规则名称、大赛名称、版本、总分、说明和原始规则文本。
-- `EvaluationCriterion` 保存具体评分指标。
-- `EvaluationCriterion.category` 表示一级指标，例如“项目团队”“科技含量”“市场机会”，该字段可为空，以兼容已有 seed 数据。
-- `EvaluationCriterion.name` 表示二级指标。
-- `EvaluationCriterion.description` 表示评价标准。
-- `EvaluationCriterion.weight` 表示最高分值或权重。
-
-导入真实评审规则：
+导入命令：
 
 ```bash
-node scripts/import-review-rule.mjs
+npm run import:review-rule
 ```
 
-脚本会校验 JSON 格式、`totalScore = 100`、评分指标 `weight` 总和为 100。若数据库中已存在同 `name + version` 的规则，会更新该规则并重建该规则下的评分指标，避免重复创建。
+导入会验证总分、正整数权重、重复名称和重复排序，并在一个数据库事务中更新规则、指标和知识源。
 
-查看导入结果：
+## 录音与 ASR
+
+原始录音采用流式落盘，最大 100MB。支持的服务商：
+
+```dotenv
+TRANSCRIPTION_PROVIDER=openai
+TRANSCRIPTION_PROVIDER=xfyun
+TRANSCRIPTION_PROVIDER=tencent
+TRANSCRIPTION_PROVIDER=tencent_flash
+```
+
+每次供应商调用前都会通过 ffprobe 验证音频大小和时长。默认边界为 100MB、120 分钟、单进程 2 个并发任务和 30 秒排队时间。
+
+讯飞与腾讯极速版上传使用文件流，不会把最高 100MB 的音频整体读入内存。腾讯普通版因 API 要求使用 Base64，但在读取前受更小的直传上限约束。
+
+转写任务具有持久化租约、重试退避、过期任务接管和人工修订优先策略。迟到的 ASR 结果不会覆盖用户已经保存的人工文本。
+
+本地开发默认使用：
+
+```dotenv
+BACKGROUND_TASK_MODE=embedded
+```
+
+生产环境改为 `external` 后，Web 请求只创建持久化转写任务，不直接调用 ASR；独立进程轮询到期任务、领取数据库租约并执行转写：
+
+```dotenv
+BACKGROUND_TASK_MODE=external
+BACKGROUND_WORKER_POLL_INTERVAL_MS=5000
+BACKGROUND_WORKER_HEARTBEAT_INTERVAL_MS=5000
+BACKGROUND_WORKER_HEARTBEAT_TTL_MS=30000
+```
 
 ```bash
-npx prisma studio
+npm run worker:start
 ```
 
-打开 `EvaluationRule`、`EvaluationCriterion`、`KnowledgeSource` 表，确认“路演大赛真实评审规则”及其 12 条评分指标已写入。
+Worker 会把短期心跳和 `TRAINING_TRANSCRIPTION`、`TRAINING_ANALYSIS`、`UPLOAD_MAINTENANCE` 能力写入数据库。管理后台和 `check:prod` 都会验证心跳是否仍在有效期内。在 external 模式下，训练报告请求只持久化入队；Worker 通过租约领取任务，失败时按上限退避重试，并继续保留上一版成功报告。
 
-`buildProjectAIContext` 读取评审规则时会优先使用“路演大赛真实评审规则”；如果不存在，再使用“路演大赛通用评审规则”；如果仍不存在，则读取第一条评审规则。返回的 `criteria` 会包含 `category` 字段，便于后续按一级指标汇总。
+## 训练报告
 
-### 知识数据样例
+训练报告会组合项目档案、材料、路演转写、翻页事件、答辩问题及回答。报告生成采用：
 
-脱敏虚构样例位于：
+- 输入哈希和生成前后复核；
+- Prompt、Schema、模型和规则版本记录；
+- 多版本分析记录；
+- 成功后原子切换当前报告；
+- 新版本失败时保留旧成功报告；
+- 降级报告显式标记，且不冒充正式 AI 总分。
 
-```text
-data/knowledge-samples/evaluation-rules.sample.json
-data/knowledge-samples/expert-comments.sample.json
-data/knowledge-samples/historical-questions.sample.json
+## 文件与任务维护
+
+生产环境应启用：
+
+```dotenv
+UPLOAD_MAINTENANCE_ENABLED=true
 ```
 
-这些样例字段与当前 Prisma 模型保持对应，可作为后续清洗真实资料时的参考格式。
+维护任务使用数据库租约防止重复执行，并按配置清理过期孤儿文件、临时文件、失败尝试目录、回收站和过期项目材料。仍被数据库引用的文件不会因年龄被删除。在 `external` 模式下，只有独立 Worker 启动维护定时器，Web 进程不会重复运行。
 
-### 原始专家评语 TSV
+管理员可在系统页面执行只读扫描或手动维护。
 
-原始 TSV、Excel、Word 等资料可以临时放在：
+## 数据安全
 
-```text
-data/raw/
-```
+- 不要把真实密钥提交到仓库；
+- 不要在未确认模型服务数据政策时上传涉密或未公开项目材料；
+- 生产环境必须启用认证并限制调试接口；
+- AI 上下文完整调试接口仅开发环境或管理员可用；
+- 用户角色与训练、录音、转写、分析和异步任务状态在 SQLite 层有 `CHECK` 约束；
+- 本地磁盘、SQLite 文件及备份应使用操作系统权限和磁盘加密保护；
+- 多实例或云部署前仍须完成服务型数据库、对象存储和分布式队列迁移；当前独立 Worker 只支持共享本机 SQLite 与上传磁盘的固定服务器拓扑。
 
-专家评语 TSV 默认文件名：
-
-```text
-data/raw/export-evaluate-content2026-03-04_20-23-03.tsv
-```
-
-TSV 需要包含字段：
-
-- `achievement_name`
-- `evaluate_content`
-
-`data/raw/*` 默认会被 Git 忽略，只保留 `data/raw/.gitkeep` 和 `data/raw/README.md`。
-
-### 专家评语导入脚本
-
-导入脚本草稿位于：
-
-```text
-scripts/import-expert-comments.mjs
-```
-
-手动运行：
+## 测试
 
 ```bash
-node scripts/import-expert-comments.mjs
+npm run lint
+npm run build
+npm run test:auth
+npm run test:auth:e2e:local
+npm run test:worker:local
+npm run test:prod-guard
+npm run test:files
+npm run test:scoring-v2
+npm run test:review-fixes
+npm run test:stability:local
+npm run test:trl
 ```
 
-导入前建议先 dry-run：
+`test:stability:local` 会创建专用 SQLite 测试库、应用全部迁移、启动隔离的 Next.js 服务并执行状态机、事务、幂等、删除一致性、材料流式上传和异步任务测试，不会写入开发数据库。
 
-```bash
-node scripts/import-expert-comments.mjs --dry-run
-```
+`test:auth:e2e:local` 会在另一个专用数据库中真正启用 `AUTH_ENABLED=true`，验证两个普通用户的项目隔离、跨用户写入拒绝、管理员边界以及 Cookie 版本和账号停用后的会话失效。
 
-dry-run 不会写入数据库，会输出总行数、有效评语数、唯一评语数、已存在数量、文件内重复数量、分类统计，以及前 5 条解析样例。可以用它确认中文是否正常、字段是否解析正确。
-
-正式导入：
-
-```bash
-node scripts/import-expert-comments.mjs
-```
-
-脚本行为：
-
-- 读取 `data/raw/export-evaluate-content2026-03-04_20-23-03.tsv`。
-- 解析 `achievement_name` 和 `evaluate_content`。
-- 如果某行超过 2 列，会将第一列作为 `achievement_name`，其余列重新用 tab 拼接为 `evaluate_content`，避免评语中包含制表符导致内容丢失。
-- 跳过空评语和少于 5 个字的过短评语。
-- 对评语执行 trim 和空白归一化。
-- 根据关键词粗略分类 `dimension`。
-- 写入 `ExpertComment` 表。
-- 通过 `commentText` 去重，避免重复导入。
-- 在 `KnowledgeSource` 中创建或更新一条来源记录。
-- 如果 TSV 文件不存在，会输出明确提示，不会调用 AI。
-
-查看导入数量：
-
-```bash
-npx prisma studio
-```
-
-打开 `ExpertComment` 表查看总数和导入记录；也可以查看 `KnowledgeSource` 表中标题为“路演大赛历史专家评语 TSV”的记录，`rawText` 会保存最近一次导入统计摘要。
-
-如果终端出现中文乱码，优先确认 TSV 文件本身是 UTF-8 编码。PowerShell 中查看中文时可以使用：
-
-```powershell
-Get-Content data\raw\export-evaluate-content2026-03-04_20-23-03.tsv -TotalCount 5 -Encoding UTF8
-```
-
-脚本本身使用 UTF-8 读取，不会调用 AI API。
-
-### 知识库质量检查
-
-运行：
-
-```bash
-node scripts/analyze-knowledge-base.mjs
-```
-
-该脚本只读取数据库，不写入数据，不调用 AI API。输出 JSON 格式统计，包括：
-
-- `EvaluationRule` 总数、每套规则的指标数量、权重总和和一级指标分值汇总。
-- `ExpertComment` 总数、按大赛和评价维度统计、过短记录数量、重复评语数量、`projectField` 为空数量，以及每个维度最多 3 条样例。
-- `HistoricalQuestion` 总数和按提问视角统计。
-- `KnowledgeSource` 总数、状态统计和来源列表。
-
-### 数据安全注意事项
-
-- 真实资料必须先脱敏。
-- 不要上传、提交或导入涉密、未公开、敏感项目资料。
-- 原始资料默认不建议提交到 Git。
-- 本阶段不会调用 AI API；后续如果把真实文本发送给模型服务，需要先确认数据保留、训练、删除和私有化部署策略。
-
-## 路演表现分析基础版
-
-训练页 `/training/{sessionId}` 已支持在路演结束并保存手动转写文本后生成“路演表现分析”。本功能只分析本轮路演表达表现，不开发自动 ASR、不开发答辩反馈、不生成综合报告。
-
-接口：
-
-```text
-POST /training/{sessionId}/analysis
-GET /training/{sessionId}/analysis
-```
-
-分析输入包括：
-
-- `TrainingSession`：路演状态、开始时间、结束时间、路演时长、当前页码。
-- `SlideEvent`：START、NEXT、PREV、JUMP、END、pageIndex、elapsedSec。
-- `TrainingTranscript`：优先读取该 session 下已完成的转写文本；没有转写文本时不会生成分析。
-- `buildProjectAIContext`：项目基本信息、纳入 AI 上下文的解析材料、真实评审规则、评分指标、专家评语和历史问题。
-
-生成前置条件：
-
-- 路演必须已经结束，否则返回“请先结束路演后再分析”。
-- 必须已经保存转写文本，否则返回“请先保存转写文本后再分析”。
-- AI 调用仍统一通过 `lib/ai.ts`，只发送文本上下文和转写文本，不上传原始 PDF、录音或其他文件。
-
-分析结果写入 `TrainingAnalysis`，当前 `analysisType` 为 `PITCH`，状态包括 `PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`。结果维度包括：
-
-- 总体评分 `overallScore`：0 到 100，表示本轮路演表达表现分，不是项目材料基础分。
-- 总体评价 `summary`。
-- 优点 `strengthsJson`。
-- 问题 `weaknessesJson`。
-- 改进建议 `suggestionsJson`。
-- 内容覆盖情况 `coverageJson`：项目背景、痛点问题、技术方案、核心创新、应用场景、市场空间、商业模式、团队能力、融资/合作需求。
-- 时间节奏 `timingJson`。
-- 翻页节奏 `slideSyncJson`。
-- 可能被追问的问题 `riskQuestionsJson`。
-- AI 原始结构化结果 `rawResultJson`。
-
-训练页刷新后会读取最近一次 `TrainingAnalysis` 并展示；已有结果时可以点击“重新生成分析”更新结果。
-
-注意：
-
-- 当前没有接入真实 ASR，不会自动把录音转成文字。
-- 手动转写文本质量会直接影响分析质量。
-- 如果使用外部模型服务，真实项目资料发送前仍需确认数据保留、训练、删除和私有化部署策略。
-
-## 训练流程重构基础版
-
-训练流程已从单页堆叠调整为分阶段路由：
-
-```text
-/training/{sessionId}/prepare
-/training/{sessionId}/pitch
-/training/{sessionId}/qa
-/training/{sessionId}/report
-```
-
-`/training/{sessionId}` 作为入口页，会根据 `TrainingSession.status` 自动跳转：
-
-- `CREATED`、`PITCH_READY`：进入准备页。
-- `PITCHING`：进入正式路演页。
-- `PITCH_ENDED`、`QA_READY`、`QAING`：进入答辩准备页。
-- `QA_ENDED`、`REPORT_READY`、`FINISHED`：进入报告页。
-
-准备页负责：
-
-- 展示项目名称、路演规则和材料预览入口。
-- 要求用户明确选择“开启麦克风并准备训练”或“暂不录音，继续训练”。
-- 麦克风授权和测试在准备页完成，正式进入路演页后不再首次弹出麦克风权限确认。
-- 准备完成后状态可推进到 `PITCH_READY`。
-
-路演页负责：
-
-- PDF 标准预览和兼容预览。
-- 大屏/全屏模式。
-- 9 分钟倒计时。
-- 翻页和 `SlideEvent` 记录。
-- 根据准备页选择的策略开始录音或跳过录音。
-- 主动结束或倒计时结束后写入 END 事件，并推进到 `QA_READY`。
-- 路演结束后跳转答辩准备页。
-- 不再直接展示完整路演表现分析长结果。
-
-答辩页当前支持“语音评委答辩舱”基础流程：
-
-- 左侧为大尺寸材料参考区，右侧为答辩控制区。
-- 答辩阶段可翻阅材料，但翻页不写入路演 `SlideEvent`，不参与路演节奏分析。
-- 可点击“生成答辩问题”，通过 `POST /training/{sessionId}/qa/questions/generate` 生成 3 个本轮答辩问题。
-- 问题生成会读取项目上下文、纳入 AI 上下文的材料文本、路演转写文本和路演表现分析；AI 调用仍统一通过 `lib/ai.ts`，不会上传原始文件。
-- 如本轮已生成问题，接口默认返回已有问题，不重复生成。
-- 开始答辩前只显示已生成问题数量和答辩规则，不默认展示全部问题正文。
-- 点击“开始答辩”后通过 `POST /training/{sessionId}/qa/start` 将状态推进到 `QAING`，记录 `qaStartedAt`。
-- 每道题进入时使用浏览器本地 `speechSynthesis` 播报评委问题，不接入外部 TTS API。
-- 语音选择会优先尝试中文男声，例如 `Yunxi`、`Kangkang`、`Male`、`男` 等本地 voice；找不到时使用任意 `zh-CN` 语音，再找不到则使用浏览器默认语音。语音质量受本机系统 voices 限制。
-- 播报语速略快，约 `rate = 1.15`，音高略低，约 `pitch = 0.92`。
-- 如果浏览器不支持语音提问，或 `speechSynthesis.onend` 未正常触发，会自动切换或超时进入后续流程，不影响答辩。
-- 问题文字默认隐藏；用户可点击“查看问题文字”，该行为会记录到 `TrainingAnswer.revealedQuestionText`。
-- 语音提问结束后显示 3、2、1，再进入回答状态。
-- 总答题时间为 3 分钟；评委提问和 3、2、1 期间暂停答题倒计时，回答期间倒计时继续减少。
-- 答辩录音使用每题一段录音方案，每题在 3、2、1 结束后开始录音，进入下一题或完成答辩时停止并上传。
-- 每段答辩录音保存为 `TrainingRecording.phase = QA`，并通过 `TrainingAnswer.recordingId` 关联到对应题目。
-- 麦克风不可用时允许继续答辩，仅记录题目和时间，并显示“本题未启用录音”。
-- 答辩阶段不再提供文字记录框，`answerText` 可为空，后续由 ASR 或人工转写补充。
-- 每题点击“回答完毕，进入下一题”会写入 `TrainingAnswer`，包括 `recordingId`、`revealedQuestionText`、`startedAt`、`endedAt` 和 `durationSec`。
-- 非最后一题主按钮为“回答完毕，进入下一题”；最后一题为“完成答辩”；剩余时间不足 30 秒时为“保存本题并完成答辩”。
-- 答完所有题、主动结束或倒计时结束时，通过 `POST /training/{sessionId}/qa/end` 或答题接口完成答辩，状态推进到 `QA_ENDED`，并跳转报告页。
-
-报告页当前仍是综合报告占位流程：
-
-- 显示本轮训练已完成。
-- 保留路演录音回放、手动转写文本保存和编辑。
-- 展示路演表现分析的简要状态，并可生成或重新生成路演表现分析。
-- 如果答辩已完成，展示 `TrainingQuestion` 和 `TrainingAnswer` 的问题、回答用时、是否查看过问题文字和回答摘要。
-- 如果存在 QA 录音，按每个问题分别展示对应录音回放控件。
-- 如果某题没有录音，显示“本题未保存录音”。
-- 如果本题没有文字回答，显示“语音回答已记录，待转写”。
-- 暂不生成完整综合报告、答辩评分、答辩分析、雷达图。
-
-当前没有接入真实 ASR。录音不会自动转写，仍需手动保存转写文本。
-当前没有开发答辩 AI 评分或最终综合报告生成，也没有接入外部 TTS API。
+`test:worker:local` 会创建专用数据库、启动真实的独立 Worker 进程，并确认它发布了包含转写与报告生成能力的有效心跳。

@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { isProjectOwnedByCurrentUser } from "@/lib/auth-server";
+import {
+  getCurrentAuthUser,
+  isProjectOwnedByCurrentUser,
+} from "@/lib/auth-server";
 import {
   buildProjectAIContext,
   ProjectContextNotFoundError,
@@ -15,6 +18,13 @@ export async function GET(_request: Request, context: AIContextRouteContext) {
   const { id } = await context.params;
 
   try {
+    if (process.env.NODE_ENV !== "development") {
+      const user = await getCurrentAuthUser();
+      if (!user || user.role !== "ADMIN") {
+        return NextResponse.json({ error: "项目不存在。" }, { status: 404 });
+      }
+    }
+
     if (!(await isProjectOwnedByCurrentUser(id))) {
       return NextResponse.json({ error: "项目不存在。" }, { status: 404 });
     }

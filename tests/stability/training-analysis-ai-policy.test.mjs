@@ -204,7 +204,10 @@ test("analysis prompt limits corpus samples and strips unused file fields", () =
   );
   assert.deepEqual(
     JSON.parse(
-      prompts.buildTrainingAnalysisPrompt(context, "{{files}}", input),
+      prompts
+        .buildTrainingAnalysisPrompt(context, "{{files}}", input)
+        .match(/<untrusted_data[^>]*>\n([\s\S]*)\n<\/untrusted_data>/)?.[1] ??
+        "null",
     ),
     [
       {
@@ -235,7 +238,7 @@ test("repair prompt includes parse diagnostics, schema and original output", () 
   assert.match(prompt, /截取后长度：80/);
   assert.match(prompt, /解析失败位置：47/);
   assert.match(prompt, /"dynamicFollowupReview": null/);
-  assert.match(prompt, /需要修复的原始返回：\n\{"summary":/);
+  assert.match(prompt, /需要修复的原始返回：\n<untrusted_data[^>]*>\n"\{\\"summary\\"/);
 });
 
 test("parse failure debug preserves metadata and bounds raw AI output", () => {

@@ -11,7 +11,10 @@ export {
   startTrainingTranscriptionRecoveryWorker,
 } from "./training-transcribe/recovery";
 export {
+  queueTranscriptionTask,
+  runOrQueueTranscription,
   runTranscriptionWithLock,
+  startOrQueueTranscriptionTask,
   startTranscriptionTask,
 } from "./training-transcribe/runner";
 export { transcriptSelect } from "./training-transcribe/types";

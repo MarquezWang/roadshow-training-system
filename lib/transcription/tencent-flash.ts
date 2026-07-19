@@ -1,8 +1,9 @@
 import { createHmac } from "crypto";
 import { execFile } from "child_process";
-import { mkdir, readFile, rm, stat } from "fs/promises";
+import { mkdir, rm, stat } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
+import { fetchWithFileBody } from "@/lib/http-file-stream.mjs";
 import type {
   TranscriptionResult,
   TranscriptionSegment,
@@ -273,21 +274,22 @@ function extractTencentFlashResult(
 
 async function callTencentFlashApi(
   config: TencentFlashConfig,
-  audioBuffer: Buffer,
+  audioPath: string,
+  audioBytes: number,
   signal: AbortSignal,
 ) {
   const { url, signature } = buildSignedUrl(config);
   return runWithTranscriptionAbort(
     { signal, timeoutMs: config.timeoutMs },
     async (requestSignal: AbortSignal) => {
-      const response = await fetch(url, {
-        method: "POST",
+      const response = await fetchWithFileBody(url, {
+        filePath: audioPath,
         headers: {
           Authorization: signature,
           "Content-Type": "application/octet-stream",
+          "Content-Length": String(audioBytes),
           Host: TENCENT_FLASH_HOST,
         },
-        body: new Uint8Array(audioBuffer),
         signal: requestSignal,
       });
       const rawText = await response.text();
@@ -328,11 +330,12 @@ export async function transcribeWithTencentFlash(
     const converted = await convertToTencentFlashMp3(absolutePath, signal);
     convertedPath = converted.outputPath;
 
-    const audioBuffer = await readFile(
-      /* turbopackIgnore: true */ converted.outputPath,
-      { signal },
+    const result = await callTencentFlashApi(
+      config,
+      converted.outputPath,
+      converted.size,
+      signal,
     );
-    const result = await callTencentFlashApi(config, audioBuffer, signal);
     const transcription = extractTencentFlashResult(result);
 
     if (!transcription.text) {

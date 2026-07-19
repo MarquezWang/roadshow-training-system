@@ -254,6 +254,7 @@ export async function POST(
         projectId: true,
         status: true,
         projectContextSnapshot: true,
+        contextSchemaVersion: true,
       },
     });
 
@@ -327,7 +328,10 @@ export async function POST(
     {
       const [aiContext, template, transcript, pitchAnalysis] =
         await Promise.all([
-          parseProjectAIContextSnapshot(session.projectContextSnapshot) ??
+          parseProjectAIContextSnapshot(
+            session.projectContextSnapshot,
+            session.contextSchemaVersion,
+          ) ??
             buildProjectAIContext(session.projectId),
           loadPromptTemplate("training-qa-question-generation"),
           getLatestTranscript(session.id),
@@ -360,6 +364,7 @@ export async function POST(
 
       let aiResult = await callAI({
         task: "judgeQuestionGeneration",
+        projectId: session.projectId,
         systemPrompt: baseSystemPrompt,
         userPrompt,
         temperature: 0.2,
@@ -383,6 +388,7 @@ export async function POST(
 
         aiResult = await callAI({
           task: "judgeQuestionGeneration",
+          projectId: session.projectId,
           systemPrompt: `${baseSystemPrompt}\n\n重要：确保所有字符串值中的双引号、换行符等特殊字符都已正确转义。输出必须是严格合法的 JSON，不要有任何 JSON 语法错误。`,
           userPrompt,
           temperature: 0,

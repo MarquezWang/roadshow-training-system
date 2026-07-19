@@ -19,6 +19,13 @@ import {
   getSystemConfigurationStatus,
   type SystemConfigurationStatus,
 } from "./system-status-policy";
+import { getBackgroundTaskMode } from "@/lib/background-task-mode.mjs";
+import {
+  readBackgroundWorkerHealth,
+  TRAINING_ANALYSIS_CAPABILITY,
+  TRAINING_TRANSCRIPTION_CAPABILITY,
+  UPLOAD_MAINTENANCE_CAPABILITY,
+} from "@/lib/worker-heartbeat.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -35,6 +42,7 @@ export type SystemStatusData = {
   libreOffice: LibreOfficeCheckResult;
   databaseCheck: SystemCheckResult;
   uploadDirectoryCheck: SystemCheckResult;
+  backgroundWorkerCheck: SystemCheckResult;
   diagnosticEvents: DiagnosticEvent[];
   runtimeVersion: RuntimeVersion;
   configuration: SystemConfigurationStatus;
@@ -48,6 +56,42 @@ async function checkDatabaseConnection(): Promise<SystemCheckResult> {
     return {
       ok: false,
       value: "连接失败",
+      note: error instanceof Error ? error.message : "未知错误",
+    };
+  }
+}
+
+async function checkBackgroundWorker(): Promise<SystemCheckResult> {
+  const mode = getBackgroundTaskMode();
+  if (mode === "embedded") {
+    return { ok: true, value: "嵌入 Web 进程" };
+  }
+
+  try {
+    const health = await readBackgroundWorkerHealth(prisma, {
+      requiredCapabilities: [
+        TRAINING_ANALYSIS_CAPABILITY,
+        TRAINING_TRANSCRIPTION_CAPABILITY,
+        ...(process.env.UPLOAD_MAINTENANCE_ENABLED === "true"
+          ? [UPLOAD_MAINTENANCE_CAPABILITY]
+          : []),
+      ],
+    });
+    if (!health.healthy) {
+      return {
+        ok: false,
+        value: "未检测到有效心跳",
+        note: `活动 Worker=${health.activeCount}，满足能力要求=${health.capableCount}`,
+      };
+    }
+    return {
+      ok: true,
+      value: `${health.latest?.hostname ?? "unknown"} / PID ${health.latest?.processId ?? "?"}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      value: "检查失败",
       note: error instanceof Error ? error.message : "未知错误",
     };
   }
@@ -102,12 +146,14 @@ export async function loadSystemStatusData(): Promise<SystemStatusData> {
     libreOffice,
     databaseCheck,
     uploadDirectoryCheck,
+    backgroundWorkerCheck,
     diagnosticEvents,
     runtimeVersion,
   ] = await Promise.all([
     checkLibreOfficeAvailability(),
     checkDatabaseConnection(),
     checkUploadDirectory(),
+    checkBackgroundWorker(),
     readRecentDiagnosticEvents(12),
     readRuntimeVersion(),
   ]);
@@ -122,6 +168,7 @@ export async function loadSystemStatusData(): Promise<SystemStatusData> {
     libreOffice,
     databaseCheck,
     uploadDirectoryCheck,
+    backgroundWorkerCheck,
     diagnosticEvents,
     runtimeVersion,
     configuration,

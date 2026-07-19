@@ -4,6 +4,7 @@ import { devLog, devWarn } from "@/lib/dev-log";
 import { prisma } from "@/lib/prisma";
 import { TranscribeBusinessError } from "@/lib/transcribe-error";
 import { transcribeAudio } from "@/lib/transcription";
+import { TRANSCRIPT_SEGMENTS_SCHEMA_VERSION } from "@/lib/persisted-json-versions";
 import {
   completeTrainingTranscriptionJob,
   failTrainingTranscriptionJob,
@@ -78,6 +79,7 @@ export async function executeAcquiredTranscription(
         transcription.segments.length > 0
           ? JSON.stringify(transcription.segments)
           : null,
+      segmentsSchemaVersion: TRANSCRIPT_SEGMENTS_SCHEMA_VERSION,
     });
     const transcript =
       completed.transcript ?? (await readTranscript(recordingId));

@@ -38,9 +38,9 @@ export function SystemOverviewSection({
           </p>
         </div>
         <div className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3">
-          <p className="text-xs text-slate-500">转写 Provider</p>
+          <p className="text-xs text-slate-500">后台任务模式</p>
           <p className="mt-2 break-all font-mono text-sm font-semibold text-slate-950">
-            {configuration.transcriptionProvider}
+            {configuration.backgroundTaskMode}
           </p>
         </div>
       </div>
@@ -61,6 +61,17 @@ export function SystemOverviewSection({
           configuration.aiConfigured
             ? `AI Key 已配置，fast=${AI_MODEL_FAST}，strong=${AI_MODEL_STRONG}。`
             : "AI Key 未配置，项目识别、问题生成、动态追问和报告生成会失败。"
+        }
+      />
+      <RiskRow
+        title="后台任务"
+        level={
+          configuration.backgroundTaskMode === "external" ? "正常" : "注意"
+        }
+        detail={
+          configuration.backgroundTaskMode === "external"
+            ? "报告生成、转写恢复与上传维护由独立 Worker 执行，Web 进程只负责入队。"
+            : "后台任务仍嵌入 Web 进程，仅适合单实例固定服务器。"
         }
       />
       <RiskRow

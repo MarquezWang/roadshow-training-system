@@ -13,6 +13,7 @@ export const trainingAnalysisInputSessionSelect = {
   currentPageIndex: true,
   primaryFileId: true,
   projectContextSnapshot: true,
+  contextSchemaVersion: true,
   project: {
     select: {
       id: true,

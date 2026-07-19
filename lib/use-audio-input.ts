@@ -51,22 +51,12 @@ export function useAudioInput() {
     }
 
     try {
-      let hasPermission = false;
-      try {
-        const testStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-        });
-        testStream.getTracks().forEach((t) => t.stop());
-        hasPermission = true;
-      } catch {
-        // 权限未授予，enumerateDevices 仍可工作但 label 为空
-      }
-
-      setPermissionGranted(hasPermission);
-
       const allDevices = await navigator.mediaDevices.enumerateDevices();
-      const audioInputs: AudioInputDevice[] = allDevices
-        .filter((d) => d.kind === "audioinput" && d.deviceId)
+      const rawAudioInputs = allDevices.filter(
+        (device) => device.kind === "audioinput" && device.deviceId,
+      );
+      const hasPermission = rawAudioInputs.some((device) => device.label);
+      const audioInputs: AudioInputDevice[] = rawAudioInputs
         .map((d) => ({
           deviceId: d.deviceId,
           label: d.label || `麦克风 ${d.deviceId.slice(0, 8)}`,
@@ -74,6 +64,7 @@ export function useAudioInput() {
         }));
 
       setDevices(audioInputs);
+      setPermissionGranted(hasPermission);
 
       if (hasPermission) {
         setSelectedDeviceIdState((prev) => {
@@ -128,7 +119,8 @@ export function useAudioInput() {
   );
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 初始化时枚举设备
+    // enumerateDevices 不会主动申请麦克风权限。
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 初始化时只读枚举设备
     refreshDevices();
   }, [refreshDevices]);
 

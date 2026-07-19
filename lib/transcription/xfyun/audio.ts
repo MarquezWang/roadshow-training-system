@@ -1,9 +1,9 @@
 import { execFile } from "child_process";
 import { existsSync } from "fs";
-import { readFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { promisify } from "util";
+import { inspectAudioResource } from "@/lib/audio-resource-boundary.mjs";
 import { xfyunDebugLog } from "./debug";
 import type { XfyunAudioInfo } from "./types";
 
@@ -144,14 +144,17 @@ async function convertToWav(
     throw new Error("音频转码失败：ffmpeg 未生成输出文件。");
   }
 
-  const stat = await readFile(/* turbopackIgnore: true */ outputPath, {
-    signal,
-  }).then((buffer) => buffer.length);
+  const inspected = await inspectAudioResource(outputPath, { signal });
   xfyunDebugLog(
-    `[xfyun convert] outputPath=${outputPath} fileSize=${stat} bytes`,
+    `[xfyun convert] outputPath=${outputPath} fileSize=${inspected.sizeBytes} bytes`,
   );
 
-  const audioInfo = await probeAudio(outputPath, signal);
+  const audioInfo: XfyunAudioInfo = {
+    durationSeconds: inspected.durationSeconds,
+    codec: inspected.codec,
+    sampleRate: inspected.sampleRate,
+    channels: inspected.channels,
+  };
   return { outputPath, audioInfo };
 }
 

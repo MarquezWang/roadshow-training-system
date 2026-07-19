@@ -12,16 +12,20 @@ const operationsCommands = [
   "npm run lint && npm run build",
   "pm2 status",
   "pm2 restart roadshow-training-system --update-env",
+  "pm2 restart roadshow-background-worker --update-env",
   "pm2 logs roadshow-training-system --lines 120 --nostream",
+  "pm2 logs roadshow-background-worker --lines 120 --nostream",
   "sudo nginx -t && sudo systemctl reload nginx",
   "libreoffice --version || soffice --version",
 ];
 
 export function SystemOperationsSections({
+  backgroundWorkerCheck,
   databaseCheck,
   diagnosticEvents,
   uploadDirectoryCheck,
 }: {
+  backgroundWorkerCheck: SystemCheckResult;
   databaseCheck: SystemCheckResult;
   diagnosticEvents: DiagnosticEvent[];
   uploadDirectoryCheck: SystemCheckResult;
@@ -40,6 +44,9 @@ export function SystemOperationsSections({
           </li>
           <li>
             如修改服务器环境变量，需要重启应用并确认 PM2 使用了最新环境。
+          </li>
+          <li>
+            external 模式需要 Web 和 Worker 两个进程；Worker 心跳失效时转写会停留在队列中。
           </li>
         </ul>
       </CollapsibleSection>
@@ -66,6 +73,12 @@ export function SystemOperationsSections({
           value={uploadDirectoryCheck.value}
           ok={uploadDirectoryCheck.ok}
           note={uploadDirectoryCheck.ok ? undefined : uploadDirectoryCheck.note}
+        />
+        <ConfigRow
+          label="后台 Worker"
+          value={backgroundWorkerCheck.value}
+          ok={backgroundWorkerCheck.ok}
+          note={backgroundWorkerCheck.ok ? undefined : backgroundWorkerCheck.note}
         />
       </CollapsibleSection>
 

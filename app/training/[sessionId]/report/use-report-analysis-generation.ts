@@ -84,7 +84,9 @@ export function useReportAnalysisGeneration({
         },
       );
       const body = (await response.json().catch(() => null)) as {
-        analysis?: ReportTrainingAnalysis;
+        analysis?: ReportTrainingAnalysis | null;
+        queued?: boolean;
+        jobStatus?: string;
         error?: string;
       } | null;
 
@@ -100,6 +102,11 @@ export function useReportAnalysisGeneration({
           return;
         }
         throw new Error(body?.error ?? "报告生成失败，请稍后重试。");
+      }
+
+      if (body?.queued) {
+        setAnalysisMessage("训练报告已进入后台队列，正在生成……");
+        return;
       }
 
       if (!body?.analysis) {
@@ -145,6 +152,9 @@ export function useReportAnalysisGeneration({
         const status = (await res.json().catch(() => null)) as {
           analysisStatus?: string;
           analysisError?: string | null;
+          analysisJobStatus?: string;
+          analysisJobError?: string | null;
+          analysisJobActive?: boolean;
           canGenerateAnalysis?: boolean;
           hasStaleAnalysis?: boolean;
           analysisProcessingTimedOut?: boolean;
@@ -159,6 +169,19 @@ export function useReportAnalysisGeneration({
         } | null;
 
         if (!status) return;
+
+        if (status.analysisJobActive) {
+          setIsAnalysisLoading(true);
+          setCanRetryAnalysisGeneration(false);
+          setAnalysisMessage(
+            status.analysisJobStatus === "RETRY_WAIT"
+              ? "训练报告生成暂时失败，正在等待自动重试……"
+              : status.analysisJobStatus === "PENDING"
+                ? "训练报告已进入后台队列，等待 Worker 处理……"
+                : "独立 Worker 正在生成训练报告……",
+          );
+          return;
+        }
 
         // 已完成且非 stale：检查是否还有 transcript 未完成
         if (
@@ -215,7 +238,11 @@ export function useReportAnalysisGeneration({
         }
 
         // 失败 → 停止轮询
-        if (status.analysisStatus === "FAILED") {
+        if (
+          status.analysisStatus === "FAILED" ||
+          (status.analysisStatus === "NONE" &&
+            status.analysisJobStatus === "FAILED")
+        ) {
           if (statusPollTimerRef.current) {
             clearInterval(statusPollTimerRef.current);
             statusPollTimerRef.current = null;

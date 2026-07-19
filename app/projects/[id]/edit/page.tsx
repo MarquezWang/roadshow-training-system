@@ -2,6 +2,13 @@ import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { ProjectForm } from "@/components/project-form";
 import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
+import {
+  assertTextLength,
+  MAX_PROJECT_CONTACT_LENGTH,
+  MAX_PROJECT_DETAIL_LENGTH,
+  MAX_PROJECT_NAME_LENGTH,
+  MAX_PROJECT_SUMMARY_LENGTH,
+} from "@/lib/input-limits";
 import { prisma } from "@/lib/prisma";
 import {
   isCooperationDemand,
@@ -20,12 +27,22 @@ const getValue = (formData: FormData, key: string) =>
 async function updateProject(id: string, formData: FormData) {
   "use server";
 
-  const name = getValue(formData, "name");
-  const summary = getValue(formData, "summary");
+  const limited = (key: string, label: string, maxLength: number) =>
+    assertTextLength(getValue(formData, key), label, maxLength);
+  const name = limited("name", "项目名称", MAX_PROJECT_NAME_LENGTH);
+  const summary = limited("summary", "项目摘要", MAX_PROJECT_SUMMARY_LENGTH);
   const field = getValue(formData, "field");
   const stage = getValue(formData, "stage");
-  const coreTechnology = getValue(formData, "coreTechnology");
-  const applicationScenario = getValue(formData, "applicationScenario");
+  const coreTechnology = limited(
+    "coreTechnology",
+    "技术关键词",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
+  const applicationScenario = limited(
+    "applicationScenario",
+    "应用场景",
+    MAX_PROJECT_DETAIL_LENGTH,
+  );
   const cooperationDemands = [
     ...new Set(
       formData
@@ -34,13 +51,18 @@ async function updateProject(id: string, formData: FormData) {
         .filter(Boolean),
     ),
   ];
-  const cooperationDemandDetail = getValue(
-    formData,
+  const cooperationDemandDetail = limited(
     "cooperationDemandDetail",
+    "合作需求补充说明",
+    MAX_PROJECT_DETAIL_LENGTH,
   );
   const needsConversionSupport =
     getValue(formData, "needsConversionSupport") === "true";
-  const projectContact = getValue(formData, "projectContact");
+  const projectContact = limited(
+    "projectContact",
+    "项目联系人",
+    MAX_PROJECT_CONTACT_LENGTH,
+  );
   const contactPhone = getValue(formData, "contactPhone");
 
   if (
@@ -79,10 +101,22 @@ async function updateProject(id: string, formData: FormData) {
       summary,
       coreTechnology,
       applicationScenario,
-      businessModel: getValue(formData, "businessModel"),
-      productForm: getValue(formData, "productForm"),
-      trlBasis: getValue(formData, "trlBasis"),
-      teamInfo: getValue(formData, "teamInfo"),
+      businessModel: limited(
+        "businessModel",
+        "商业模式",
+        MAX_PROJECT_DETAIL_LENGTH,
+      ),
+      productForm: limited(
+        "productForm",
+        "产品形态",
+        MAX_PROJECT_DETAIL_LENGTH,
+      ),
+      trlBasis: limited(
+        "trlBasis",
+        "TRL 判断依据",
+        MAX_PROJECT_DETAIL_LENGTH,
+      ),
+      teamInfo: limited("teamInfo", "团队信息", MAX_PROJECT_DETAIL_LENGTH),
       cooperationDemand: cooperationDemands.join("、"),
       cooperationDemandDetail,
       needsConversionSupport,

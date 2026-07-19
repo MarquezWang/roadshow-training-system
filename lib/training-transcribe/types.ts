@@ -7,6 +7,7 @@ export const transcriptSelect = {
   language: true,
   text: true,
   segmentsJson: true,
+  segmentsSchemaVersion: true,
   errorMessage: true,
   startedAt: true,
   completedAt: true,
@@ -24,6 +25,7 @@ export type TrainingTranscript = {
   language: string;
   text: string;
   segmentsJson: string | null;
+  segmentsSchemaVersion: string;
   errorMessage: string | null;
   startedAt: Date | null;
   completedAt: Date | null;

@@ -76,17 +76,53 @@ function hasSpecificFact(text: string) {
   return factPattern.test(text);
 }
 
+function isMissingEvidenceText(text: string) {
+  const normalized = text
+    .replace(/[\s，。！？、；：,.!?;:'"“”‘’（）()【】\[\]]/g, "")
+    .toLowerCase();
+
+  return /(?:材料)?(?:未提供|未提及|未说明|未明确|无法支持|无法判断|没有提供|没有提及|依据不足|证据不足)/.test(
+    normalized,
+  );
+}
+
+function normalizeEvidenceSearchText(text: string) {
+  return text.replace(/[\s，。！？、；：,.!?;:'"“”‘’（）()【】\[\]]/g, "");
+}
+
+function evidenceAppearsInSources(evidenceText: string, sourceTexts: string[]) {
+  const normalizedEvidence = normalizeEvidenceSearchText(evidenceText);
+  if (!normalizedEvidence) return false;
+
+  return sourceTexts.some((sourceText) =>
+    normalizeEvidenceSearchText(sourceText).includes(normalizedEvidence),
+  );
+}
+
 function assertEvidenceForQuestionFacts(
   question: ValidatedGeneratedQuestion,
   index: number,
+  sourceTexts: string[],
 ) {
   if (!hasSpecificFact(question.content)) {
     return;
   }
 
-  if (question.evidence.evidenceText === "材料未提供相关证据") {
+  if (
+    isMissingEvidenceText(question.evidence.evidenceText) ||
+    !hasSpecificFact(question.evidence.evidenceText)
+  ) {
     throw new Error(
       `questions[${index}].content 包含具体数字或数量，但 evidenceText 未提供材料依据。`,
+    );
+  }
+
+  if (
+    sourceTexts.length > 0 &&
+    !evidenceAppearsInSources(question.evidence.evidenceText, sourceTexts)
+  ) {
+    throw new Error(
+      `questions[${index}].content 包含具体数字或数量，但 evidenceText 不是材料原文片段。`,
     );
   }
 
@@ -99,6 +135,7 @@ function assertEvidenceForQuestionFacts(
 
 export function validateGeneratedQuestions(
   questionJson: unknown,
+  options: { sourceTexts?: string[] } = {},
 ): ValidatedGeneratedQuestions {
   if (!isRecord(questionJson)) {
     throw new Error("问题 JSON 顶层结构必须是对象。");
@@ -145,7 +182,11 @@ export function validateGeneratedQuestions(
       );
     }
 
-    assertEvidenceForQuestionFacts(question, index);
+    assertEvidenceForQuestionFacts(
+      question,
+      index,
+      options.sourceTexts?.filter(Boolean) ?? [],
+    );
 
     perspectiveCounts.set(
       question.perspective,

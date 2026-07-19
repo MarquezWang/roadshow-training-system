@@ -1,11 +1,16 @@
 import { createReadStream, existsSync } from "fs";
 import OpenAI from "openai";
 import path from "path";
+import { inspectAudioResource } from "@/lib/audio-resource-boundary.mjs";
 import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { transcribeWithTencentFlash } from "@/lib/transcription/tencent-flash";
 import { transcribeWithTencent } from "@/lib/transcription/tencent";
 import { transcribeWithXfyun } from "@/lib/transcription/xfyun";
 import { runWithTranscriptionAbort } from "@/lib/transcription-abort.mjs";
+import {
+  getGlobalTranscriptionLimiter,
+  getTranscriptionQueueTimeoutMs,
+} from "@/lib/transcription-resource-boundary.mjs";
 
 const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
 const DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 5 * 60_000;
@@ -157,18 +162,26 @@ export async function transcribeAudio(
   options: {
     signal?: AbortSignal;
     timeoutMs?: number;
+    queueTimeoutMs?: number;
   } = {},
 ): Promise<TranscriptionResult> {
   const provider = getTranscriptionProvider();
   const startedAt = Date.now();
+  let release: (() => void) | null = null;
 
   try {
+    release = await getGlobalTranscriptionLimiter().acquire({
+      signal: options.signal,
+      timeoutMs:
+        options.queueTimeoutMs ?? getTranscriptionQueueTimeoutMs(),
+    });
     const result = await runWithTranscriptionAbort(
       {
         signal: options.signal,
         timeoutMs: options.timeoutMs ?? getTranscriptionTimeoutMs(),
       },
       async (signal: AbortSignal) => {
+        await inspectAudioResource(filePath, { signal });
         switch (provider) {
           case "tencent_flash":
             return normalizeTranscriptionResult(
@@ -209,5 +222,7 @@ export async function transcribeAudio(
       },
     });
     throw error;
+  } finally {
+    release?.();
   }
 }

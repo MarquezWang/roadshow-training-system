@@ -74,8 +74,12 @@ const { validateScoreResult } = await import(validatorUrl);
 const scoreDetailUrl = await tsModuleUrl(
   "../../lib/scoring-result-detail.ts",
 );
-const { buildMaterialScoreDetail, MATERIAL_SCORING_METHOD } =
-  await import(scoreDetailUrl);
+const {
+  buildMaterialScoreDetail,
+  MATERIAL_SCORING_METHOD,
+  MATERIAL_SCORE_SCHEMA_VERSION,
+  parseStoredMaterialScoreDetail,
+} = await import(scoreDetailUrl);
 
 const criteria = [
   { category: "项目团队", name: "知识水平及工作经验", weight: 4 },
@@ -403,4 +407,26 @@ test("buildMaterialScoreDetail keeps route score detail invariants", () => {
   assert.equal(scoreResult.totalScore, categoryScoresTotal);
   assert.notEqual(scoreResult.totalScore, aiSuggestedTotal);
   assert.equal(scoreDetail.scoreItems.length, 12);
+});
+
+test("stored material score detail supports legacy rows and rejects unknown schemas", () => {
+  const detail = buildMaterialScoreDetail(
+    validateScoreResult(createScoreJson(), criteria),
+  );
+  const parsed = parseStoredMaterialScoreDetail(
+    JSON.stringify(detail),
+    "material-score-detail:legacy-v0",
+  );
+
+  assert.equal(parsed.scoringMethod, MATERIAL_SCORING_METHOD);
+  assert.equal(parsed.scoreItems.length, criteria.length);
+  assert.match(MATERIAL_SCORE_SCHEMA_VERSION, /^material-score-detail:/);
+  assert.throws(
+    () =>
+      parseStoredMaterialScoreDetail(
+        JSON.stringify(detail),
+        "material-score-detail:v999",
+      ),
+    /不支持的材料评分 schemaVersion/,
+  );
 });

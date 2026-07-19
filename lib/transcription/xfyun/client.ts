@@ -1,5 +1,6 @@
-import { readFile } from "fs/promises";
+import { stat } from "fs/promises";
 import path from "path";
+import { fetchWithFileBody } from "@/lib/http-file-stream.mjs";
 import { throwIfTranscriptionAborted } from "@/lib/transcription-abort.mjs";
 import {
   generateXfyunSigna,
@@ -27,10 +28,8 @@ export async function uploadXfyunAudio(
   const signa = generateXfyunSigna(config.appId, ts, config.secretKey);
   const fileName = path.basename(filePath);
   throwIfTranscriptionAborted(signal);
-  const fileBuffer = await readFile(/* turbopackIgnore: true */ filePath, {
-    signal,
-  });
-  const fileSize = fileBuffer.length;
+  const fileInfo = await stat(/* turbopackIgnore: true */ filePath);
+  const fileSize = fileInfo.size;
   const durationMs = Math.round(audioInfo.durationSeconds * 1000);
 
   const params = new URLSearchParams();
@@ -58,12 +57,12 @@ export async function uploadXfyunAudio(
     `[xfyun upload] uploadFileName=${fileName} uploadFileSize=${fileSize} uploadDurationMs=${durationMs} ffprobeDurationSeconds=${audioInfo.durationSeconds} sampleRate=${audioInfo.sampleRate} channels=${audioInfo.channels} codec=${audioInfo.codec} standardWav=${isStandardWav ? "1" : "not set"} language=${config.language} audioMode=fileStream`,
   );
 
-  const response = await fetch(url, {
-    method: "POST",
+  const response = await fetchWithFileBody(url, {
+    filePath,
     headers: {
       "Content-Type": "application/octet-stream",
+      "Content-Length": String(fileSize),
     },
-    body: new Uint8Array(fileBuffer),
     signal,
   });
 

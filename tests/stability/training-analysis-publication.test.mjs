@@ -90,7 +90,7 @@ test(
         assert.equal(session.currentAnalysisId, oldData.id);
       });
 
-      await t.test("当前 owner 成功发布后原子切换指针", async () => {
+      await t.test("当前 owner 成功发布后原子切换指针并结清任务", async () => {
         const processing = analysisData(prefix, "PROCESSING", "v3:new");
         await prisma.trainingAnalysis.create({ data: { ...processing, sessionId } });
         await prisma.asyncJob.create({
@@ -122,6 +122,12 @@ test(
           ).currentAnalysisId,
           processing.id,
         );
+        const completedJob = await prisma.asyncJob.findUniqueOrThrow({
+          where: { jobKey },
+        });
+        assert.equal(completedJob.status, "COMPLETED");
+        assert.equal(completedJob.ownerToken, "");
+        assert.equal(completedJob.leaseExpiresAt, null);
       });
 
       await t.test("失效 owner 无法发布或改变当前指针", async () => {

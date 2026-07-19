@@ -125,7 +125,10 @@ export async function prepareDynamicFollowupGeneration(params: {
   let aiContext: ProjectAIContext | null;
   try {
     aiContext =
-      parseProjectAIContextSnapshot(session.projectContextSnapshot) ??
+      parseProjectAIContextSnapshot(
+        session.projectContextSnapshot,
+        session.contextSchemaVersion,
+      ) ??
       (await buildProjectAIContext(session.projectId));
   } catch {
     devLog("[dynamic-followup:POST] project context not found, using minimal", {

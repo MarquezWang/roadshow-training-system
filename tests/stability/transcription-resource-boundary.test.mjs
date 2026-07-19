@@ -9,6 +9,10 @@ import {
   runWithTranscriptionAbort,
 } from "../../lib/transcription-abort.mjs";
 import {
+  createTranscriptionLimiter,
+  TranscriptionResourceError,
+} from "../../lib/transcription-resource-boundary.mjs";
+import {
   streamWebBodyToFile,
   UploadStreamError,
 } from "../../lib/stream-upload.mjs";
@@ -41,6 +45,24 @@ test("poll delays stop immediately when the ASR signal is aborted", async () => 
   const pending = abortableTranscriptionDelay(10_000, controller.signal);
   controller.abort(new Error("lease lost"));
   await assert.rejects(pending, /lease lost/);
+});
+
+test("ASR concurrency limiter bounds active provider work and queue time", async () => {
+  const limiter = createTranscriptionLimiter(1);
+  const release = await limiter.acquire();
+  assert.equal(limiter.activeCount, 1);
+
+  await assert.rejects(
+    limiter.acquire({ timeoutMs: 20 }),
+    (error) =>
+      error instanceof TranscriptionResourceError &&
+      error.code === "QUEUE_TIMEOUT",
+  );
+  assert.equal(limiter.activeCount, 1);
+  assert.equal(limiter.pendingCount, 0);
+
+  release();
+  assert.equal(limiter.activeCount, 0);
 });
 
 test("raw recording upload streams to disk and rejects unsafe boundaries", async (t) => {

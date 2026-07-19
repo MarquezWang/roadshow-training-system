@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { queueTrainingAnalysisJob } from "../../lib/training-analysis-job.mjs";
 
 const testDatabaseUrl = process.env.STABILITY_TEST_DATABASE_URL?.trim() ?? "";
 const baseUrl = (
@@ -217,7 +218,23 @@ test(
         assert.equal(body.qaUnansweredBaseQuestionCount, 0);
         assert.equal(body.canGenerateAnalysis, true);
       });
+
+      await t.test("持久化报告队列状态会暴露给前端轮询", async () => {
+        const sessionId = await createFixture({
+          name: "queued-analysis",
+          answeredBaseCount: 3,
+        });
+        await queueTrainingAnalysisJob(prisma, { sessionId });
+        const body = await assertStatusResponse(sessionId);
+
+        assert.equal(body.analysisStatus, "NONE");
+        assert.equal(body.analysisJobStatus, "PENDING");
+        assert.equal(body.analysisJobActive, true);
+      });
     } finally {
+      await prisma.asyncJob.deleteMany({
+        where: { resourceId: { in: sessionIds } },
+      });
       await prisma.trainingSession.deleteMany({
         where: {
           id: {

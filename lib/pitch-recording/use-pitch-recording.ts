@@ -30,102 +30,117 @@ export function usePitchRecording({
     state,
     ...upload,
   });
+  const {
+    recordingId,
+    recordingMessage,
+    recordingPlaybackUrl,
+    recordingStatus,
+    setRecordingMessage,
+    setRecordingStatus,
+    setShowRecordingOptOutConfirm,
+    setShowRecordingPrepDialog,
+    setShowRecordingReenableConfirm,
+    showRecordingOptOutConfirm,
+    showRecordingPrepDialog,
+    showRecordingReenableConfirm,
+  } = state;
+  const {
+    cleanupRecording,
+    confirmRecordingOptOut,
+    isRecordingActive,
+    prepareAndStartRecordingAutomatically,
+    prepareRecording,
+    startRecording,
+    stopMediaStream,
+    stopRecordingAndUpload,
+  } = media;
 
   useRecordingPreference({
     autoStartRecordingOnMount,
     initialRecording,
     isGuardResolved,
     isPitching,
-    prepareAndStartRecordingAutomatically:
-      media.prepareAndStartRecordingAutomatically,
+    prepareAndStartRecordingAutomatically,
     resources,
     sessionId,
     state,
   });
 
   const openRecordingPrepDialog = useCallback(() => {
-    state.setShowRecordingPrepDialog(true);
-    state.setShowRecordingOptOutConfirm(false);
-  }, [state.setShowRecordingOptOutConfirm, state.setShowRecordingPrepDialog]);
+    setShowRecordingPrepDialog(true);
+    setShowRecordingOptOutConfirm(false);
+  }, [setShowRecordingOptOutConfirm, setShowRecordingPrepDialog]);
 
   const openRecordingOptOutConfirm = useCallback(() => {
-    state.setShowRecordingOptOutConfirm(true);
-  }, [state.setShowRecordingOptOutConfirm]);
+    setShowRecordingOptOutConfirm(true);
+  }, [setShowRecordingOptOutConfirm]);
 
   const closeRecordingOptOutConfirm = useCallback(() => {
-    state.setShowRecordingOptOutConfirm(false);
-  }, [state.setShowRecordingOptOutConfirm]);
+    setShowRecordingOptOutConfirm(false);
+  }, [setShowRecordingOptOutConfirm]);
 
   const openRecordingReenableConfirm = useCallback(() => {
-    state.setShowRecordingReenableConfirm(true);
-  }, [state.setShowRecordingReenableConfirm]);
+    setShowRecordingReenableConfirm(true);
+  }, [setShowRecordingReenableConfirm]);
 
   const closeRecordingReenableConfirm = useCallback(() => {
-    state.setShowRecordingReenableConfirm(false);
-  }, [state.setShowRecordingReenableConfirm]);
+    setShowRecordingReenableConfirm(false);
+  }, [setShowRecordingReenableConfirm]);
 
   const reenableRecording = useCallback(() => {
-    state.setShowRecordingReenableConfirm(false);
-    void media.prepareRecording();
-  }, [media.prepareRecording, state.setShowRecordingReenableConfirm]);
+    setShowRecordingReenableConfirm(false);
+    void prepareRecording();
+  }, [prepareRecording, setShowRecordingReenableConfirm]);
 
   const handlePitchStartedRecording = useCallback(() => {
-    if (state.recordingStatus === "READY_TO_RECORD") {
-      void media.startRecording();
-    } else if (state.recordingStatus === "OPTED_OUT") {
-      state.setRecordingMessage("未启用录音，仅记录路演操作。");
-    } else if (state.recordingStatus === "PERMISSION_DENIED") {
-      state.setRecordingMessage(
+    if (recordingStatus === "READY_TO_RECORD") {
+      void startRecording();
+    } else if (recordingStatus === "OPTED_OUT") {
+      setRecordingMessage("未启用录音，仅记录路演操作。");
+    } else if (recordingStatus === "PERMISSION_DENIED") {
+      setRecordingMessage(
         "麦克风权限未开启，本次可继续训练，但不会保存录音。",
       );
-    } else if (state.recordingStatus === "UNSUPPORTED") {
-      state.setRecordingMessage("当前浏览器不支持录音，本次仅记录路演操作。");
+    } else if (recordingStatus === "UNSUPPORTED") {
+      setRecordingMessage("当前浏览器不支持录音，本次仅记录路演操作。");
     }
-  }, [
-    media.startRecording,
-    state.recordingStatus,
-    state.setRecordingMessage,
-  ]);
+  }, [recordingStatus, setRecordingMessage, startRecording]);
 
   const handlePitchEndedWithoutRecording = useCallback(() => {
-    media.stopMediaStream();
-    state.setRecordingStatus((currentStatus) =>
+    stopMediaStream();
+    setRecordingStatus((currentStatus) =>
       currentStatus === "OPTED_OUT" ||
       currentStatus === "PERMISSION_DENIED" ||
       currentStatus === "UNSUPPORTED"
         ? currentStatus
         : "UNDECIDED",
     );
-    state.setRecordingMessage("本次未启用录音。");
-  }, [
-    media.stopMediaStream,
-    state.setRecordingMessage,
-    state.setRecordingStatus,
-  ]);
+    setRecordingMessage("本次未启用录音。");
+  }, [setRecordingMessage, setRecordingStatus, stopMediaStream]);
 
   const markTranscribePreparing = useCallback(() => {
-    state.setRecordingMessage("路演录音已保存，系统正在准备转写。");
-  }, [state.setRecordingMessage]);
+    setRecordingMessage("路演录音已保存，系统正在准备转写。");
+  }, [setRecordingMessage]);
 
   useEffect(() => {
-    return media.cleanupRecording;
-  }, [media.cleanupRecording]);
+    return cleanupRecording;
+  }, [cleanupRecording]);
 
   return {
-    recordingStatus: state.recordingStatus,
-    recordingMessage: state.recordingMessage,
-    recordingId: state.recordingId,
-    recordingPlaybackUrl: state.recordingPlaybackUrl,
-    showRecordingPrepDialog: state.showRecordingPrepDialog,
-    showRecordingOptOutConfirm: state.showRecordingOptOutConfirm,
-    showRecordingReenableConfirm: state.showRecordingReenableConfirm,
-    prepareRecording: media.prepareRecording,
-    confirmRecordingOptOut: media.confirmRecordingOptOut,
+    recordingStatus,
+    recordingMessage,
+    recordingId,
+    recordingPlaybackUrl,
+    showRecordingPrepDialog,
+    showRecordingOptOutConfirm,
+    showRecordingReenableConfirm,
+    prepareRecording,
+    confirmRecordingOptOut,
     uploadRecording: upload.uploadRecording,
-    startRecording: media.startRecording,
-    stopRecordingAndUpload: media.stopRecordingAndUpload,
-    stopMediaStream: media.stopMediaStream,
-    isRecordingActive: media.isRecordingActive,
+    startRecording,
+    stopRecordingAndUpload,
+    stopMediaStream,
+    isRecordingActive,
     openRecordingPrepDialog,
     openRecordingOptOutConfirm,
     closeRecordingOptOutConfirm,

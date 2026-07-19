@@ -1,6 +1,7 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import { readOptionalLimitedJson } from "@/lib/input-limits";
 import { pitchStartableTrainingStatuses } from "@/lib/training-status";
 
 type StartPitchRouteContext = Readonly<{
@@ -56,9 +57,17 @@ export async function POST(
     );
   }
 
-  const body = (await request.json().catch(() => ({}))) as {
+  let body: {
     fileId?: unknown;
   };
+  try {
+    body = await readOptionalLimitedJson(request, {});
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "请求正文无效。" },
+      { status: 400 },
+    );
+  }
   const fileId =
     typeof body.fileId === "string" && body.fileId.trim()
       ? body.fileId.trim()

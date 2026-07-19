@@ -45,6 +45,7 @@ export function isRetryableTranscribeError(error: unknown) {
     "unsupported",
     "not supported",
     "ffmpeg",
+    "ffprobe",
     "file does not exist",
     "audio file does not exist",
   ];
@@ -73,6 +74,7 @@ export function isRetryableTranscribeError(error: unknown) {
     "5xx",
     "empty",
     "为空",
+    "队列拥堵",
     "orderresult",
   ];
 

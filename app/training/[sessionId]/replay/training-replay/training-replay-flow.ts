@@ -135,8 +135,18 @@ export function buildPitchReplaySegments(
 
 export function parseTranscriptSegments(
   value: string | null | undefined,
+  schemaVersion?: string,
 ): TranscriptSegment[] {
   if (!value) {
+    return [];
+  }
+
+  const normalizedVersion =
+    schemaVersion?.trim() || "training-transcript-segments:legacy-v0";
+  if (
+    normalizedVersion !== "training-transcript-segments:legacy-v0" &&
+    normalizedVersion !== "training-transcript-segments:2026-07-19.1"
+  ) {
     return [];
   }
 
@@ -262,8 +272,12 @@ export function getTranscriptExcerptForSegment(
   segmentsJson: string | null | undefined,
   segment: PitchReplaySegment | null,
   totalDurationSec: number,
+  segmentsSchemaVersion?: string,
 ): ReplayTranscriptExcerpt {
-  const segments = parseTranscriptSegments(segmentsJson);
+  const segments = parseTranscriptSegments(
+    segmentsJson,
+    segmentsSchemaVersion,
+  );
   const preciseText = getPreciseTranscriptExcerpt(segments, segment);
 
   if (preciseText) {

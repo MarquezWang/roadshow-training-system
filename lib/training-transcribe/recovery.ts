@@ -1,11 +1,15 @@
 import { devError } from "@/lib/dev-log";
+import { usesExternalBackgroundWorker } from "@/lib/background-task-mode.mjs";
 
 import { getErrorSummary } from "./errors";
 import {
   findDueTrainingTranscriptionRecordings,
   findSessionRecoveryRecordings,
 } from "./repository";
-import { startTranscriptionTask } from "./runner";
+import {
+  queueTranscriptionTask,
+  startTranscriptionTask,
+} from "./runner";
 
 const RECOVERY_SCAN_INTERVAL_MS = 5_000;
 
@@ -13,10 +17,11 @@ export async function recoverTrainingTranscriptionsForSession(
   sessionId: string,
 ) {
   const recordings = await findSessionRecoveryRecordings(sessionId);
+  const dispatch = usesExternalBackgroundWorker()
+    ? queueTranscriptionTask
+    : startTranscriptionTask;
   await Promise.allSettled(
-    recordings.map((recording) =>
-      startTranscriptionTask(sessionId, recording.id),
-    ),
+    recordings.map((recording) => dispatch(sessionId, recording.id)),
   );
   return recordings.length;
 }

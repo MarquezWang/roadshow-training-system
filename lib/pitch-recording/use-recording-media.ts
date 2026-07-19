@@ -20,29 +20,38 @@ type UseRecordingMediaOptions = {
 
 export function useRecordingMedia(options: UseRecordingMediaOptions) {
   const stream = useRecordingStream(options);
+  const {
+    confirmRecordingOptOut,
+    prepareRecording,
+    prepareRecordingStreamAutomatically,
+    stopMediaStream,
+  } = stream;
   const recorder = useMediaRecorder({
     ...options,
-    stopMediaStream: stream.stopMediaStream,
+    stopMediaStream,
   });
+  const {
+    cleanupRecording,
+    isRecordingActive,
+    startRecording,
+    stopRecordingAndUpload,
+  } = recorder;
 
   const prepareAndStartRecordingAutomatically = useCallback(async () => {
-    const isReady = await stream.prepareRecordingStreamAutomatically();
+    const isReady = await prepareRecordingStreamAutomatically();
     if (isReady) {
-      await recorder.startRecording();
+      await startRecording();
     }
-  }, [
-    recorder.startRecording,
-    stream.prepareRecordingStreamAutomatically,
-  ]);
+  }, [prepareRecordingStreamAutomatically, startRecording]);
 
   return {
-    cleanupRecording: recorder.cleanupRecording,
-    confirmRecordingOptOut: stream.confirmRecordingOptOut,
-    isRecordingActive: recorder.isRecordingActive,
+    cleanupRecording,
+    confirmRecordingOptOut,
+    isRecordingActive,
     prepareAndStartRecordingAutomatically,
-    prepareRecording: stream.prepareRecording,
-    startRecording: recorder.startRecording,
-    stopMediaStream: stream.stopMediaStream,
-    stopRecordingAndUpload: recorder.stopRecordingAndUpload,
+    prepareRecording,
+    startRecording,
+    stopMediaStream,
+    stopRecordingAndUpload,
   };
 }

@@ -26,6 +26,10 @@ const recordsPath = new URL(
   "../../app/training/[sessionId]/analysis/training-analysis-records.ts",
   import.meta.url,
 );
+const executorPath = new URL(
+  "../../app/training/[sessionId]/analysis/training-analysis-executor.ts",
+  import.meta.url,
+);
 const persistencePath = new URL(
   "../../app/training/[sessionId]/analysis/training-analysis-persistence.ts",
   import.meta.url,
@@ -68,8 +72,9 @@ test("报告 Schema 校验失败进入修复流程并保存可定位诊断", asy
 });
 
 test("降级报告支持显式重新生成且保留旧版本", async () => {
-  const [route, records, persistence, hook, overview] = await Promise.all([
+  const [route, executor, records, persistence, hook, overview] = await Promise.all([
     readFile(routePath, "utf8"),
+    readFile(executorPath, "utf8"),
     readFile(recordsPath, "utf8"),
     readFile(persistencePath, "utf8"),
     readFile(hookPath, "utf8"),
@@ -77,7 +82,7 @@ test("降级报告支持显式重新生成且保留旧版本", async () => {
   ]);
 
   assert.match(route, /searchParams\.get\("force"\) === "true"/);
-  assert.match(route, /!staleCheck\.stale && !forceRegeneration/);
+  assert.match(executor, /!staleCheck\.stale && !forceRegeneration/);
   assert.match(
     records,
     /isFallbackReport:\s*isFallbackTrainingAnalysis\(analysis\)/,

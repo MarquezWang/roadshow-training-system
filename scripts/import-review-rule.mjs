@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { validateEvaluationRule } from "../lib/review-rule-validation.mjs";
 
 const prisma = new PrismaClient();
 
@@ -9,85 +10,9 @@ const SOURCE_TITLE = "路演大赛真实评审规则 JSON";
 const SOURCE_FILE_PATH = "data/knowledge/rules/roadshow-review-rule-100.json";
 const RULE_FILE = path.join(process.cwd(), SOURCE_FILE_PATH);
 
-function assertString(value, fieldName) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${fieldName} 必须是非空字符串。`);
-  }
-
-  return value.trim();
-}
-
-function assertNumber(value, fieldName) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${fieldName} 必须是数字。`);
-  }
-
-  return value;
-}
-
-function validateRule(rule) {
-  const name = assertString(rule.name, "name");
-  const contestName = assertString(rule.contestName, "contestName");
-  const version = assertString(rule.version, "version");
-  const totalScore = assertNumber(rule.totalScore, "totalScore");
-
-  if (totalScore !== 100) {
-    throw new Error(`totalScore 必须等于 100，当前为 ${totalScore}。`);
-  }
-
-  if (!Array.isArray(rule.criteria) || rule.criteria.length === 0) {
-    throw new Error("criteria 必须是非空数组。");
-  }
-
-  const criteria = rule.criteria.map((criterion, index) => ({
-    category:
-      typeof criterion.category === "string" && criterion.category.trim()
-        ? criterion.category.trim()
-        : null,
-    name: assertString(criterion.name, `criteria[${index}].name`),
-    weight: assertNumber(criterion.weight, `criteria[${index}].weight`),
-    description: assertString(
-      criterion.description,
-      `criteria[${index}].description`,
-    ),
-    scoringGuide:
-      typeof criterion.scoringGuide === "string" &&
-      criterion.scoringGuide.trim()
-        ? criterion.scoringGuide.trim()
-        : null,
-    sortOrder: assertNumber(criterion.sortOrder, `criteria[${index}].sortOrder`),
-  }));
-
-  const criteriaWeightTotal = criteria.reduce(
-    (sum, criterion) => sum + criterion.weight,
-    0,
-  );
-
-  if (criteriaWeightTotal !== 100) {
-    throw new Error(`criteria weight 总和必须等于 100，当前为 ${criteriaWeightTotal}。`);
-  }
-
-  return {
-    name,
-    contestName,
-    version,
-    totalScore,
-    description:
-      typeof rule.description === "string" && rule.description.trim()
-        ? rule.description.trim()
-        : null,
-    rawText:
-      typeof rule.rawText === "string" && rule.rawText.trim()
-        ? rule.rawText.trim()
-        : JSON.stringify(rule, null, 2),
-    criteria,
-    criteriaWeightTotal,
-  };
-}
-
-async function upsertKnowledgeSource(summary) {
+async function upsertKnowledgeSource(client, summary) {
   const rawText = JSON.stringify(summary, null, 2);
-  const existingSource = await prisma.knowledgeSource.findFirst({
+  const existingSource = await client.knowledgeSource.findFirst({
     where: {
       title: SOURCE_TITLE,
       filePath: SOURCE_FILE_PATH,
@@ -95,7 +20,7 @@ async function upsertKnowledgeSource(summary) {
   });
 
   if (existingSource) {
-    await prisma.knowledgeSource.update({
+    await client.knowledgeSource.update({
       where: { id: existingSource.id },
       data: {
         type: "REVIEW_RULE",
@@ -106,7 +31,7 @@ async function upsertKnowledgeSource(summary) {
     return;
   }
 
-  await prisma.knowledgeSource.create({
+  await client.knowledgeSource.create({
     data: {
       title: SOURCE_TITLE,
       type: "REVIEW_RULE",
@@ -131,52 +56,7 @@ async function main() {
     throw new Error(`评审规则 JSON 格式不合法：${error.message}`);
   }
 
-  const rule = validateRule(parsedRule);
-  const existingRule = await prisma.evaluationRule.findFirst({
-    where: {
-      name: rule.name,
-      version: rule.version,
-    },
-  });
-
-  const savedRule = existingRule
-    ? await prisma.evaluationRule.update({
-        where: { id: existingRule.id },
-        data: {
-          contestName: rule.contestName,
-          totalScore: rule.totalScore,
-          description: rule.description,
-          rawText: rule.rawText,
-        },
-      })
-    : await prisma.evaluationRule.create({
-        data: {
-          name: rule.name,
-          contestName: rule.contestName,
-          version: rule.version,
-          totalScore: rule.totalScore,
-          description: rule.description,
-          rawText: rule.rawText,
-        },
-      });
-
-  await prisma.evaluationCriterion.deleteMany({
-    where: {
-      ruleId: savedRule.id,
-    },
-  });
-
-  await prisma.evaluationCriterion.createMany({
-    data: rule.criteria.map((criterion) => ({
-      ruleId: savedRule.id,
-      category: criterion.category,
-      name: criterion.name,
-      weight: criterion.weight,
-      description: criterion.description,
-      scoringGuide: criterion.scoringGuide,
-      sortOrder: criterion.sortOrder,
-    })),
-  });
+  const rule = validateEvaluationRule(parsedRule);
 
   const summary = {
     ruleName: rule.name,
@@ -190,7 +70,46 @@ async function main() {
     importedAt: new Date().toISOString(),
   };
 
-  await upsertKnowledgeSource(summary);
+  await prisma.$transaction(async (transaction) => {
+    const savedRule = await transaction.evaluationRule.upsert({
+      where: {
+        contestName_version: {
+          contestName: rule.contestName,
+          version: rule.version,
+        },
+      },
+      update: {
+        name: rule.name,
+        totalScore: rule.totalScore,
+        description: rule.description,
+        rawText: rule.rawText,
+      },
+      create: {
+        name: rule.name,
+        contestName: rule.contestName,
+        version: rule.version,
+        totalScore: rule.totalScore,
+        description: rule.description,
+        rawText: rule.rawText,
+      },
+    });
+
+    await transaction.evaluationCriterion.deleteMany({
+      where: { ruleId: savedRule.id },
+    });
+    await transaction.evaluationCriterion.createMany({
+      data: rule.criteria.map((criterion) => ({
+        ruleId: savedRule.id,
+        category: criterion.category,
+        name: criterion.name,
+        weight: criterion.weight,
+        description: criterion.description,
+        scoringGuide: criterion.scoringGuide,
+        sortOrder: criterion.sortOrder,
+      })),
+    });
+    await upsertKnowledgeSource(transaction, summary);
+  });
 
   console.log(JSON.stringify(summary, null, 2));
 }

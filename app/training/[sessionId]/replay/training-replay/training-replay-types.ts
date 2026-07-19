@@ -26,6 +26,7 @@ export type ReplayTranscript = {
   language: string;
   text: string;
   segmentsJson: string | null;
+  segmentsSchemaVersion: string;
   errorMessage: string | null;
   startedAt: string | null;
   completedAt: string | null;

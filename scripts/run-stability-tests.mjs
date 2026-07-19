@@ -19,6 +19,7 @@ const testEnv = {
   DATABASE_URL: databaseUrl,
   STABILITY_TEST_DATABASE_URL: databaseUrl,
   STABILITY_TEST_BASE_URL: baseUrl,
+  STABILITY_TEST_DISABLE_EMBEDDED_WORKERS: "true",
 };
 
 let serverProcess = null;

@@ -1,9 +1,11 @@
 import type { TranscriptionProvider } from "@/lib/transcription";
+import { getBackgroundTaskMode } from "@/lib/background-task-mode.mjs";
 
 type SystemEnvironment = Readonly<Record<string, string | undefined>>;
 
 export type SystemConfigurationStatus = {
   authEnabled: boolean;
+  backgroundTaskMode: string;
   aiConfigured: boolean;
   aiProvider: string;
   aiProviderConfigured: boolean;
@@ -69,6 +71,7 @@ export function getSystemConfigurationStatus({
 
   return {
     authEnabled: env.AUTH_ENABLED === "true",
+    backgroundTaskMode: getBackgroundTaskMode(env),
     aiConfigured: hasConfiguredValue(env.AI_API_KEY),
     aiProvider: displayConfigValue(env.AI_PROVIDER),
     aiProviderConfigured: hasConfiguredValue(env.AI_PROVIDER),

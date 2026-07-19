@@ -3,6 +3,7 @@ import { callAI } from "@/lib/ai";
 import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { AIJsonParseError, parseAIJson } from "@/lib/json-utils";
 import {
+  MATERIAL_DIAGNOSIS_SCHEMA_VERSION,
   normalizeMaterialDiagnosisResult,
   type EvaluationCriterionForDiagnosis,
 } from "@/lib/material-diagnosis";
@@ -15,6 +16,7 @@ import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { prisma } from "@/lib/prisma";
 import { calculateProjectContextHash } from "@/lib/project-context-hash";
+import { calculatePromptVersion } from "@/lib/result-provenance";
 
 type MaterialDiagnosisRouteContext = Readonly<{
   params: Promise<{
@@ -124,19 +126,22 @@ export async function POST(
 
     const criteria = getCriteriaForDiagnosis(aiContext);
     const template = await loadPromptTemplate("material-diagnosis");
+    const promptVersion = calculatePromptVersion(
+      "material-diagnosis",
+      template,
+    );
     const userPrompt = buildDiagnosisPrompt(aiContext, template);
     const aiResult = await callAI({
       task: "materialDiagnosis",
+      projectId: id,
       systemPrompt:
         "你是严格遵守 JSON 输出约束的赛前材料诊断专家。只输出合法 JSON，不输出 Markdown、代码块或额外解释。",
       userPrompt,
       temperature: 0.1,
       maxOutputTokens: MATERIAL_DIAGNOSIS_MAX_OUTPUT_TOKENS,
     });
-    const diagnosis = normalizeMaterialDiagnosisResult(
-      parseAIJson(aiResult.text),
-      criteria,
-    );
+    const rawDiagnosis = parseAIJson(aiResult.text);
+    const diagnosis = normalizeMaterialDiagnosisResult(rawDiagnosis, criteria);
     const totalWeight = criteria.reduce(
       (total, criterion) => total + criterion.weight,
       0,
@@ -165,7 +170,11 @@ export async function POST(
         priorityTasks: JSON.stringify(diagnosis.priorityTasks, null, 2),
         judgeQuestions: JSON.stringify(diagnosis.judgeQuestions, null, 2),
         criteriaResults: JSON.stringify(diagnosis.criteriaResults, null, 2),
+        rawResultJson: JSON.stringify(rawDiagnosis, null, 2),
         inputHash,
+        promptVersion,
+        schemaVersion: MATERIAL_DIAGNOSIS_SCHEMA_VERSION,
+        modelVersion: aiResult.model,
         ruleVersion: aiContext.evaluationRule.version,
       },
     });

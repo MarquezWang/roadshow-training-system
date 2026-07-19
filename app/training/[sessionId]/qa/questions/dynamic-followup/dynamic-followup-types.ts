@@ -58,6 +58,7 @@ export type DynamicFollowupSessionRecord = Readonly<{
   projectId: string;
   status: string;
   projectContextSnapshot: string | null;
+  contextSchemaVersion?: string;
 }>;
 
 export type PreparedDynamicFollowupInput = Readonly<{

@@ -27,6 +27,8 @@ export function resultForUnacquiredJob(
     message:
       state === "backoff"
         ? "转写任务正在等待自动重试。"
+        : state === "queued"
+          ? "转写任务已加入后台队列。"
         : "转写任务已由其他处理器接管。",
     transcript,
   };

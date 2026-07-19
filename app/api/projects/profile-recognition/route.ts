@@ -4,6 +4,15 @@ import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { isAuthEnabled } from "@/lib/auth";
 import { getCurrentAuthUser } from "@/lib/auth-server";
 import {
+  InvalidJsonBodyError,
+  MAX_MATERIAL_TOKEN_LENGTH,
+  MAX_PROFILE_RECOGNITION_BODY_BYTES,
+  readLimitedJson,
+  RequestBodyTooLargeError,
+} from "@/lib/input-limits";
+import { findAvailableProjectMaterial } from "@/lib/project-material-staging";
+import { wrapUntrustedPromptData } from "@/lib/prompt-data-boundary";
+import {
   extractLooseProjectProfile,
   normalizeProjectField,
   normalizeTechnicalKeywords,
@@ -133,7 +142,10 @@ function buildBaseRecognitionInput(fileName: string, sourceText: string) {
   return [
     `【文件：${fileName}】`,
     "【项目基础信息材料】",
-    sourceText.slice(0, BASE_PROFILE_TEXT_LIMIT),
+    wrapUntrustedPromptData(
+      "projectMaterial",
+      sourceText.slice(0, BASE_PROFILE_TEXT_LIMIT),
+    ),
   ].join("\n\n");
 }
 
@@ -214,7 +226,10 @@ async function recognizeTrl(
     const trlPrompt = await loadPromptTemplate(
       "project-trl-evidence-recognition",
     );
-    const trlInput = buildLayeredRecognitionInput(fileName, sourceText);
+    const trlInput = wrapUntrustedPromptData(
+      "trlProjectMaterial",
+      buildLayeredRecognitionInput(fileName, sourceText),
+    );
     trlAttempt = await requestTrlEvidence({
       systemPrompt: trlPrompt,
       userPrompt: trlInput,
@@ -305,7 +320,8 @@ function failedResponse(reason: FailureReason, message: string, status: number) 
 }
 
 export async function POST(request: Request) {
-  if (isAuthEnabled() && !(await getCurrentAuthUser())) {
+  const currentUser = await getCurrentAuthUser();
+  if (isAuthEnabled() && !currentUser) {
     return Response.json(
       { status: "unauthorized", message: "请先登录后再使用该功能。" },
       { status: 401 },
@@ -313,31 +329,34 @@ export async function POST(request: Request) {
   }
 
   let body: {
-    fileName?: unknown;
-    extractedText?: unknown;
+    materialToken?: unknown;
     mode?: unknown;
   };
 
   try {
-    body = (await request.json()) as typeof body;
+    body = await readLimitedJson(
+      request,
+      MAX_PROFILE_RECOGNITION_BODY_BYTES,
+    );
   } catch (error) {
     debugLog("request_json_failed", { error: errorMessage(error) });
     return failedResponse(
       "material_parse_failed",
-      MATERIAL_PARSE_FAILURE_MESSAGE,
+      error instanceof RequestBodyTooLargeError ||
+        error instanceof InvalidJsonBodyError
+        ? error.message
+        : MATERIAL_PARSE_FAILURE_MESSAGE,
       400,
     );
   }
 
   if (
-    typeof body.fileName !== "string" ||
-    typeof body.extractedText !== "string" ||
-    !body.extractedText.trim()
+    typeof body.materialToken !== "string" ||
+    !body.materialToken.trim() ||
+    body.materialToken.length > MAX_MATERIAL_TOKEN_LENGTH
   ) {
     debugLog("material_parse_invalid", {
-      hasFileName: typeof body.fileName === "string",
-      extractedTextLength:
-        typeof body.extractedText === "string" ? body.extractedText.length : 0,
+      hasMaterialToken: typeof body.materialToken === "string",
     });
     return failedResponse(
       "material_parse_failed",
@@ -346,8 +365,24 @@ export async function POST(request: Request) {
     );
   }
 
-  const fileName = body.fileName;
-  const sourceText = body.extractedText;
+  const material = await findAvailableProjectMaterial(
+    body.materialToken.trim(),
+    currentUser?.id ?? null,
+  );
+  if (
+    !material ||
+    material.parseStatus !== "SUCCESS" ||
+    !material.extractedText?.trim()
+  ) {
+    return failedResponse(
+      "material_parse_failed",
+      "材料令牌已失效或材料未成功解析，请重新上传。",
+      422,
+    );
+  }
+
+  const fileName = material.originalName;
+  const sourceText = material.extractedText;
   const mode =
     body.mode === "base" || body.mode === "trl" || body.mode === "full"
       ? body.mode

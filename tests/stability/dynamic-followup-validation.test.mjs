@@ -24,7 +24,7 @@ const { validateFallbackFollowupText, validateMainFollowupText } =
 const aiRoadshowTranscript =
   "AI路演训练系统，用证据链评分与真实评委场景，让每一次路演都经得起检验。路演大赛参赛团队普遍缺乏低成本、高频次、贴近真实评审逻辑的赛前陪练手段，人工教练资源稀缺，成本高。AI路演训练系统包含材料诊断、模拟评委提问、路演答辩、动态追问和训练报告生成。";
 
-test("dynamic follow-up validator rejects prompt example leakage", () => {
+test("dynamic follow-up validator rejects unsupported attributed facts generically", () => {
   const leakedQuestion =
     "你刚才提到系统已在两个县区供电所做过小范围试用，但样本规模还不大。请说明目前试用覆盖了多少条线路、识别准确率达到什么水平，以及后续如何验证不同天气条件下的稳定性？";
 
@@ -34,7 +34,7 @@ test("dynamic follow-up validator rejects prompt example leakage", () => {
       transcriptText: aiRoadshowTranscript,
       regularQuestions: [],
     }),
-    "main_output_unsupported_example_leak",
+    "main_output_unsupported_transcript_attribution",
   );
 
   assert.equal(
@@ -43,7 +43,23 @@ test("dynamic follow-up validator rejects prompt example leakage", () => {
       transcriptText: aiRoadshowTranscript,
       regularQuestions: [],
     }),
-    "fallback_output_unsupported_example_leak",
+    "fallback_output_unsupported_transcript_attribution",
+  );
+});
+
+test("dynamic follow-up validator does not blacklist a legitimate project domain", () => {
+  const transcript =
+    "我们的智能咖啡机已经完成样机开发，能够根据豆型调整研磨参数，目前正通过盲测收集用户对口感和稳定性的反馈。";
+  const question =
+    "你刚才提到智能咖啡机已完成样机开发。请说明盲测将用哪些指标评价口感和运行稳定性？";
+
+  assert.equal(
+    validateMainFollowupText({
+      text: question,
+      transcriptText: transcript,
+      regularQuestions: [],
+    }),
+    null,
   );
 });
 

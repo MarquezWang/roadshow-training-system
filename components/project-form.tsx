@@ -80,6 +80,7 @@ export function ProjectForm({
           <input
             name="name"
             defaultValue={initialValues?.name ?? ""}
+            maxLength={100}
             required
             placeholder="请输入项目名称"
             className={inputClass}
@@ -91,6 +92,7 @@ export function ProjectForm({
           <textarea
             name="trlBasis"
             defaultValue={initialValues?.trlBasis ?? ""}
+            maxLength={5000}
             rows={3}
             placeholder="记录支撑当前成熟度判断的验证、试用或验收证据"
             className={inputClass}
@@ -102,6 +104,7 @@ export function ProjectForm({
           <textarea
             name="summary"
             defaultValue={initialValues?.summary ?? ""}
+            maxLength={1000}
             required
             rows={3}
             placeholder="用一句话说明项目定位、核心价值或解决的问题"
@@ -148,6 +151,7 @@ export function ProjectForm({
           <textarea
             name="applicationScenario"
             defaultValue={initialValues?.applicationScenario ?? ""}
+            maxLength={5000}
             required
             rows={3}
             placeholder="描述目标用户、使用场景或落地环节"
@@ -160,6 +164,7 @@ export function ProjectForm({
           <textarea
             name="coreTechnology"
             defaultValue={initialValues?.coreTechnology ?? ""}
+            maxLength={5000}
             required
             rows={3}
             placeholder="多个关键词可用顿号、逗号或换行分隔"
@@ -173,6 +178,7 @@ export function ProjectForm({
           <input
             name="productForm"
             defaultValue={initialValues?.productForm ?? ""}
+            maxLength={5000}
             placeholder="例如：SaaS 平台、硬件设备、系统解决方案"
             className={inputClass}
           />
@@ -183,6 +189,7 @@ export function ProjectForm({
           <textarea
             name="businessModel"
             defaultValue={initialValues?.businessModel ?? ""}
+            maxLength={5000}
             rows={3}
             className={inputClass}
           />
@@ -193,6 +200,7 @@ export function ProjectForm({
           <textarea
             name="teamInfo"
             defaultValue={initialValues?.teamInfo ?? ""}
+            maxLength={5000}
             rows={3}
             className={inputClass}
           />
@@ -228,6 +236,7 @@ export function ProjectForm({
         <textarea
           name="cooperationDemandDetail"
           defaultValue={cooperationDemandDetail}
+          maxLength={5000}
           rows={3}
           placeholder="如选择其他，或需要补充说明合作需求，请填写在这里"
           className={inputClass}
@@ -251,6 +260,7 @@ export function ProjectForm({
             <input
               name="projectContact"
               defaultValue={initialValues?.projectContact ?? ""}
+              maxLength={100}
               className={inputClass}
             />
           </label>
@@ -259,6 +269,7 @@ export function ProjectForm({
             <input
               name="contactPhone"
               defaultValue={initialValues?.contactPhone ?? ""}
+              maxLength={11}
               inputMode="tel"
               className={inputClass}
             />

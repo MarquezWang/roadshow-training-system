@@ -22,6 +22,7 @@ import {
   getLoginLock,
   recordFailedLogin,
 } from "@/lib/login-throttle";
+import { resolveLoginClientAddress } from "@/lib/client-address.mjs";
 
 export async function loginAction(formData: FormData) {
   const next = getSafeInternalPath(formData.get("next"));
@@ -46,10 +47,7 @@ export async function loginAction(formData: FormData) {
   const username = String(formData.get("username") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const requestHeaders = await headers();
-  const clientAddress =
-    requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    requestHeaders.get("x-real-ip")?.trim() ||
-    "unknown";
+  const clientAddress = resolveLoginClientAddress(requestHeaders);
   const lockedUntil = await getLoginLock(username, clientAddress);
   if (lockedUntil) {
     redirect(`/login?error=rate_limited&next=${encodeURIComponent(next)}`);

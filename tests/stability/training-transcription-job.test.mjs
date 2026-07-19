@@ -6,6 +6,7 @@ import {
   acquireTrainingTranscriptionJob,
   completeTrainingTranscriptionJob,
   failTrainingTranscriptionJob,
+  queueTrainingTranscriptionJob,
   renewTrainingTranscriptionLease,
   trainingTranscriptionJobKey,
 } from "../../lib/training-transcription-job.mjs";
@@ -36,7 +37,10 @@ test(
     const testTime = (offsetMs = 0) =>
       new Date(simulatedClockStart + offsetMs);
 
-    async function createRecording(name, { withTranscript = true } = {}) {
+    async function createRecording(
+      name,
+      { withTranscript = true, withJob = true } = {},
+    ) {
       const recordingId = `${prefix}-${name}`;
       recordingIds.push(recordingId);
       await prisma.trainingRecording.create({
@@ -64,21 +68,23 @@ test(
             : {}),
         },
       });
-      await prisma.asyncJob.create({
-        data: {
-          jobKey: trainingTranscriptionJobKey(recordingId),
-          jobType: "TRAINING_TRANSCRIPTION",
-          resourceId: recordingId,
-          // The dev server recovery worker shares this test database. Keep the
-          // fixture in future backoff so only explicit simulated-time calls
-          // can acquire it.
-          status: "RETRY_WAIT",
-          ownerToken: "",
-          attempt: 0,
-          maxAttempts: 3,
-          nextAttemptAt: testTime(-1),
-        },
-      });
+      if (withJob) {
+        await prisma.asyncJob.create({
+          data: {
+            jobKey: trainingTranscriptionJobKey(recordingId),
+            jobType: "TRAINING_TRANSCRIPTION",
+            resourceId: recordingId,
+            // The dev server recovery worker shares this test database. Keep the
+            // fixture in future backoff so only explicit simulated-time calls
+            // can acquire it.
+            status: "RETRY_WAIT",
+            ownerToken: "",
+            attempt: 0,
+            maxAttempts: 3,
+            nextAttemptAt: testTime(-1),
+          },
+        });
+      }
       return recordingId;
     }
 
@@ -123,6 +129,98 @@ test(
           }),
           null,
         );
+      });
+
+      await t.test("external 模式只入队并幂等创建待处理转写", async () => {
+        const recordingId = await createRecording("queue-only", {
+          withTranscript: false,
+          withJob: false,
+        });
+        const jobKey = trainingTranscriptionJobKey(recordingId);
+
+        await prisma.$transaction(async (tx) => {
+          const first = await queueTrainingTranscriptionJob(tx, {
+            recordingId,
+            sessionId,
+            now: testTime(),
+          });
+          const second = await queueTrainingTranscriptionJob(tx, {
+            recordingId,
+            sessionId,
+            now: testTime(),
+          });
+
+          assert.equal(first.state, "queued");
+          assert.equal(first.job.status, "PENDING");
+          assert.equal(first.job.attempt, 0);
+          assert.equal(first.transcript.status, "PENDING");
+          assert.equal(second.job.id, first.job.id);
+          assert.equal(second.transcript.id, first.transcript.id);
+          assert.equal(
+            await tx.asyncJob.count({ where: { jobKey } }),
+            1,
+          );
+          assert.equal(
+            await tx.trainingTranscript.count({ where: { recordingId } }),
+            1,
+          );
+
+          await tx.asyncJob.update({
+            where: { jobKey },
+            data: {
+              status: "RETRY_WAIT",
+              nextAttemptAt: testTime(24 * 60 * 60_000),
+            },
+          });
+        });
+      });
+
+      await t.test("显式重试会把失败任务和非人工转写重置为待处理", async () => {
+        const recordingId = await createRecording("queue-force-retry");
+        const jobKey = trainingTranscriptionJobKey(recordingId);
+
+        await prisma.$transaction(async (tx) => {
+          await tx.asyncJob.update({
+            where: { jobKey },
+            data: {
+              status: "FAILED",
+              ownerToken: "old-owner",
+              attempt: 3,
+              errorMessage: "old job error",
+              nextAttemptAt: null,
+            },
+          });
+          await tx.trainingTranscript.update({
+            where: { recordingId },
+            data: {
+              status: "FAILED",
+              source: "ASR_PROVIDER",
+              errorMessage: "old transcript error",
+            },
+          });
+
+          const queued = await queueTrainingTranscriptionJob(tx, {
+            recordingId,
+            sessionId,
+            forceRetry: true,
+            now: testTime(),
+          });
+          assert.equal(queued.state, "queued");
+          assert.equal(queued.job.status, "PENDING");
+          assert.equal(queued.job.attempt, 0);
+          assert.equal(queued.job.errorMessage, null);
+          assert.equal(queued.transcript.status, "PENDING");
+          assert.equal(queued.transcript.errorMessage, null);
+          assert.equal(queued.transcript.source, "ASR_PROVIDER");
+
+          await tx.asyncJob.update({
+            where: { jobKey },
+            data: {
+              status: "RETRY_WAIT",
+              nextAttemptAt: testTime(24 * 60 * 60_000),
+            },
+          });
+        });
       });
 
       await t.test("已有完成转写会短路并结清遗留任务", async () => {
@@ -188,21 +286,23 @@ test(
       await t.test("领取前发现次数耗尽会同步失败任务和转写", async () => {
         const recordingId = await createRecording("attempt-limit");
         const jobKey = trainingTranscriptionJobKey(recordingId);
-        await prisma.asyncJob.update({
-          where: { jobKey },
-          data: {
-            status: "RETRY_WAIT",
-            ownerToken: "previous-owner",
-            attempt: 3,
-            maxAttempts: 3,
-            nextAttemptAt: testTime(-1),
-          },
-        });
+        const result = await prisma.$transaction(async (transaction) => {
+          await transaction.asyncJob.update({
+            where: { jobKey },
+            data: {
+              status: "RETRY_WAIT",
+              ownerToken: "previous-owner",
+              attempt: 3,
+              maxAttempts: 3,
+              nextAttemptAt: testTime(-1),
+            },
+          });
 
-        const result = await acquireTrainingTranscriptionJob(prisma, {
-          recordingId,
-          sessionId,
-          now: testTime(),
+          return acquireTrainingTranscriptionJob(transaction, {
+            recordingId,
+            sessionId,
+            now: testTime(),
+          });
         });
 
         assert.equal(result.state, "exhausted");

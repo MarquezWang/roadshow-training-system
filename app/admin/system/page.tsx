@@ -46,6 +46,7 @@ export default async function AdminSystemPage() {
           libreOffice={status.libreOffice}
         />
         <SystemOperationsSections
+          backgroundWorkerCheck={status.backgroundWorkerCheck}
           databaseCheck={status.databaseCheck}
           diagnosticEvents={status.diagnosticEvents}
           uploadDirectoryCheck={status.uploadDirectoryCheck}

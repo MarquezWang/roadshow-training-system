@@ -1,6 +1,9 @@
 export {
   evidenceStatuses,
   evidenceStatusLabel,
+  LEGACY_DIAGNOSIS_SCHEMA_VERSION,
+  MATERIAL_DIAGNOSIS_LEGACY_SCHEMA_VERSION,
+  MATERIAL_DIAGNOSIS_SCHEMA_VERSION,
   readinessLevels,
   readinessLevelLabel,
 } from "./material-diagnosis/constants";

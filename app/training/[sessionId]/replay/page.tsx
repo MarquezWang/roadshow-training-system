@@ -62,6 +62,7 @@ export default async function TrainingReplayPage({
               language: true,
               text: true,
               segmentsJson: true,
+              segmentsSchemaVersion: true,
               errorMessage: true,
               startedAt: true,
               completedAt: true,
