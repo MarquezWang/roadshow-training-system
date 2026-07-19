@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   acquireTrainingAnalysisJob,
   completeTrainingAnalysisJob,
+  deferTrainingAnalysisJob,
   failTrainingAnalysisJob,
   parseTrainingAnalysisJobPayload,
   queueTrainingAnalysisJob,
@@ -168,6 +169,58 @@ test(
         assert.deepEqual(parseTrainingAnalysisJobPayload(queued.job), {
           forceRegeneration: true,
         });
+      });
+
+      await t.test("资源限制延期遵循 Retry-After 且不消耗任务尝试次数", async () => {
+        const sessionId = `${prefix}-resource-deferred`;
+        sessionIds.push(sessionId);
+        await queueTrainingAnalysisJob(prisma, { sessionId });
+        const acquired = await acquireTrainingAnalysisJob(prisma, {
+          sessionId,
+          now: base,
+        });
+        assert.equal(acquired.state, "acquired");
+        assert.equal(acquired.job.attempt, 1);
+
+        const deferredAt = new Date(base.getTime() + 1_000);
+        const retryDelayMs = 60 * 60_000;
+        const deferred = await deferTrainingAnalysisJob(prisma, {
+          sessionId,
+          ownerToken: acquired.ownerToken,
+          errorMessage: "daily budget exhausted",
+          retryDelayMs,
+          now: deferredAt,
+        });
+        assert.equal(deferred.state, "deferred");
+        assert.equal(deferred.job.status, "RETRY_WAIT");
+        assert.equal(deferred.job.attempt, 0);
+        assert.equal(
+          deferred.job.nextAttemptAt.getTime(),
+          deferredAt.getTime() + retryDelayMs,
+        );
+
+        assert.equal(
+          (
+            await acquireTrainingAnalysisJob(prisma, {
+              sessionId,
+              now: new Date(deferredAt.getTime() + retryDelayMs - 1),
+            })
+          ).state,
+          "backoff",
+        );
+        const retried = await acquireTrainingAnalysisJob(prisma, {
+          sessionId,
+          now: new Date(deferredAt.getTime() + retryDelayMs + 1),
+        });
+        assert.equal(retried.state, "acquired");
+        assert.equal(retried.job.attempt, 1);
+        assert.equal(
+          await completeTrainingAnalysisJob(prisma, {
+            sessionId,
+            ownerToken: retried.ownerToken,
+          }),
+          true,
+        );
       });
 
       await t.test("过期租约可被新 owner 接管", async () => {

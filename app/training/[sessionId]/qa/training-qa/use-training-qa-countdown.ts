@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect } from "react";
+import type { TrainingQaQuestion } from "./training-qa-types";
 import type { TrainingQaState } from "./use-training-qa-state";
 
 type UseTrainingQaCountdownOptions = Pick<
@@ -17,6 +18,8 @@ type UseTrainingQaCountdownOptions = Pick<
 > & {
   cancelSpeech: () => void;
   clearSpeechTimer: () => void;
+  currentQuestion: TrainingQaQuestion | null;
+  markQuestionStarted: (questionId: string) => Promise<void>;
   startQuestionRecording: () => Promise<void>;
 };
 
@@ -27,6 +30,8 @@ export function useTrainingQaCountdown({
   cancelSpeech,
   clearSpeechTimer,
   countdownIntervalRef,
+  currentQuestion,
+  markQuestionStarted,
   setDynamicFollowupUsedSec,
   setPreAnswerOverlay,
   setQaPhase,
@@ -43,6 +48,9 @@ export function useTrainingQaCountdown({
 
   const beginAnswering = useCallback(async () => {
     clearCountdownTimer();
+    if (!currentQuestion) return;
+
+    void markQuestionStarted(currentQuestion.id).catch(() => undefined);
     const currentUsedAnswerSec = Math.max(
       answerElapsedBeforePhaseRef.current,
       usedAnswerSec,
@@ -61,6 +69,8 @@ export function useTrainingQaCountdown({
     answerPhaseStartedMsRef,
     cancelSpeech,
     clearCountdownTimer,
+    currentQuestion,
+    markQuestionStarted,
     setDynamicFollowupUsedSec,
     setQaPhase,
     setUsedAnswerSec,
@@ -103,5 +113,5 @@ export function useTrainingQaCountdown({
     beginPreAnswerCountdownRef.current = beginPreAnswerCountdown;
   }, [beginPreAnswerCountdown, beginPreAnswerCountdownRef]);
 
-  return { clearCountdownTimer };
+  return { beginAnswering, clearCountdownTimer };
 }

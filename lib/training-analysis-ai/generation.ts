@@ -1,4 +1,5 @@
 import { AIEmptyContentError, callAI } from "@/lib/ai";
+import { AIResourceLimitError } from "@/lib/ai-resource-guard";
 import { devError, devLog, devWarn } from "@/lib/dev-log";
 import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import type { TrainingAnalysisFallbackReason } from "@/lib/training-analysis-fallback";
@@ -175,6 +176,10 @@ export async function generateTrainingAnalysisFromAI(
       fallbackReason: null,
     };
   } catch (analysisParseError) {
+    if (analysisParseError instanceof AIResourceLimitError) {
+      throw analysisParseError;
+    }
+
     if (analysisParseError instanceof AnalysisJsonRepairError) {
       debug = analysisParseError.debug;
     }

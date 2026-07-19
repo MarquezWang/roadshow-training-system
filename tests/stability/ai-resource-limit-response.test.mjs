@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { getUtcDailyQuotaWindow } from "../../lib/ai-quota-window.mjs";
 
 const errorStub = `
 export class AIResourceLimitError extends Error {
@@ -48,6 +49,48 @@ test("AI resource errors use a stable 429 response contract", async () => {
     retryAfterSec: 3600,
   });
   assert.equal(helper.createAIResourceLimitResponse(new Error("boom")), null);
+});
+
+test("daily AI quota retry delay reaches the next UTC boundary", () => {
+  assert.deepEqual(
+    getUtcDailyQuotaWindow(new Date("2026-07-19T00:00:00.000Z")),
+    {
+      dayKey: "2026-07-19",
+      retryAfterSec: 24 * 60 * 60,
+    },
+  );
+  assert.deepEqual(
+    getUtcDailyQuotaWindow(new Date("2026-07-19T12:00:00.000Z")),
+    {
+      dayKey: "2026-07-19",
+      retryAfterSec: 12 * 60 * 60,
+    },
+  );
+  assert.equal(
+    getUtcDailyQuotaWindow(
+      new Date("2026-07-19T23:59:59.250Z"),
+    ).retryAfterSec,
+    1,
+  );
+});
+
+test("daily budget errors use the shared UTC quota window", async () => {
+  const guardSource = await readFile(
+    new URL("../../lib/ai-resource-guard.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    guardSource,
+    /const \{ dayKey, retryAfterSec \} = getUtcDailyQuotaWindow\(\)/,
+  );
+  assert.equal(
+    guardSource.match(
+      /retryAfterSec,\s*"AI_DAILY_BUDGET_EXHAUSTED"/g,
+    )?.length,
+    2,
+  );
+  assert.doesNotMatch(guardSource, /60 \* 60/);
 });
 
 test("HTTP AI entry points use the shared 429 response helper", async () => {

@@ -106,6 +106,7 @@ const generationSource = (
   await readSource("../../lib/training-analysis-ai/generation.ts")
 )
   .replace('from "@/lib/ai"', `from "${aiStubUrl}"`)
+  .replace('from "@/lib/ai-resource-guard"', `from "${aiStubUrl}"`)
   .replace('from "@/lib/dev-log"', `from "${devLogStubUrl}"`)
   .replace(
     'from "@/lib/diagnostic-log"',
@@ -621,4 +622,27 @@ test("structured-output repair failures retain debug data in fallback", async ()
   assert.equal(result.debug, debugValue);
   assert.equal(result.fallbackReason, "STRUCTURED_OUTPUT_INVALID");
   assert.equal(fallbackInputs[0].failureReason, "STRUCTURED_OUTPUT_INVALID");
+});
+
+test("generation propagates repair-stage resource limits without fallback", async () => {
+  const limited = new ai.AIResourceLimitError("daily budget exhausted");
+  let fallbackCalled = false;
+
+  await assert.rejects(
+    () =>
+      generation.generateTrainingAnalysisFromAI(generationInput(), {
+        callAI: async () => ({ text: "broken" }),
+        parseAnalysisJsonWithRepair: async () => {
+          throw limited;
+        },
+        buildFallbackTrainingAnalysis: () => {
+          fallbackCalled = true;
+          return analysisResult("unexpected fallback");
+        },
+        writeDiagnosticEvent: async () => {},
+        now: () => new Date(),
+      }),
+    (error) => error === limited,
+  );
+  assert.equal(fallbackCalled, false);
 });

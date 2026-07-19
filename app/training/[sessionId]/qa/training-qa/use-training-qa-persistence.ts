@@ -35,6 +35,7 @@ type UseTrainingQaPersistenceOptions = Pick<
   currentQuestion: TrainingQaQuestion | null;
   getCurrentUsedAnswerSec: () => number;
   getSessionQaDurationSec: () => number;
+  markQuestionStarted: (questionId: string) => Promise<void>;
   navigateToReport: () => void;
   sessionId: string;
   shouldFinishAfterCurrent: boolean;
@@ -53,6 +54,7 @@ export function useTrainingQaPersistence({
   getSessionQaDurationSec,
   hasAutoEndedRef,
   isCompletingNormallyRef,
+  markQuestionStarted,
   navigateToReport,
   qaPhase,
   questions,
@@ -81,6 +83,9 @@ export function useTrainingQaPersistence({
       cancelSpeech();
 
       try {
+        if (question) {
+          await markQuestionStarted(question.id);
+        }
         const recordingId = await stopAndUploadCurrentRecording();
         const response = await fetch(`/training/${sessionId}/qa/end`, {
           method: "POST",
@@ -125,6 +130,7 @@ export function useTrainingQaPersistence({
       getSessionQaDurationSec,
       hasAutoEndedRef,
       isCompletingNormallyRef,
+      markQuestionStarted,
       navigateToReport,
       revealedQuestionIds,
       sessionId,
@@ -153,6 +159,7 @@ export function useTrainingQaPersistence({
       setMessage("");
 
       try {
+        await markQuestionStarted(currentQuestion.id);
         const currentUsedAnswerSec = getCurrentUsedAnswerSec();
 
         setQaPhase("SAVING");
@@ -243,6 +250,7 @@ export function useTrainingQaPersistence({
       getCurrentUsedAnswerSec,
       getSessionQaDurationSec,
       isCompletingNormallyRef,
+      markQuestionStarted,
       navigateToReport,
       qaPhase,
       questions,

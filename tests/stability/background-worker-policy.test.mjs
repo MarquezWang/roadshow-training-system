@@ -111,6 +111,12 @@ test("external Web 只入队报告，Worker 才加载报告执行器", async () 
   assert.match(route, /status: 202/);
   assert.match(worker, /executeTrainingAnalysisGeneration/);
   assert.match(worker, /failTrainingAnalysisJob/);
+  assert.match(worker, /error instanceof AIResourceLimitError/);
+  assert.match(worker, /deferTrainingAnalysisJob/);
+  assert.match(
+    worker,
+    /Math\.max\(1, resourceLimitError\.retryAfterSec\) \* 1_000/,
+  );
   assert.match(client, /body\?\.queued/);
   assert.match(client, /analysisJobActive/);
   assert.match(runtime, /TRAINING_ANALYSIS_CAPABILITY/);

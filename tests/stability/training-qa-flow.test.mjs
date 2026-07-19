@@ -3,17 +3,59 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-async function importTypeScriptModule(relativePath) {
-  const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+function transpileToDataUrl(source) {
   const transpiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
-  const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
-  return import(moduleUrl);
+  return `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 }
+
+async function importTypeScriptModule(relativePath) {
+  const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+  return import(transpileToDataUrl(source));
+}
+
+const reactHooksStubUrl = transpileToDataUrl(`
+  export function useCallback(callback) { return callback; }
+  export function useEffect(effect) { effect(); }
+`);
+const requestModuleUrl = transpileToDataUrl(
+  await readFile(
+    new URL(
+      "../../app/training/[sessionId]/qa/training-qa/training-qa-request.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
+const countdownSource = (
+  await readFile(
+    new URL(
+      "../../app/training/[sessionId]/qa/training-qa/use-training-qa-countdown.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  )
+).replace('from "react"', `from "${reactHooksStubUrl}"`);
+const persistenceSource = (
+  await readFile(
+    new URL(
+      "../../app/training/[sessionId]/qa/training-qa/use-training-qa-persistence.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  )
+)
+  .replace('from "react"', `from "${reactHooksStubUrl}"`)
+  .replace(
+    'from "./training-qa-request"',
+    `from "${requestModuleUrl}"`,
+  );
+const countdown = await import(transpileToDataUrl(countdownSource));
+const persistence = await import(transpileToDataUrl(persistenceSource));
 
 const { findInitialQaQuestionIndex, getQaProgression } =
   await importTypeScriptModule(
@@ -33,6 +75,9 @@ const { buildQaAnswerRequestBody, buildQaEndRequestBody } =
   await importTypeScriptModule(
     "../../app/training/[sessionId]/qa/training-qa/training-qa-request.ts",
   );
+const { createQuestionStartCoordinator } = await importTypeScriptModule(
+  "../../app/training/[sessionId]/qa/training-qa/training-qa-question-start.ts",
+);
 
 function question(id, overrides = {}) {
   return {
@@ -247,4 +292,150 @@ test("保存回答请求体显式传递完成和目标题策略", () => {
       preferredNextQuestionId: "dynamic-question",
     },
   );
+});
+
+test("题目开始请求按题复用，失败后允许重新发起", async () => {
+  let resolveFirst;
+  const calls = [];
+  const coordinator = createQuestionStartCoordinator(async (questionId) => {
+    calls.push(questionId);
+    if (calls.length === 1) {
+      await new Promise((resolve) => {
+        resolveFirst = resolve;
+      });
+      return;
+    }
+    if (calls.length === 2) throw new Error("temporary failure");
+  });
+
+  const first = coordinator.ensureStarted("question-1");
+  assert.equal(coordinator.ensureStarted("question-1"), first);
+  assert.deepEqual(calls, ["question-1"]);
+  resolveFirst();
+  await first;
+  assert.equal(coordinator.ensureStarted("question-1"), first);
+
+  await assert.rejects(
+    coordinator.ensureStarted("question-2"),
+    /temporary failure/,
+  );
+  await Promise.resolve();
+  await coordinator.ensureStarted("question-2");
+  assert.deepEqual(calls, ["question-1", "question-2", "question-2"]);
+});
+
+test("服务端单题计时只在进入 ANSWERING 时启动，录音无需等待网络", async () => {
+  let resolveStart;
+  const events = [];
+  const beginPreAnswerCountdownRef = { current: null };
+  const hook = countdown.useTrainingQaCountdown({
+    answerElapsedBeforePhaseRef: { current: 0 },
+    answerPhaseStartedMsRef: { current: null },
+    beginPreAnswerCountdownRef,
+    cancelSpeech: () => events.push("cancel-speech"),
+    clearSpeechTimer: () => {},
+    countdownIntervalRef: { current: null },
+    currentQuestion: question("question-1"),
+    markQuestionStarted: async () => {
+      events.push("start-requested");
+      await new Promise((resolve) => {
+        resolveStart = resolve;
+      });
+      events.push("start-recorded");
+    },
+    setDynamicFollowupUsedSec: () => {},
+    setPreAnswerOverlay: () => {},
+    setQaPhase: (phase) => events.push(`phase:${phase}`),
+    setUsedAnswerSec: () => {},
+    startQuestionRecording: async () => events.push("recording-started"),
+    usedAnswerSec: 0,
+  });
+
+  assert.deepEqual(events, []);
+  await hook.beginAnswering();
+  assert.deepEqual(events, [
+    "start-requested",
+    "phase:ANSWERING",
+    "cancel-speech",
+    "recording-started",
+  ]);
+  resolveStart();
+  await Promise.resolve();
+  assert.equal(events.at(-1), "start-recorded");
+
+  const questionFlowSource = await readFile(
+    new URL(
+      "../../app/training/[sessionId]/qa/training-qa/use-training-qa-question-flow.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.doesNotMatch(questionFlowSource, /markQuestionStarted/);
+});
+
+test("保存答案会等待延迟的开始请求完成", async () => {
+  let resolveStart;
+  const events = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    events.push("answer-submitted");
+    return {
+      ok: true,
+      json: async () => ({ completed: true }),
+    };
+  };
+
+  try {
+    const hook = persistence.useTrainingQaPersistence({
+      answerElapsedBeforePhaseRef: { current: 0 },
+      beginJudgeQuestion: () => {},
+      cancelSpeech: () => {},
+      clearCountdownTimer: () => {},
+      clearSpeechTimer: () => {},
+      currentQuestion: question("question-1"),
+      currentQuestionIndex: 0,
+      getCurrentUsedAnswerSec: () => 12,
+      getSessionQaDurationSec: () => 12,
+      hasAutoEndedRef: { current: false },
+      isCompletingNormallyRef: { current: false },
+      markQuestionStarted: async () => {
+        events.push("start-requested");
+        await new Promise((resolve) => {
+          resolveStart = resolve;
+        });
+        events.push("start-recorded");
+      },
+      navigateToReport: () => events.push("navigated"),
+      qaPhase: "ANSWERING",
+      questions: [question("question-1")],
+      revealedQuestionIds: new Set(),
+      sessionId: "session-1",
+      setIsSaving: () => {},
+      setMessage: () => {},
+      setQaPhase: () => {},
+      setQuestions: () => {},
+      setUsedAnswerSec: () => {},
+      shouldFinishAfterCurrent: true,
+      stopAndUploadCurrentRecording: async () => {
+        events.push("recording-stopped");
+        return null;
+      },
+    });
+
+    const saving = hook.saveAndContinue();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, ["start-requested"]);
+
+    resolveStart();
+    await saving;
+    assert.deepEqual(events, [
+      "start-requested",
+      "start-recorded",
+      "recording-stopped",
+      "answer-submitted",
+      "navigated",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

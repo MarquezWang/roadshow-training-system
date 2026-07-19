@@ -1,8 +1,10 @@
 import { devError } from "@/lib/dev-log";
+import { AIResourceLimitError } from "@/lib/ai-resource-guard";
 import { prisma } from "@/lib/prisma";
 import {
   acquireTrainingAnalysisJob,
   completeTrainingAnalysisJob,
+  deferTrainingAnalysisJob,
   failTrainingAnalysisJob,
   startTrainingAnalysisLeaseRenewal,
   TRAINING_ANALYSIS_JOB_TYPE,
@@ -85,21 +87,39 @@ export async function recoverDueTrainingAnalyses() {
         }
       } catch (error) {
         const message = getFriendlyTrainingAnalysisError(error);
+        const resourceLimitError =
+          error instanceof AIResourceLimitError ? error : null;
         const retryable =
           error instanceof TrainingAnalysisTaskError
             ? error.retryable
             : true;
-        await failTrainingAnalysisJob(prisma, {
-          sessionId: job.resourceId,
-          ownerToken,
-          errorMessage: message,
-          retryable,
-        });
-        devError("[training-analysis-worker] generation failed", {
-          sessionId: job.resourceId,
-          retryable,
-          message: message.slice(0, 300),
-        });
+        const transition = resourceLimitError
+          ? await deferTrainingAnalysisJob(prisma, {
+              sessionId: job.resourceId,
+              ownerToken,
+              errorMessage: message,
+              retryDelayMs:
+                Math.max(1, resourceLimitError.retryAfterSec) * 1_000,
+            })
+          : await failTrainingAnalysisJob(prisma, {
+              sessionId: job.resourceId,
+              ownerToken,
+              errorMessage: message,
+              retryable,
+            });
+        devError(
+          resourceLimitError
+            ? "[training-analysis-worker] generation deferred"
+            : "[training-analysis-worker] generation failed",
+          {
+            sessionId: job.resourceId,
+            retryable,
+            retryAfterSec: resourceLimitError?.retryAfterSec ?? null,
+            resourceLimitCode: resourceLimitError?.code ?? null,
+            transitionState: transition.state,
+            message: message.slice(0, 300),
+          },
+        );
       } finally {
         await leaseRenewal.stop();
       }

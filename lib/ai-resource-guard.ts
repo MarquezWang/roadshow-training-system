@@ -1,4 +1,5 @@
 import type { AiModelTask } from "@/lib/ai-models";
+import { getUtcDailyQuotaWindow } from "@/lib/ai-quota-window.mjs";
 import { prisma } from "@/lib/prisma";
 
 type GuardState = {
@@ -116,7 +117,7 @@ async function reserveDailyBudget(params: {
   reservedTokens: number;
 }) {
   const config = quotaConfig();
-  const dayKey = new Date().toISOString().slice(0, 10);
+  const { dayKey, retryAfterSec } = getUtcDailyQuotaWindow();
 
   await prisma.$transaction(async (transaction) => {
     const usage = await transaction.aiQuotaUsage.aggregate({
@@ -129,14 +130,14 @@ async function reserveDailyBudget(params: {
     if (requestCount >= config.dailyRequests) {
       throw new AIResourceLimitError(
         "今日 AI 请求次数已达到上限。",
-        60 * 60,
+        retryAfterSec,
         "AI_DAILY_BUDGET_EXHAUSTED",
       );
     }
     if (tokenCount + params.reservedTokens > config.dailyTokens) {
       throw new AIResourceLimitError(
         "今日 AI Token 预算已用尽。",
-        60 * 60,
+        retryAfterSec,
         "AI_DAILY_BUDGET_EXHAUSTED",
       );
     }
