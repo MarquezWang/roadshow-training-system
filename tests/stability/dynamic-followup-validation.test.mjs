@@ -18,8 +18,11 @@ async function tsModuleUrl(relativePath) {
 const validationUrl = await tsModuleUrl(
   "../../lib/dynamic-followup-validation.ts",
 );
-const { validateFallbackFollowupText, validateMainFollowupText } =
-  await import(validationUrl);
+const {
+  normalizeMainMultipleQuestionText,
+  validateFallbackFollowupText,
+  validateMainFollowupText,
+} = await import(validationUrl);
 
 const aiRoadshowTranscript =
   "AI路演训练系统，用证据链评分与真实评委场景，让每一次路演都经得起检验。路演大赛参赛团队普遍缺乏低成本、高频次、贴近真实评审逻辑的赛前陪练手段，人工教练资源稀缺，成本高。AI路演训练系统包含材料诊断、模拟评委提问、路演答辩、动态追问和训练报告生成。";
@@ -76,5 +79,14 @@ test("dynamic follow-up validator accepts domain terms when transcript supports 
       regularQuestions: [],
     }),
     null,
+  );
+});
+
+test("multiple questions keep only the first semantic question", () => {
+  assert.equal(
+    normalizeMainMultipleQuestionText(
+      "你会如何验证当前方案的实际效果？下一阶段准备进入哪些市场？",
+    ),
+    "你会如何验证当前方案的实际效果？",
   );
 });

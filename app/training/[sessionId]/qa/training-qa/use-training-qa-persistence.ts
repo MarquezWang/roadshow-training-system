@@ -16,7 +16,6 @@ type SaveAndContinueOptions = Readonly<{
 type UseTrainingQaPersistenceOptions = Pick<
   TrainingQaState,
   | "answerElapsedBeforePhaseRef"
-  | "currentAnswerStartedAtRef"
   | "currentQuestionIndex"
   | "hasAutoEndedRef"
   | "isCompletingNormallyRef"
@@ -36,6 +35,7 @@ type UseTrainingQaPersistenceOptions = Pick<
   currentQuestion: TrainingQaQuestion | null;
   getCurrentUsedAnswerSec: () => number;
   getSessionQaDurationSec: () => number;
+  markQuestionStarted: (questionId: string) => Promise<void>;
   navigateToReport: () => void;
   sessionId: string;
   shouldFinishAfterCurrent: boolean;
@@ -48,13 +48,13 @@ export function useTrainingQaPersistence({
   cancelSpeech,
   clearCountdownTimer,
   clearSpeechTimer,
-  currentAnswerStartedAtRef,
   currentQuestion,
   currentQuestionIndex,
   getCurrentUsedAnswerSec,
   getSessionQaDurationSec,
   hasAutoEndedRef,
   isCompletingNormallyRef,
+  markQuestionStarted,
   navigateToReport,
   qaPhase,
   questions,
@@ -83,6 +83,9 @@ export function useTrainingQaPersistence({
       cancelSpeech();
 
       try {
+        if (question) {
+          await markQuestionStarted(question.id);
+        }
         const recordingId = await stopAndUploadCurrentRecording();
         const response = await fetch(`/training/${sessionId}/qa/end`, {
           method: "POST",
@@ -92,7 +95,6 @@ export function useTrainingQaPersistence({
           body: JSON.stringify(
             buildQaEndRequestBody({
               questionId: question?.id,
-              answerStartedAt: currentAnswerStartedAtRef.current,
               revealedQuestionText: question
                 ? revealedQuestionIds.has(question.id)
                 : false,
@@ -125,10 +127,10 @@ export function useTrainingQaPersistence({
       cancelSpeech,
       clearCountdownTimer,
       clearSpeechTimer,
-      currentAnswerStartedAtRef,
       getSessionQaDurationSec,
       hasAutoEndedRef,
       isCompletingNormallyRef,
+      markQuestionStarted,
       navigateToReport,
       revealedQuestionIds,
       sessionId,
@@ -157,6 +159,7 @@ export function useTrainingQaPersistence({
       setMessage("");
 
       try {
+        await markQuestionStarted(currentQuestion.id);
         const currentUsedAnswerSec = getCurrentUsedAnswerSec();
 
         setQaPhase("SAVING");
@@ -170,7 +173,6 @@ export function useTrainingQaPersistence({
             },
             body: JSON.stringify(
               buildQaAnswerRequestBody({
-                answerStartedAt: currentAnswerStartedAtRef.current,
                 revealedQuestionText: revealedQuestionIds.has(
                   currentQuestion.id,
                 ),
@@ -243,12 +245,12 @@ export function useTrainingQaPersistence({
     [
       answerElapsedBeforePhaseRef,
       beginJudgeQuestion,
-      currentAnswerStartedAtRef,
       currentQuestion,
       currentQuestionIndex,
       getCurrentUsedAnswerSec,
       getSessionQaDurationSec,
       isCompletingNormallyRef,
+      markQuestionStarted,
       navigateToReport,
       qaPhase,
       questions,

@@ -22,4 +22,6 @@ test("production readiness checks cover media tools, storage and resource bounds
   assert.match(source, /TRAINING_TRANSCRIPTION_CAPABILITY/);
   assert.match(source, /TRAINING_ANALYSIS_CAPABILITY/);
   assert.match(source, /UPLOAD_MAINTENANCE_CAPABILITY/);
+  assert.match(source, /assertAIDailyBudgetSupportsMaximumRequest/);
+  assert.match(source, /maxReservedTokensPerRequest/);
 });

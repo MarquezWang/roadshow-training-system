@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callAI } from "@/lib/ai";
+import { createAIResourceLimitResponse } from "@/lib/ai-http-response";
 import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { AIJsonParseError, parseAIJson } from "@/lib/json-utils";
 import {
@@ -133,6 +134,7 @@ export async function POST(
     const userPrompt = buildDiagnosisPrompt(aiContext, template);
     const aiResult = await callAI({
       task: "materialDiagnosis",
+      userId,
       projectId: id,
       systemPrompt:
         "你是严格遵守 JSON 输出约束的赛前材料诊断专家。只输出合法 JSON，不输出 Markdown、代码块或额外解释。",
@@ -181,6 +183,9 @@ export async function POST(
 
     return NextResponse.json({ status: "success", diagnosis });
   } catch (error) {
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) return resourceLimitResponse;
+
     if (error instanceof ProjectContextNotFoundError) {
       return NextResponse.json(
         { status: "failed", message: error.message },

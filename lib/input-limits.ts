@@ -38,15 +38,40 @@ async function readLimitedBody(
   request: Request,
   maxBytes: number,
 ) {
-  const declaredLength = Number(request.headers.get("content-length"));
+  const contentLength = request.headers.get("content-length");
+  const declaredLength = contentLength === null ? null : Number(contentLength);
 
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+  if (
+    declaredLength !== null &&
+    Number.isFinite(declaredLength) &&
+    declaredLength > maxBytes
+  ) {
     throw new RequestBodyTooLargeError(maxBytes);
   }
 
-  const rawBody = await request.text();
-  if (new TextEncoder().encode(rawBody).byteLength > maxBytes) {
-    throw new RequestBodyTooLargeError(maxBytes);
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let receivedBytes = 0;
+  let rawBody = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      receivedBytes += value.byteLength;
+      if (receivedBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new RequestBodyTooLargeError(maxBytes);
+      }
+
+      rawBody += decoder.decode(value, { stream: true });
+    }
+    rawBody += decoder.decode();
+  } finally {
+    reader.releaseLock();
   }
 
   return rawBody;

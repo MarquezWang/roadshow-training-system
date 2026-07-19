@@ -16,6 +16,11 @@ import {
   TRAINING_TRANSCRIPTION_CAPABILITY,
   UPLOAD_MAINTENANCE_CAPABILITY,
 } from "../lib/worker-heartbeat.mjs";
+import {
+  AI_RUNTIME_INTEGER_SETTINGS,
+  readBoundedIntegerSetting,
+} from "../lib/ai-runtime-config.mjs";
+import { assertAIDailyBudgetSupportsMaximumRequest } from "../lib/ai-resource-config.mjs";
 
 const PROJECT_ROOT = process.cwd();
 const VALID_TRANSCRIPTION_PROVIDERS = new Set([
@@ -290,10 +295,39 @@ async function run() {
     `TRANSCRIPTION_PROVIDER=${provider || "(未配置)"}`,
   );
 
+  for (const setting of AI_RUNTIME_INTEGER_SETTINGS) {
+    try {
+      const value = readBoundedIntegerSetting(env, setting);
+      pushCheck(checks, true, `${setting.name}=${value}`);
+    } catch (error) {
+      pushCheck(
+        checks,
+        false,
+        `${setting.name}=${env[setting.name] || setting.fallback}`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  try {
+    const aiBudget = assertAIDailyBudgetSupportsMaximumRequest(env);
+    pushCheck(
+      checks,
+      true,
+      `AI_USER_DAILY_TOKENS=${aiBudget.dailyTokens}`,
+      `最大单次预占 ${aiBudget.maxReservedTokensPerRequest} Token`,
+    );
+  } catch (error) {
+    pushCheck(
+      checks,
+      false,
+      `AI_USER_DAILY_TOKENS=${env.AI_USER_DAILY_TOKENS || 500_000}`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
   for (const [key, fallback, minimum, maximum] of [
     ["TRUSTED_PROXY_HOPS", 0, 0, 10],
-    ["AI_TIMEOUT_MS", 240_000, 1_000, 10 * 60_000],
-    ["AI_MAX_OUTPUT_TOKENS", 6_000, 1, 100_000],
     ["TRANSCRIPTION_TIMEOUT_MS", 300_000, 10_000, 30 * 60_000],
     ["TRANSCRIPTION_MAX_CONCURRENCY", 2, 1, 16],
     ["TRANSCRIPTION_QUEUE_TIMEOUT_MS", 30_000, 1_000, 10 * 60_000],

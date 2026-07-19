@@ -9,6 +9,7 @@ import {
   type StoredProjectFile,
 } from "@/lib/file-upload";
 import { prisma } from "@/lib/prisma";
+import { claimExpiredProjectMaterial } from "@/lib/project-material-cleanup.mjs";
 import { streamWebBodyToFile } from "@/lib/stream-upload.mjs";
 
 const DEFAULT_STAGING_LIFETIME_HOURS = 2;
@@ -65,16 +66,14 @@ export async function cleanupExpiredProjectMaterials(limit = 20) {
       item.filePath,
     );
     assertInside(stagingRoot(), absolutePath);
-    await rm(absolutePath, { force: true }).catch(() => undefined);
-  }
 
-  if (expired.length > 0) {
-    await prisma.pendingProjectMaterial.deleteMany({
-      where: {
-        id: { in: expired.map((item) => item.id) },
-        ...expiredWhere,
-      },
+    const claimed = await claimExpiredProjectMaterial(prisma, {
+      id: item.id,
+      now,
+      staleReservationBefore,
     });
+    if (!claimed) continue;
+    await rm(absolutePath, { force: true }).catch(() => undefined);
   }
 }
 

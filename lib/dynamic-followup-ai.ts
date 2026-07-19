@@ -9,10 +9,12 @@ const DYNAMIC_FOLLOWUP_OR_EMPTY_SYSTEM_PROMPT =
   "你是一名专业路演答辩评委，只输出一个问题或 NO_DYNAMIC_FOLLOWUP。";
 
 export async function callMainDynamicFollowup({
+  userId,
   transcript,
   aiContext,
   existingQuestions,
 }: {
+  userId: string;
   transcript: string;
   aiContext: ProjectAIContext | null;
   existingQuestions: string;
@@ -30,6 +32,7 @@ export async function callMainDynamicFollowup({
 
   return callAI({
     task: "dynamicFollowup",
+    userId,
     projectId: aiContext?.project.id,
     systemPrompt: DYNAMIC_FOLLOWUP_SYSTEM_PROMPT,
     userPrompt: followupPrompt,
@@ -39,11 +42,13 @@ export async function callMainDynamicFollowup({
 }
 
 export async function callMismatchDynamicFollowup({
+  userId,
   projectId,
   projectTitle,
   projectContext,
   pitchTranscript,
 }: {
+  userId: string;
   projectId: string;
   projectTitle: string;
   projectContext: string;
@@ -60,6 +65,7 @@ export async function callMismatchDynamicFollowup({
 
   return callAI({
     task: "dynamicFollowup",
+    userId,
     projectId,
     systemPrompt: DYNAMIC_FOLLOWUP_OR_EMPTY_SYSTEM_PROMPT,
     userPrompt: mismatchPrompt,
@@ -69,12 +75,14 @@ export async function callMismatchDynamicFollowup({
 }
 
 export async function callContentDynamicFollowup({
+  userId,
   projectId,
   projectTitle,
   projectContext,
   pitchTranscript,
   existingQuestions,
 }: {
+  userId: string;
   projectId: string;
   projectTitle: string;
   projectContext: string;
@@ -91,6 +99,7 @@ export async function callContentDynamicFollowup({
 
   return callAI({
     task: "dynamicFollowup",
+    userId,
     projectId,
     systemPrompt: DYNAMIC_FOLLOWUP_SYSTEM_PROMPT,
     userPrompt: contentPrompt,

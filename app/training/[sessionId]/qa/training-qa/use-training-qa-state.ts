@@ -43,9 +43,6 @@ export function useTrainingQaState({
   const [dynamicFollowupIntroQuestion, setDynamicFollowupIntroQuestion] =
     useState<TrainingQaQuestion | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const currentAnswerStartedAtRef = useRef<Date | null>(
-    initialStatus === "QAING" ? new Date() : null,
-  );
   const answerPhaseStartedMsRef = useRef<number | null>(null);
   const answerElapsedBeforePhaseRef = useRef(initialUsedAnswerSec);
   const countdownIntervalRef = useRef<number | null>(null);
@@ -74,7 +71,6 @@ export function useTrainingQaState({
     beginJudgeQuestionRef,
     beginPreAnswerCountdownRef,
     countdownIntervalRef,
-    currentAnswerStartedAtRef,
     currentQuestionIndex,
     dynamicFollowupIntroQuestion,
     dynamicFollowupIntroShownQuestionIdsRef,

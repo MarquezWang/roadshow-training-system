@@ -29,16 +29,6 @@ function readAnswerText(value: unknown) {
   return text;
 }
 
-function readOptionalDate(value: unknown) {
-  if (typeof value !== "string" || value.trim() === "") {
-    return null;
-  }
-
-  const parsed = new Date(value);
-
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 function readOptionalId(value: unknown) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
@@ -108,7 +98,6 @@ export async function POST(
   let body: {
     answerText?: unknown;
     finish?: unknown;
-    answerStartedAt?: unknown;
     revealedQuestionText?: unknown;
     qaDurationSec?: unknown;
     recordingId?: unknown;
@@ -136,7 +125,6 @@ export async function POST(
     );
   }
   const shouldFinish = body.finish === true;
-  const answerStartedAt = readOptionalDate(body.answerStartedAt);
   const revealedQuestionText = body.revealedQuestionText === true;
   const clientQaDurationSec = body.qaDurationSec;
   const recordingId = readOptionalId(body.recordingId);
@@ -207,8 +195,6 @@ export async function POST(
   }
 
   const now = new Date();
-  const startedAt = answerStartedAt ?? now;
-  const durationSec = getDurationSec(startedAt, now);
 
   const savedAnswer = await prisma.$transaction(async (transaction) => {
     const stateGuard = await transaction.trainingSession.updateMany({
@@ -219,65 +205,60 @@ export async function POST(
       return null;
     }
 
-    const answer = await transaction.trainingAnswer.upsert({
-      where: {
-        questionId,
-      },
-      update: revealedQuestionText
-        ? {
-            revealedQuestionText: true,
-          }
-        : {},
-      create: {
-        sessionId,
-        questionId,
-        answerText,
-        revealedQuestionText,
-        recordingId,
-        startedAt,
-        endedAt: now,
-        durationSec,
-      },
+    const currentAnswer = await transaction.trainingAnswer.findUnique({
+      where: { questionId },
       select: {
         id: true,
-        questionId: true,
         answerText: true,
-        revealedQuestionText: true,
         recordingId: true,
         startedAt: true,
         endedAt: true,
         durationSec: true,
       },
     });
+    const startedAt = currentAnswer?.startedAt ?? now;
 
-    if (recordingId && !answer.recordingId) {
-      await transaction.trainingAnswer.updateMany({
-        where: {
-          id: answer.id,
-          recordingId: null,
-        },
+    if (!currentAnswer) {
+      return transaction.trainingAnswer.create({
         data: {
-          recordingId,
-        },
-      });
-    }
-
-    const existingAnswerText = answer.answerText?.trim() ?? "";
-    if (answerText && answerText.length > existingAnswerText.length) {
-      await transaction.trainingAnswer.updateMany({
-        where: {
-          id: answer.id,
-          answerText: answer.answerText,
-        },
-        data: {
+          sessionId,
+          questionId,
           answerText,
+          revealedQuestionText,
+          recordingId,
+          startedAt,
+          endedAt: now,
+          durationSec: getDurationSec(startedAt, now),
+        },
+        select: {
+          id: true,
+          questionId: true,
+          answerText: true,
+          revealedQuestionText: true,
+          recordingId: true,
+          startedAt: true,
+          endedAt: true,
+          durationSec: true,
         },
       });
     }
 
-    return transaction.trainingAnswer.findUniqueOrThrow({
-      where: {
-        id: answer.id,
+    const existingAnswerText = currentAnswer.answerText?.trim() ?? "";
+    return transaction.trainingAnswer.update({
+      where: { id: currentAnswer.id },
+      data: {
+        ...(revealedQuestionText ? { revealedQuestionText: true } : {}),
+        ...(recordingId && !currentAnswer.recordingId ? { recordingId } : {}),
+        ...(answerText && answerText.length > existingAnswerText.length
+          ? { answerText }
+          : {}),
+        ...(!currentAnswer.endedAt
+          ? {
+              startedAt,
+              endedAt: now,
+              durationSec: getDurationSec(startedAt, now),
+            }
+          : {}),
       },
       select: {
         id: true,

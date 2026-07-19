@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { DisplayMaterialNotice } from "@/lib/display-material";
 import {
@@ -19,6 +19,7 @@ import {
 import { getQaPhaseLabel } from "./training-qa/training-qa-format";
 import { TrainingQaOverlays } from "./training-qa/training-qa-overlays";
 import { TrainingQaStage } from "./training-qa/training-qa-stage";
+import { createQuestionStartCoordinator } from "./training-qa/training-qa-question-start";
 import { getCurrentQuestionTiming } from "./training-qa/training-qa-timing";
 import { useTrainingQaAnswerDuration } from "./training-qa/use-training-qa-answer-duration";
 import { useTrainingQaAnswerTimer } from "./training-qa/use-training-qa-answer-timer";
@@ -65,7 +66,6 @@ export function TrainingQaClient({
     beginJudgeQuestionRef,
     beginPreAnswerCountdownRef,
     countdownIntervalRef,
-    currentAnswerStartedAtRef,
     currentQuestionIndex,
     dynamicFollowupIntroQuestion,
     dynamicFollowupIntroShownQuestionIdsRef,
@@ -163,6 +163,39 @@ export function TrainingQaClient({
     startQuestionRecording,
     stopAndUploadCurrentRecording,
   } = useQaRecording({ sessionId });
+  const requestQuestionStart = useCallback(
+    async (questionId: string) => {
+      const response = await fetch(
+        `/training/${sessionId}/qa/questions/${questionId}/start`,
+        { method: "POST" },
+      );
+      if (response.ok) return;
+
+      const body = (await response.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      throw new Error(body?.error ?? "记录本题开始时间失败。");
+    },
+    [sessionId],
+  );
+  const questionStartCoordinator = useMemo(
+    () => createQuestionStartCoordinator(requestQuestionStart),
+    [requestQuestionStart],
+  );
+  const markQuestionStarted = useCallback(
+    (questionId: string) => {
+      const pending = questionStartCoordinator.ensureStarted(questionId);
+      void pending.catch((error) => {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "记录本题开始时间失败。",
+        );
+      });
+      return pending;
+    },
+    [questionStartCoordinator, setMessage],
+  );
 
   const { isGenerating } = useQaQuestionGeneration({
     sessionId,
@@ -181,7 +214,8 @@ export function TrainingQaClient({
     cancelSpeech,
     clearSpeechTimer,
     countdownIntervalRef,
-    currentAnswerStartedAtRef,
+    currentQuestion,
+    markQuestionStarted,
     setDynamicFollowupUsedSec,
     setPreAnswerOverlay,
     setQaPhase,
@@ -231,13 +265,13 @@ export function TrainingQaClient({
       cancelSpeech,
       clearCountdownTimer,
       clearSpeechTimer,
-      currentAnswerStartedAtRef,
       currentQuestion,
       currentQuestionIndex,
       getCurrentUsedAnswerSec,
       getSessionQaDurationSec,
       hasAutoEndedRef,
       isCompletingNormallyRef,
+      markQuestionStarted,
       navigateToReport,
       qaPhase,
       questions,

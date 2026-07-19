@@ -62,3 +62,53 @@ test("new project flow references a server material token instead of resending c
   assert.match(staging, /streamWebBodyToFile/);
   assert.doesNotMatch(staging, /arrayBuffer\(\)/);
 });
+
+test("second-review concurrency and attribution boundaries are wired into production paths", async () => {
+  const [
+    staging,
+    worker,
+    executor,
+    ai,
+    answerRoute,
+    answerStartRoute,
+  ] = await Promise.all([
+    readFile(new URL("../../lib/project-material-staging.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../lib/training-analysis-worker.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "../../app/training/[sessionId]/analysis/training-analysis-executor.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("../../lib/ai.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "../../app/training/[sessionId]/qa/questions/[questionId]/answer/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../../app/training/[sessionId]/qa/questions/[questionId]/start/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ]);
+
+  assert.ok(
+    staging.indexOf("claimExpiredProjectMaterial") <
+      staging.indexOf("await rm(absolutePath"),
+  );
+  assert.match(worker, /startTrainingAnalysisLeaseRenewal/);
+  assert.match(executor, /userId:\s*session\.project\.ownerId/);
+  assert.match(executor, /projectId:\s*session\.projectId/);
+  assert.ok(
+    ai.indexOf("const resources = await acquireAIResources") <
+      ai.indexOf("const timeout = setTimeout"),
+  );
+  assert.doesNotMatch(answerRoute, /answerStartedAt/);
+  assert.match(answerStartRoute, /startedAt:\s*now/);
+});

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callAI } from "@/lib/ai";
+import { createAIResourceLimitResponse } from "@/lib/ai-http-response";
 import {
   buildProjectAIContext,
   parseProjectAIContextSnapshot,
@@ -255,6 +256,11 @@ export async function POST(
         status: true,
         projectContextSnapshot: true,
         contextSchemaVersion: true,
+        project: {
+          select: {
+            ownerId: true,
+          },
+        },
       },
     });
 
@@ -364,6 +370,7 @@ export async function POST(
 
       let aiResult = await callAI({
         task: "judgeQuestionGeneration",
+        userId: session.project.ownerId,
         projectId: session.projectId,
         systemPrompt: baseSystemPrompt,
         userPrompt,
@@ -388,6 +395,7 @@ export async function POST(
 
         aiResult = await callAI({
           task: "judgeQuestionGeneration",
+          userId: session.project.ownerId,
           projectId: session.projectId,
           systemPrompt: `${baseSystemPrompt}\n\n重要：确保所有字符串值中的双引号、换行符等特殊字符都已正确转义。输出必须是严格合法的 JSON，不要有任何 JSON 语法错误。`,
           userPrompt,
@@ -443,6 +451,9 @@ export async function POST(
     devLog("[qa:generate:POST] lock released in outer catch", {
       sessionId,
     });
+
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) return resourceLimitResponse;
 
     if (error instanceof ProjectContextNotFoundError) {
       devError("[qa:generate:POST] project context not found", {

@@ -1,4 +1,6 @@
 import { callAI } from "@/lib/ai";
+import { createAIResourceLimitResponse } from "@/lib/ai-http-response";
+import { AIResourceLimitError } from "@/lib/ai-resource-guard";
 import { parseFirstAIJsonObject } from "@/lib/json-utils";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { isAuthEnabled } from "@/lib/auth";
@@ -150,11 +152,13 @@ function buildBaseRecognitionInput(fileName: string, sourceText: string) {
 }
 
 async function requestTrlEvidence({
+  userId,
   systemPrompt,
   userPrompt,
   sourceText,
   attempt,
 }: {
+  userId: string | null;
   systemPrompt: string;
   userPrompt: string;
   sourceText: string;
@@ -165,6 +169,7 @@ async function requestTrlEvidence({
   try {
     const result = await callAI({
       task: "trlAssessment",
+      userId,
       systemPrompt,
       userPrompt,
       temperature: 0,
@@ -179,6 +184,8 @@ async function requestTrlEvidence({
       rawText.slice(0, 1_000),
     );
   } catch (error) {
+    if (error instanceof AIResourceLimitError) throw error;
+
     const reason = `TRL-only AI 调用失败：${errorMessage(error)}`;
     debugLog(`trl_${attempt}_call_failed`, { reason });
     return { status: "unavailable", reason };
@@ -216,6 +223,7 @@ async function requestTrlEvidence({
 async function recognizeTrl(
   fileName: string,
   sourceText: string,
+  userId: string | null,
 ): Promise<TrlRecognitionResult> {
   let trlAttempt: TrlEvidenceAttempt = {
     status: "unavailable",
@@ -231,6 +239,7 @@ async function recognizeTrl(
       buildLayeredRecognitionInput(fileName, sourceText),
     );
     trlAttempt = await requestTrlEvidence({
+      userId,
       systemPrompt: trlPrompt,
       userPrompt: trlInput,
       sourceText,
@@ -243,6 +252,7 @@ async function recognizeTrl(
       });
       debugLog("trl_retry_triggered", { triggered: true });
       trlAttempt = await requestTrlEvidence({
+        userId,
         systemPrompt: trlPrompt,
         userPrompt: `${trlInput}\n\n【重试要求】上一次未返回可用证据结构。请只返回一个完整、闭合、合法的 trlEvidence JSON 对象，不要输出解释。`,
         sourceText,
@@ -255,6 +265,8 @@ async function recognizeTrl(
       });
     }
   } catch (error) {
+    if (error instanceof AIResourceLimitError) throw error;
+
     debugLog("trl_prompt_or_retry_failed", { error: errorMessage(error) });
   }
 
@@ -394,7 +406,18 @@ export async function POST(request: Request) {
   });
 
   if (mode === "trl") {
-    const trlResult = await recognizeTrl(fileName, sourceText);
+    let trlResult: TrlRecognitionResult;
+    try {
+      trlResult = await recognizeTrl(
+        fileName,
+        sourceText,
+        currentUser?.id ?? null,
+      );
+    } catch (error) {
+      const resourceLimitResponse = createAIResourceLimitResponse(error);
+      if (resourceLimitResponse) return resourceLimitResponse;
+      throw error;
+    }
 
     return Response.json({
       status: "recognized",
@@ -415,6 +438,7 @@ export async function POST(request: Request) {
     const basePrompt = await loadPromptTemplate("project-profile-recognition");
     const baseResult = await callAI({
       task: "projectProfileRecognition",
+      userId: currentUser?.id,
       systemPrompt: basePrompt,
       userPrompt: buildBaseRecognitionInput(fileName, sourceText),
       temperature: 0,
@@ -424,6 +448,9 @@ export async function POST(request: Request) {
     baseRawText = baseResult.text;
     debugLog("base_ai_raw_preview", baseRawText.slice(0, 1_000));
   } catch (error) {
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) return resourceLimitResponse;
+
     debugLog("base_ai_call_failed", { error: errorMessage(error) });
     return failedResponse("ai_call_failed", AI_FAILURE_MESSAGE, 502);
   }
@@ -482,7 +509,18 @@ export async function POST(request: Request) {
     });
   }
 
-  const trlResult = await recognizeTrl(fileName, sourceText);
+  let trlResult: TrlRecognitionResult;
+  try {
+    trlResult = await recognizeTrl(
+      fileName,
+      sourceText,
+      currentUser?.id ?? null,
+    );
+  } catch (error) {
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) return resourceLimitResponse;
+    throw error;
+  }
 
   const notices = [...baseNotices];
   if (trlResult.status === "failed") notices.push(TRL_FAILURE_MESSAGE);

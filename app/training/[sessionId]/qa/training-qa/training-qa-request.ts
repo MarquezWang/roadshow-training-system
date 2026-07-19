@@ -1,5 +1,4 @@
 type BuildQaEndRequestOptions = {
-  answerStartedAt: Date | null;
   qaDurationSec: number;
   questionId: string | undefined;
   recordingId: string | null | undefined;
@@ -7,7 +6,6 @@ type BuildQaEndRequestOptions = {
 };
 
 export function buildQaEndRequestBody({
-  answerStartedAt,
   qaDurationSec,
   questionId,
   recordingId,
@@ -15,7 +13,6 @@ export function buildQaEndRequestBody({
 }: BuildQaEndRequestOptions) {
   return {
     questionId,
-    answerStartedAt: answerStartedAt?.toISOString(),
     revealedQuestionText,
     recordingId,
     qaDurationSec,
@@ -23,7 +20,6 @@ export function buildQaEndRequestBody({
 }
 
 type BuildQaAnswerRequestOptions = {
-  answerStartedAt: Date | null;
   finish: boolean;
   preferredNextQuestionId: string | undefined;
   qaDurationSec: number;
@@ -32,7 +28,6 @@ type BuildQaAnswerRequestOptions = {
 };
 
 export function buildQaAnswerRequestBody({
-  answerStartedAt,
   finish,
   preferredNextQuestionId,
   qaDurationSec,
@@ -40,7 +35,6 @@ export function buildQaAnswerRequestBody({
   revealedQuestionText,
 }: BuildQaAnswerRequestOptions) {
   return {
-    answerStartedAt: answerStartedAt?.toISOString(),
     revealedQuestionText,
     recordingId,
     qaDurationSec,

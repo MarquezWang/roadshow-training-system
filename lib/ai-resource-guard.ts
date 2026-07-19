@@ -1,4 +1,9 @@
 import type { AiModelTask } from "@/lib/ai-models";
+import { getUtcDailyQuotaWindow } from "@/lib/ai-quota-window.mjs";
+import {
+  AI_MAX_RESERVED_TOKENS_PER_REQUEST,
+  getAIQuotaConfig,
+} from "@/lib/ai-resource-config.mjs";
 import { prisma } from "@/lib/prisma";
 
 type GuardState = {
@@ -25,63 +30,34 @@ const state: GuardState =
     providerBackoffUntil: 0,
   });
 
-function boundedIntegerEnv(
-  name: string,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-) {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
+type AIResourceLimitCode =
+  | "AI_RATE_LIMITED"
+  | "AI_DAILY_BUDGET_EXHAUSTED"
+  | "AI_CONCURRENCY_LIMITED"
+  | "AI_PROVIDER_UNAVAILABLE"
+  | "AI_REQUEST_EXCEEDS_DAILY_BUDGET"
+  | "AI_REQUEST_TOO_LARGE";
 
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(`${name} 必须是 ${minimum} 到 ${maximum} 之间的整数。`);
-  }
-
-  return value;
-}
-
-function quotaConfig() {
-  return {
-    requestsPerMinute: boundedIntegerEnv(
-      "AI_USER_REQUESTS_PER_MINUTE",
-      20,
-      1,
-      600,
-    ),
-    dailyRequests: boundedIntegerEnv("AI_USER_DAILY_REQUESTS", 500, 1, 100_000),
-    dailyTokens: boundedIntegerEnv(
-      "AI_USER_DAILY_TOKENS",
-      500_000,
-      1_000,
-      100_000_000,
-    ),
-    userConcurrency: boundedIntegerEnv("AI_USER_MAX_CONCURRENT", 3, 1, 50),
-    scopeConcurrency: boundedIntegerEnv("AI_SCOPE_MAX_CONCURRENT", 1, 1, 10),
-    globalConcurrency: boundedIntegerEnv("AI_GLOBAL_MAX_CONCURRENT", 10, 1, 200),
-    providerFailureThreshold: boundedIntegerEnv(
-      "AI_PROVIDER_FAILURE_THRESHOLD",
-      3,
-      1,
-      20,
-    ),
-    providerBackoffMs: boundedIntegerEnv(
-      "AI_PROVIDER_BACKOFF_MS",
-      30_000,
-      1_000,
-      10 * 60_000,
-    ),
-  };
-}
+const NON_RETRYABLE_RESOURCE_LIMIT_CODES = new Set<AIResourceLimitCode>([
+  "AI_REQUEST_EXCEEDS_DAILY_BUDGET",
+  "AI_REQUEST_TOO_LARGE",
+]);
 
 export class AIResourceLimitError extends Error {
-  retryAfterSec: number;
+  readonly retryAfterSec: number;
+  readonly code: AIResourceLimitCode;
+  readonly retryable: boolean;
 
-  constructor(message: string, retryAfterSec: number) {
+  constructor(
+    message: string,
+    retryAfterSec: number,
+    code: AIResourceLimitCode,
+  ) {
     super(message);
     this.name = "AIResourceLimitError";
     this.retryAfterSec = retryAfterSec;
+    this.code = code;
+    this.retryable = !NON_RETRYABLE_RESOURCE_LIMIT_CODES.has(code);
   }
 }
 
@@ -95,14 +71,34 @@ function decrement(map: Map<string, number>, key: string) {
   else map.set(key, next);
 }
 
+function assertRequestReservationFitsBudget(
+  reservedTokens: number,
+  dailyTokens: number,
+) {
+  if (reservedTokens > AI_MAX_RESERVED_TOKENS_PER_REQUEST) {
+    throw new AIResourceLimitError(
+      `单次 AI 请求预占 ${reservedTokens} Token，超过系统单次上限 ${AI_MAX_RESERVED_TOKENS_PER_REQUEST}。`,
+      0,
+      "AI_REQUEST_TOO_LARGE",
+    );
+  }
+  if (reservedTokens > dailyTokens) {
+    throw new AIResourceLimitError(
+      `单次 AI 请求预占 ${reservedTokens} Token，超过每日预算 ${dailyTokens}。`,
+      0,
+      "AI_REQUEST_EXCEEDS_DAILY_BUDGET",
+    );
+  }
+}
+
 async function reserveDailyBudget(params: {
   userKey: string;
   projectKey: string;
   task: AiModelTask;
   reservedTokens: number;
 }) {
-  const config = quotaConfig();
-  const dayKey = new Date().toISOString().slice(0, 10);
+  const config = getAIQuotaConfig(process.env);
+  const { dayKey, retryAfterSec } = getUtcDailyQuotaWindow();
 
   await prisma.$transaction(async (transaction) => {
     const usage = await transaction.aiQuotaUsage.aggregate({
@@ -113,10 +109,18 @@ async function reserveDailyBudget(params: {
     const tokenCount = usage._sum.tokenCount ?? 0;
 
     if (requestCount >= config.dailyRequests) {
-      throw new AIResourceLimitError("今日 AI 请求次数已达到上限。", 60 * 60);
+      throw new AIResourceLimitError(
+        "今日 AI 请求次数已达到上限。",
+        retryAfterSec,
+        "AI_DAILY_BUDGET_EXHAUSTED",
+      );
     }
     if (tokenCount + params.reservedTokens > config.dailyTokens) {
-      throw new AIResourceLimitError("今日 AI Token 预算已用尽。", 60 * 60);
+      throw new AIResourceLimitError(
+        "今日 AI Token 预算已用尽。",
+        retryAfterSec,
+        "AI_DAILY_BUDGET_EXHAUSTED",
+      );
     }
 
     await transaction.aiQuotaUsage.upsert({
@@ -152,12 +156,17 @@ export async function acquireAIResources(params: {
   task: AiModelTask;
   reservedTokens: number;
 }) {
-  const config = quotaConfig();
+  const config = getAIQuotaConfig(process.env);
+  assertRequestReservationFitsBudget(
+    params.reservedTokens,
+    config.dailyTokens,
+  );
   const now = Date.now();
   if (state.providerBackoffUntil > now) {
     throw new AIResourceLimitError(
       "AI 服务暂时熔断，请稍后重试。",
       Math.max(1, Math.ceil((state.providerBackoffUntil - now) / 1_000)),
+      "AI_PROVIDER_UNAVAILABLE",
     );
   }
 
@@ -168,18 +177,31 @@ export async function acquireAIResources(params: {
     throw new AIResourceLimitError(
       "AI 请求过于频繁，请稍后重试。",
       Math.max(1, Math.ceil((60_000 - (now - recent[0])) / 1_000)),
+      "AI_RATE_LIMITED",
     );
   }
 
   const scopeKey = `${params.userKey}:${params.projectKey}:${params.task}`;
   if ((state.activeByUser.get(params.userKey) ?? 0) >= config.userConcurrency) {
-    throw new AIResourceLimitError("当前用户的 AI 并发任务已达到上限。", 5);
+    throw new AIResourceLimitError(
+      "当前用户的 AI 并发任务已达到上限。",
+      5,
+      "AI_CONCURRENCY_LIMITED",
+    );
   }
   if ((state.activeByScope.get(scopeKey) ?? 0) >= config.scopeConcurrency) {
-    throw new AIResourceLimitError("同一项目的同类 AI 任务正在处理中。", 5);
+    throw new AIResourceLimitError(
+      "同一项目的同类 AI 任务正在处理中。",
+      5,
+      "AI_CONCURRENCY_LIMITED",
+    );
   }
   if (state.globalActive >= config.globalConcurrency) {
-    throw new AIResourceLimitError("AI 服务当前繁忙，请稍后重试。", 5);
+    throw new AIResourceLimitError(
+      "AI 服务当前繁忙，请稍后重试。",
+      5,
+      "AI_CONCURRENCY_LIMITED",
+    );
   }
 
   recent.push(now);
@@ -242,7 +264,7 @@ export function recordAIProviderSuccess() {
 }
 
 export function recordAIProviderFailure() {
-  const config = quotaConfig();
+  const config = getAIQuotaConfig(process.env);
   state.consecutiveProviderFailures += 1;
   if (state.consecutiveProviderFailures >= config.providerFailureThreshold) {
     state.providerBackoffUntil = Date.now() + config.providerBackoffMs;

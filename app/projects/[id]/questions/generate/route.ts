@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { callAI } from "@/lib/ai";
+import { createAIResourceLimitResponse } from "@/lib/ai-http-response";
 import {
   buildProjectAIContext,
   ProjectContextNotFoundError,
@@ -250,6 +251,7 @@ export async function POST(
     );
     const aiResult = await callAI({
       task: "judgeQuestionGeneration",
+      userId,
       projectId: id,
       systemPrompt:
         "你是严格遵守 JSON 输出约束的路演答辩训练专家。只输出合法 JSON，不输出 Markdown 或额外解释。",
@@ -286,6 +288,9 @@ export async function POST(
       new URLSearchParams({ questionStatus: "success" }),
     );
   } catch (error) {
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) return resourceLimitResponse;
+
     if (error instanceof ProjectContextNotFoundError) {
       return new NextResponse(error.message, { status: 404 });
     }

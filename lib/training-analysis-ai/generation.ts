@@ -1,4 +1,5 @@
 import { AIEmptyContentError, callAI } from "@/lib/ai";
+import { AIResourceLimitError } from "@/lib/ai-resource-guard";
 import { devError, devLog, devWarn } from "@/lib/dev-log";
 import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import type { TrainingAnalysisFallbackReason } from "@/lib/training-analysis-fallback";
@@ -29,6 +30,8 @@ const ANALYSIS_SYSTEM_PROMPT =
 
 export type GenerateTrainingAnalysisInput = {
   sessionId: string;
+  userId: string;
+  projectId: string;
   userPrompt: string;
   durationSec: number;
   pageCount: number | null;
@@ -70,6 +73,8 @@ export async function generateTrainingAnalysisFromAI(
   try {
     aiResult = await dependencies.callAI({
       task: "pitchAnalysis",
+      userId: input.userId,
+      projectId: input.projectId,
       systemPrompt: ANALYSIS_SYSTEM_PROMPT,
       userPrompt: input.userPrompt,
       temperature: 0.2,
@@ -101,6 +106,8 @@ export async function generateTrainingAnalysisFromAI(
     try {
       aiResult = await dependencies.callAI({
         task: "pitchAnalysis",
+        userId: input.userId,
+        projectId: input.projectId,
         systemPrompt: ANALYSIS_SYSTEM_PROMPT,
         userPrompt: input.userPrompt,
         temperature: 0.2,
@@ -160,6 +167,8 @@ export async function generateTrainingAnalysisFromAI(
     return {
       analysis: await dependencies.parseAnalysisJsonWithRepair(aiResult.text, {
         sessionId: input.sessionId,
+        userId: input.userId,
+        projectId: input.projectId,
         jsonModeEmptyContent,
         retryWithoutJsonMode,
       }),
@@ -167,6 +176,10 @@ export async function generateTrainingAnalysisFromAI(
       fallbackReason: null,
     };
   } catch (analysisParseError) {
+    if (analysisParseError instanceof AIResourceLimitError) {
+      throw analysisParseError;
+    }
+
     if (analysisParseError instanceof AnalysisJsonRepairError) {
       debug = analysisParseError.debug;
     }

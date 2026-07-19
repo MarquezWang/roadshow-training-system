@@ -28,15 +28,6 @@ function readNonEmptyText(value: unknown) {
   return text || null;
 }
 
-function readOptionalDate(value: unknown) {
-  if (typeof value !== "string" || value.trim() === "") {
-    return null;
-  }
-
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 function readOptionalId(value: unknown) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
@@ -62,7 +53,6 @@ export async function POST(request: NextRequest, context: EndQaContext) {
   let body: {
     questionId?: unknown;
     answerText?: unknown;
-    answerStartedAt?: unknown;
     revealedQuestionText?: unknown;
     qaDurationSec?: unknown;
     recordingId?: unknown;
@@ -105,7 +95,6 @@ export async function POST(request: NextRequest, context: EndQaContext) {
       { status: 400 },
     );
   }
-  const answerStartedAt = readOptionalDate(body.answerStartedAt);
   const revealedQuestionText = body.revealedQuestionText === true;
 
   if (questionId) {
@@ -147,9 +136,7 @@ export async function POST(request: NextRequest, context: EndQaContext) {
     now,
     body.qaDurationSec,
   );
-  const shouldSaveAnswer = Boolean(
-    questionId && (answerText || recordingId || revealedQuestionText),
-  );
+  const shouldSaveAnswer = Boolean(questionId);
 
   const result = await prisma.$transaction(async (transaction) => {
     const transition = await transaction.trainingSession.updateMany({
@@ -180,11 +167,13 @@ export async function POST(request: NextRequest, context: EndQaContext) {
           recordingId: true,
           revealedQuestionText: true,
           startedAt: true,
+          endedAt: true,
         },
       });
 
       if (existingAnswer) {
         const existingText = existingAnswer.answerText?.trim() ?? "";
+        const startedAt = existingAnswer.startedAt ?? now;
         await transaction.trainingAnswer.update({
           where: { id: existingAnswer.id },
           data: {
@@ -195,10 +184,17 @@ export async function POST(request: NextRequest, context: EndQaContext) {
             ...(revealedQuestionText && !existingAnswer.revealedQuestionText
               ? { revealedQuestionText: true }
               : {}),
+            ...(!existingAnswer.endedAt
+              ? {
+                  startedAt,
+                  endedAt: now,
+                  durationSec: getDurationSec(startedAt, now),
+                }
+              : {}),
           },
         });
       } else {
-        const startedAt = answerStartedAt ?? now;
+        const startedAt = now;
         await transaction.trainingAnswer.create({
           data: {
             sessionId,
