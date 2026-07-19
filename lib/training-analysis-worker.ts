@@ -89,11 +89,15 @@ export async function recoverDueTrainingAnalyses() {
         const message = getFriendlyTrainingAnalysisError(error);
         const resourceLimitError =
           error instanceof AIResourceLimitError ? error : null;
+        const deferForResourceLimit =
+          resourceLimitError?.retryable === true;
         const retryable =
-          error instanceof TrainingAnalysisTaskError
+          resourceLimitError
+            ? resourceLimitError.retryable
+            : error instanceof TrainingAnalysisTaskError
             ? error.retryable
             : true;
-        const transition = resourceLimitError
+        const transition = deferForResourceLimit
           ? await deferTrainingAnalysisJob(prisma, {
               sessionId: job.resourceId,
               ownerToken,
@@ -108,7 +112,7 @@ export async function recoverDueTrainingAnalyses() {
               retryable,
             });
         devError(
-          resourceLimitError
+          deferForResourceLimit
             ? "[training-analysis-worker] generation deferred"
             : "[training-analysis-worker] generation failed",
           {

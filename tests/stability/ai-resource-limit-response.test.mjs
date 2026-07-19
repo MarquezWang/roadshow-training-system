@@ -10,6 +10,10 @@ export class AIResourceLimitError extends Error {
     super(message);
     this.retryAfterSec = retryAfterSec;
     this.code = code;
+    this.retryable = ![
+      "AI_REQUEST_EXCEEDS_DAILY_BUDGET",
+      "AI_REQUEST_TOO_LARGE",
+    ].includes(code);
   }
 }`;
 const errorStubUrl = `data:text/javascript;base64,${Buffer.from(errorStub).toString("base64")}`;
@@ -47,8 +51,30 @@ test("AI resource errors use a stable 429 response contract", async () => {
     message: "今日 AI Token 预算已用尽。",
     code: "AI_DAILY_BUDGET_EXHAUSTED",
     retryAfterSec: 3600,
+    retryable: true,
   });
   assert.equal(helper.createAIResourceLimitResponse(new Error("boom")), null);
+});
+
+test("a request larger than its entire daily budget is terminal", async () => {
+  const response = helper.createAIResourceLimitResponse(
+    new AIResourceLimitError(
+      "单次 AI 请求超过每日预算。",
+      0,
+      "AI_REQUEST_EXCEEDS_DAILY_BUDGET",
+    ),
+  );
+
+  assert.equal(response.status, 422);
+  assert.equal(response.headers.get("Retry-After"), null);
+  assert.deepEqual(await response.json(), {
+    status: "failed",
+    error: "单次 AI 请求超过每日预算。",
+    message: "单次 AI 请求超过每日预算。",
+    code: "AI_REQUEST_EXCEEDS_DAILY_BUDGET",
+    retryAfterSec: 0,
+    retryable: false,
+  });
 });
 
 test("daily AI quota retry delay reaches the next UTC boundary", () => {
@@ -91,6 +117,31 @@ test("daily budget errors use the shared UTC quota window", async () => {
     2,
   );
   assert.doesNotMatch(guardSource, /60 \* 60/);
+});
+
+test("an intrinsically oversized request fails before daily usage lookup", async () => {
+  const guardSource = await readFile(
+    new URL("../../lib/ai-resource-guard.ts", import.meta.url),
+    "utf8",
+  );
+  const requestCheckIndex = guardSource.indexOf(
+    "reservedTokens > dailyTokens",
+  );
+  const transactionIndex = guardSource.indexOf("prisma.$transaction");
+  const feasibilityCheckIndex = guardSource.indexOf(
+    "assertRequestReservationFitsBudget(",
+    requestCheckIndex + 1,
+  );
+  const providerCheckIndex = guardSource.indexOf(
+    "state.providerBackoffUntil > now",
+  );
+
+  assert.ok(requestCheckIndex >= 0);
+  assert.ok(transactionIndex > requestCheckIndex);
+  assert.ok(feasibilityCheckIndex > requestCheckIndex);
+  assert.ok(providerCheckIndex > feasibilityCheckIndex);
+  assert.match(guardSource, /AI_REQUEST_EXCEEDS_DAILY_BUDGET/);
+  assert.match(guardSource, /AI_REQUEST_TOO_LARGE/);
 });
 
 test("HTTP AI entry points use the shared 429 response helper", async () => {

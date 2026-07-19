@@ -20,6 +20,7 @@ import {
   AI_RUNTIME_INTEGER_SETTINGS,
   readBoundedIntegerSetting,
 } from "../lib/ai-runtime-config.mjs";
+import { assertAIDailyBudgetSupportsMaximumRequest } from "../lib/ai-resource-config.mjs";
 
 const PROJECT_ROOT = process.cwd();
 const VALID_TRANSCRIPTION_PROVIDERS = new Set([
@@ -306,6 +307,23 @@ async function run() {
         error instanceof Error ? error.message : String(error),
       );
     }
+  }
+
+  try {
+    const aiBudget = assertAIDailyBudgetSupportsMaximumRequest(env);
+    pushCheck(
+      checks,
+      true,
+      `AI_USER_DAILY_TOKENS=${aiBudget.dailyTokens}`,
+      `最大单次预占 ${aiBudget.maxReservedTokensPerRequest} Token`,
+    );
+  } catch (error) {
+    pushCheck(
+      checks,
+      false,
+      `AI_USER_DAILY_TOKENS=${env.AI_USER_DAILY_TOKENS || 500_000}`,
+      error instanceof Error ? error.message : String(error),
+    );
   }
 
   for (const [key, fallback, minimum, maximum] of [

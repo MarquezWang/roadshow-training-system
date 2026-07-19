@@ -113,6 +113,8 @@ test("external Web 只入队报告，Worker 才加载报告执行器", async () 
   assert.match(worker, /failTrainingAnalysisJob/);
   assert.match(worker, /error instanceof AIResourceLimitError/);
   assert.match(worker, /deferTrainingAnalysisJob/);
+  assert.match(worker, /resourceLimitError\?\.retryable === true/);
+  assert.match(worker, /resourceLimitError\.retryable/);
   assert.match(
     worker,
     /Math\.max\(1, resourceLimitError\.retryAfterSec\) \* 1_000/,
