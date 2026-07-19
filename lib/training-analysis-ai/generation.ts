@@ -29,6 +29,8 @@ const ANALYSIS_SYSTEM_PROMPT =
 
 export type GenerateTrainingAnalysisInput = {
   sessionId: string;
+  userId: string;
+  projectId: string;
   userPrompt: string;
   durationSec: number;
   pageCount: number | null;
@@ -70,6 +72,8 @@ export async function generateTrainingAnalysisFromAI(
   try {
     aiResult = await dependencies.callAI({
       task: "pitchAnalysis",
+      userId: input.userId,
+      projectId: input.projectId,
       systemPrompt: ANALYSIS_SYSTEM_PROMPT,
       userPrompt: input.userPrompt,
       temperature: 0.2,
@@ -101,6 +105,8 @@ export async function generateTrainingAnalysisFromAI(
     try {
       aiResult = await dependencies.callAI({
         task: "pitchAnalysis",
+        userId: input.userId,
+        projectId: input.projectId,
         systemPrompt: ANALYSIS_SYSTEM_PROMPT,
         userPrompt: input.userPrompt,
         temperature: 0.2,
@@ -160,6 +166,8 @@ export async function generateTrainingAnalysisFromAI(
     return {
       analysis: await dependencies.parseAnalysisJsonWithRepair(aiResult.text, {
         sessionId: input.sessionId,
+        userId: input.userId,
+        projectId: input.projectId,
         jsonModeEmptyContent,
         retryWithoutJsonMode,
       }),

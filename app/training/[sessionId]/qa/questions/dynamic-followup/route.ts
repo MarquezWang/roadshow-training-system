@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
+import { createAIResourceLimitResponse } from "@/lib/ai-http-response";
 import { readOptionalLimitedJson } from "@/lib/input-limits";
 import { devLog, devWarn } from "@/lib/dev-log";
 import {
@@ -78,6 +79,11 @@ export async function POST(
         status: true,
         projectContextSnapshot: true,
         contextSchemaVersion: true,
+        project: {
+          select: {
+            ownerId: true,
+          },
+        },
       },
     });
 
@@ -167,6 +173,12 @@ export async function POST(
       }),
     );
   } catch (error) {
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) {
+      jobFailed = true;
+      return resourceLimitResponse;
+    }
+
     if (error instanceof DynamicFollowupSessionClosedError) {
       return NextResponse.json(
         buildDynamicFollowupDebugResponse(debug, debugInfo, {

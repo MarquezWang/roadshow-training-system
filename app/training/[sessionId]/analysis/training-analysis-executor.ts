@@ -1,4 +1,5 @@
 import type { TrainingAnalysis } from "@prisma/client";
+import { AIResourceLimitError } from "@/lib/ai-resource-guard";
 import {
   buildProjectAIContext,
   parseProjectAIContextSnapshot,
@@ -285,6 +286,8 @@ export async function executeTrainingAnalysisGeneration({
     );
     const generation = await generateTrainingAnalysisFromAI({
       sessionId,
+      userId: session.project.ownerId,
+      projectId: session.projectId,
       userPrompt,
       durationSec,
       pageCount,
@@ -336,6 +339,7 @@ export async function executeTrainingAnalysisGeneration({
     if (processingAnalysisId) {
       await markTrainingAnalysisFailed(processingAnalysisId, message);
     }
+    if (error instanceof AIResourceLimitError) throw error;
     if (error instanceof TrainingAnalysisTaskError) throw error;
     if (error instanceof ProjectContextNotFoundError) {
       throw new TrainingAnalysisTaskError(error.message, {

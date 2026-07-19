@@ -29,6 +29,7 @@ const aiStubUrl = transpileToDataUrl(`
       this.finishReason = details.finishReason;
     }
   }
+  export class AIResourceLimitError extends Error {}
   export async function callAI() { throw new Error("unexpected default AI call"); }
 `);
 const devLogStubUrl = transpileToDataUrl(`
@@ -85,6 +86,7 @@ const parserSource = (
   await readSource("../../lib/training-analysis-ai/parser.ts")
 )
   .replace('from "@/lib/ai"', `from "${aiStubUrl}"`)
+  .replace('from "@/lib/ai-resource-guard"', `from "${aiStubUrl}"`)
   .replace('from "@/lib/dev-log"', `from "${devLogStubUrl}"`)
   .replace(
     'from "@/lib/diagnostic-log"',
@@ -130,6 +132,8 @@ function emptyContentError(responseFormat, finishReason) {
 function generationInput() {
   return {
     sessionId: "session-1",
+    userId: "user-1",
+    projectId: "project-1",
     userPrompt: "analyze this pitch",
     durationSec: 540,
     pageCount: 12,
@@ -314,7 +318,11 @@ test("analysis parser returns valid initial JSON without repair", async () => {
   const expected = analysisResult("initial");
   const result = await parser.parseAnalysisJsonWithRepair(
     "valid",
-    { sessionId: "session-1" },
+    {
+      sessionId: "session-1",
+      userId: "user-1",
+      projectId: "project-1",
+    },
     {
       callAI: async () => {
         repairCalls += 1;
@@ -336,7 +344,11 @@ test("analysis parser performs one schema repair with the frozen contract", asyn
   const expected = analysisResult("repaired");
   const result = await parser.parseAnalysisJsonWithRepair(
     "broken raw output",
-    { sessionId: "session-1" },
+    {
+      sessionId: "session-1",
+      userId: "user-1",
+      projectId: "project-1",
+    },
     {
       callAI: async (options) => {
         calls.push(options);
@@ -355,10 +367,39 @@ test("analysis parser performs one schema repair with the frozen contract", asyn
   assert.equal(result, expected);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].task, "pitchAnalysis");
+  assert.equal(calls[0].userId, "user-1");
+  assert.equal(calls[0].projectId, "project-1");
   assert.equal(calls[0].temperature, 0);
   assert.equal(calls[0].maxOutputTokens, 16_000);
   assert.match(calls[0].userPrompt, /broken raw output/);
   assert.match(calls[0].userPrompt, /initial invalid/);
+});
+
+test("analysis repair preserves AI resource-limit errors", async () => {
+  const limited = new ai.AIResourceLimitError("limited");
+
+  await assert.rejects(
+    parser.parseAnalysisJsonWithRepair(
+      "broken raw output",
+      {
+        sessionId: "session-1",
+        userId: "user-1",
+        projectId: "project-1",
+      },
+      {
+        callAI: async () => {
+          throw limited;
+        },
+        parseAIJson: () => {
+          throw new Error("initial invalid");
+        },
+        validateTrainingAnalysisResult: (value) => value,
+        writeDiagnosticEvent: async () => {},
+        now: () => new Date(),
+      },
+    ),
+    (error) => error === limited,
+  );
 });
 
 test("analysis parser exposes bounded diagnostics after repair failure", async () => {
@@ -440,6 +481,8 @@ test("analysis generation sends the frozen primary request and returns parsed ou
     fallbackReason: null,
   });
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].userId, "user-1");
+  assert.equal(calls[0].projectId, "project-1");
   assert.equal(calls[0].temperature, 0.2);
   assert.equal(calls[0].maxOutputTokens, 12_000);
   assert.equal(calls[0].disableJsonResponseFormat, undefined);
@@ -447,6 +490,8 @@ test("analysis generation sends the frozen primary request and returns parsed ou
     text: "primary-json",
     context: {
       sessionId: "session-1",
+      userId: "user-1",
+      projectId: "project-1",
       jsonModeEmptyContent: null,
       retryWithoutJsonMode: null,
     },

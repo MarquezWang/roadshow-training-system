@@ -1,4 +1,5 @@
 import { callAI } from "@/lib/ai";
+import { AIResourceLimitError } from "@/lib/ai-resource-guard";
 import { devError, devLog } from "@/lib/dev-log";
 import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { parseAIJson } from "@/lib/json-utils";
@@ -50,6 +51,8 @@ export async function parseAnalysisJsonWithRepair(
   rawText: string,
   debugContext: {
     sessionId: string;
+    userId?: string;
+    projectId?: string;
     jsonModeEmptyContent?: EmptyContentDetails | null;
     retryWithoutJsonMode?: RetryWithoutJsonModeDebug | null;
   },
@@ -69,6 +72,8 @@ export async function parseAnalysisJsonWithRepair(
     try {
       const repairResult = await dependencies.callAI({
         task: "pitchAnalysis",
+        userId: debugContext.userId,
+        projectId: debugContext.projectId,
         systemPrompt:
           "你是严格的 JSON 修复器。只输出合法 JSON，不输出 Markdown 或解释。",
         userPrompt: buildRepairPrompt(rawText, error),
@@ -82,6 +87,8 @@ export async function parseAnalysisJsonWithRepair(
       devLog("路演表现分析 JSON 修复重试成功。");
       return repairedAnalysis;
     } catch (repairError) {
+      if (repairError instanceof AIResourceLimitError) throw repairError;
+
       const debug = buildAnalysisParseFailureDebug(
         {
           rawText,

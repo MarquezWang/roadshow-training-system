@@ -56,6 +56,7 @@ export interface DynamicFollowupDebugInfo {
 
 export type DynamicFollowupSessionRecord = Readonly<{
   projectId: string;
+  project: Readonly<{ ownerId: string }>;
   status: string;
   projectContextSnapshot: string | null;
   contextSchemaVersion?: string;
@@ -63,6 +64,7 @@ export type DynamicFollowupSessionRecord = Readonly<{
 
 export type PreparedDynamicFollowupInput = Readonly<{
   sessionId: string;
+  userId: string;
   projectId: string;
   pitchTranscriptText: string;
   transcriptText: string;

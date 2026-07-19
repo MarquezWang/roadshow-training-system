@@ -1,4 +1,5 @@
 import { callAI } from "@/lib/ai";
+import { AIResourceLimitError } from "@/lib/ai-resource-guard";
 import { devLog, devWarn } from "@/lib/dev-log";
 import {
   callContentDynamicFollowup,
@@ -46,6 +47,7 @@ async function attemptMismatchFallback(
 ): Promise<SerializedDynamicQuestion | null> {
   const {
     sessionId,
+    userId,
     projectId,
     projectName,
     projectContextText,
@@ -58,6 +60,7 @@ async function attemptMismatchFallback(
       sessionId,
     });
     const mismatchResult = await callMismatchDynamicFollowup({
+      userId,
       projectId,
       projectTitle: projectName ?? "",
       projectContext: projectContextText.slice(0, 2000),
@@ -117,6 +120,8 @@ async function attemptMismatchFallback(
     debugInfo.usedStage = "mismatch";
     return createdQuestion;
   } catch (fallbackError) {
+    if (fallbackError instanceof AIResourceLimitError) throw fallbackError;
+
     debugInfo.fallbackValidationReason = "fallback_error";
     debugInfo.fallbackUsed = false;
     devWarn("[dynamic-followup:POST] mismatch fallback error", {
@@ -153,12 +158,13 @@ async function attemptContentFallbackRetry(
   input: PreparedDynamicFollowupInput,
   debugInfo: DynamicFollowupDebugInfo,
 ): Promise<SerializedDynamicQuestion | null> {
-  const { sessionId, projectId, transcriptText, otherQuestions } = input;
+  const { sessionId, userId, projectId, transcriptText, otherQuestions } = input;
   debugInfo.contentFallbackRetryAttempted = true;
 
   try {
     const retryResult = await callAI({
       task: "dynamicFollowup",
+      userId,
       projectId,
       systemPrompt: "你是一名专业路演答辩评委，只输出一个问题。",
       userPrompt: buildContentFallbackRetryPrompt(input),
@@ -215,6 +221,8 @@ async function attemptContentFallbackRetry(
     debugInfo.usedStage = "content";
     return createdQuestion;
   } catch (retryError) {
+    if (retryError instanceof AIResourceLimitError) throw retryError;
+
     debugInfo.contentFallbackRetryValidationReason = "retry_error";
     debugInfo.contentFallbackRetryUsed = false;
     debugInfo.contentFallbackValidationReason = "content_fallback_error";
@@ -233,6 +241,7 @@ async function attemptContentFallback(
 ): Promise<SerializedDynamicQuestion | null> {
   const {
     sessionId,
+    userId,
     projectId,
     projectName,
     projectContextText,
@@ -254,6 +263,7 @@ async function attemptContentFallback(
       sessionId,
     });
     const contentResult = await callContentDynamicFollowup({
+      userId,
       projectId,
       projectTitle: projectName ?? "",
       projectContext: projectContextText.slice(0, 2000),
@@ -316,6 +326,8 @@ async function attemptContentFallback(
     debugInfo.usedStage = "content";
     return createdQuestion;
   } catch (contentError) {
+    if (contentError instanceof AIResourceLimitError) throw contentError;
+
     debugInfo.contentFallbackError = String(contentError);
     devWarn(
       "[dynamic-followup:POST] content fallback error, attempting retry",
@@ -371,8 +383,9 @@ export async function generateDynamicFollowup(
   input: PreparedDynamicFollowupInput,
   debugInfo: DynamicFollowupDebugInfo,
 ): Promise<DynamicFollowupGenerationResult> {
-  const { sessionId, projectId, transcriptText, otherQuestions } = input;
+  const { sessionId, userId, projectId, transcriptText, otherQuestions } = input;
   const followupResult = await callMainDynamicFollowup({
+    userId,
     transcript: input.pitchTranscriptText,
     aiContext: input.aiContext,
     existingQuestions: input.otherQuestionsText,

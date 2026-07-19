@@ -222,16 +222,11 @@ export function normalizeMainMultipleQuestionText(text: string) {
     .slice(0, firstQuestionMarkIndex)
     .trim()
     .replace(/^请问/, "请说明");
-  const secondPart = text
-    .slice(firstQuestionMarkIndex + 1, lastQuestionMarkIndex)
-    .trim()
-    .replace(/^(并且|同时|另外|还有|具体|请问)/, "")
-    .trim();
   const trailingText = text.slice(lastQuestionMarkIndex + 1).trim();
 
-  if (!firstPart || !secondPart || trailingText) {
+  if (!firstPart || trailingText) {
     return null;
   }
 
-  return `${firstPart}，以及${secondPart}？`;
+  return `${firstPart}？`;
 }

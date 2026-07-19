@@ -7,6 +7,11 @@ export async function findTrainingAnalysisSession(sessionId: string) {
   return prisma.trainingSession.findUnique({
     where: { id: sessionId },
     include: {
+      project: {
+        select: {
+          ownerId: true,
+        },
+      },
       slideEvents: {
         orderBy: { createdAt: "asc" },
         select: {

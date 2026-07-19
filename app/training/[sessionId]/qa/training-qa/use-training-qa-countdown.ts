@@ -9,7 +9,6 @@ type UseTrainingQaCountdownOptions = Pick<
   | "answerPhaseStartedMsRef"
   | "beginPreAnswerCountdownRef"
   | "countdownIntervalRef"
-  | "currentAnswerStartedAtRef"
   | "setDynamicFollowupUsedSec"
   | "setPreAnswerOverlay"
   | "setQaPhase"
@@ -28,7 +27,6 @@ export function useTrainingQaCountdown({
   cancelSpeech,
   clearSpeechTimer,
   countdownIntervalRef,
-  currentAnswerStartedAtRef,
   setDynamicFollowupUsedSec,
   setPreAnswerOverlay,
   setQaPhase,
@@ -50,7 +48,6 @@ export function useTrainingQaCountdown({
       usedAnswerSec,
     );
 
-    currentAnswerStartedAtRef.current = new Date();
     answerPhaseStartedMsRef.current = Date.now();
     answerElapsedBeforePhaseRef.current = currentUsedAnswerSec;
     setUsedAnswerSec(currentUsedAnswerSec);
@@ -64,7 +61,6 @@ export function useTrainingQaCountdown({
     answerPhaseStartedMsRef,
     cancelSpeech,
     clearCountdownTimer,
-    currentAnswerStartedAtRef,
     setDynamicFollowupUsedSec,
     setQaPhase,
     setUsedAnswerSec,

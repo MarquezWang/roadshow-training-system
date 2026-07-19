@@ -23,6 +23,7 @@ type UseTrainingQaQuestionFlowOptions = Pick<
   clearRecordingMessage: () => void;
   clearSpeechTimer: () => void;
   currentQuestion: TrainingQaQuestion | null;
+  markQuestionStarted: (questionId: string) => void;
   markQuestionTextRevealed: (questionId: string) => void;
   setQuestionTextDialog: Dispatch<SetStateAction<QuestionTextDialog>>;
   startQuestionSpeech: (question: TrainingQaQuestion) => void;
@@ -37,6 +38,7 @@ export function useTrainingQaQuestionFlow({
   currentQuestion,
   dynamicFollowupIntroShownQuestionIdsRef,
   dynamicFollowupIntroTimerRef,
+  markQuestionStarted,
   markQuestionTextRevealed,
   questions,
   setCurrentQuestionIndex,
@@ -84,6 +86,7 @@ export function useTrainingQaQuestionFlow({
         return;
       }
 
+      markQuestionStarted(question.id);
       setCurrentQuestionIndex(questionIndex);
       setDynamicFollowupIntroQuestion(null);
       setQaPhase("ASKING");
@@ -98,6 +101,7 @@ export function useTrainingQaQuestionFlow({
       clearSpeechTimer,
       dynamicFollowupIntroShownQuestionIdsRef,
       dynamicFollowupIntroTimerRef,
+      markQuestionStarted,
       questions,
       setCurrentQuestionIndex,
       setDynamicFollowupIntroQuestion,

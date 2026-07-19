@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentAccessUserId, withOwnerFilter } from "@/lib/auth-server";
 import { callAI } from "@/lib/ai";
+import { createAIResourceLimitResponse } from "@/lib/ai-http-response";
 import {
   buildProjectAIContext,
   ProjectContextNotFoundError,
@@ -123,6 +124,7 @@ export async function POST(
     const userPrompt = buildScoringPrompt(aiContext, template);
     const aiResult = await callAI({
       task: "scoring",
+      userId,
       projectId: id,
       systemPrompt:
         "你是严格遵循 JSON 输出约束的路演大赛评分专家。只输出合法 JSON，不输出 Markdown 或额外解释。",
@@ -164,6 +166,9 @@ export async function POST(
       new URLSearchParams({ scoringStatus: "success" }),
     );
   } catch (error) {
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) return resourceLimitResponse;
+
     const message = error instanceof Error ? error.message : "AI 评分生成失败。";
     console.error("AI 评分生成失败。", { projectId: id, error: message });
 

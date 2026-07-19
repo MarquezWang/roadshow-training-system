@@ -9,6 +9,7 @@ import {
 } from "@/lib/ai-resource-guard";
 import { writeDiagnosticEvent } from "@/lib/diagnostic-log";
 import { UNTRUSTED_DATA_SYSTEM_POLICY } from "@/lib/prompt-data-boundary";
+import { getAIRuntimeLimits } from "@/lib/ai-runtime-config.mjs";
 
 type CallAIOptions = {
   systemPrompt: string;
@@ -19,6 +20,7 @@ type CallAIOptions = {
   seed?: number;
   disableJsonResponseFormat?: boolean;
   projectId?: string;
+  userId?: string | null;
 };
 
 type CallAIResult = {
@@ -51,31 +53,11 @@ export class AIEmptyContentError extends Error {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 60_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 3_000;
-
 function getRequiredEnv(name: string) {
   const value = process.env[name]?.trim();
 
   if (!value) {
     throw new Error(`缺少必要环境变量：${name}`);
-  }
-
-  return value;
-}
-
-function getBoundedIntegerEnv(
-  name: string,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-) {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(`${name} 必须是 ${minimum} 到 ${maximum} 之间的整数。`);
   }
 
   return value;
@@ -91,18 +73,7 @@ function getAIConfig(task: AiModelTask) {
   const apiKey = getRequiredEnv("AI_API_KEY");
   const model = getAiModel(task);
   const baseURL = process.env.AI_BASE_URL?.trim() || undefined;
-  const timeoutMs = getBoundedIntegerEnv(
-    "AI_TIMEOUT_MS",
-    DEFAULT_TIMEOUT_MS,
-    1_000,
-    5 * 60_000,
-  );
-  const maxOutputTokens = getBoundedIntegerEnv(
-    "AI_MAX_OUTPUT_TOKENS",
-    DEFAULT_MAX_OUTPUT_TOKENS,
-    100,
-    100_000,
-  );
+  const { timeoutMs, maxOutputTokens } = getAIRuntimeLimits(process.env);
 
   return {
     apiKey,
@@ -185,18 +156,14 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     throw error;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-  const client = new OpenAI({
-    apiKey: config.apiKey,
-    baseURL: config.baseURL,
-  });
-  let userKey = "system";
-  try {
-    const { getCurrentAuthUser } = await import("@/lib/auth-server");
-    userKey = (await getCurrentAuthUser())?.id ?? "local";
-  } catch {
-    userKey = "system";
+  let userKey = options.userId?.trim() || "system";
+  if (!options.userId?.trim()) {
+    try {
+      const { getCurrentAuthUser } = await import("@/lib/auth-server");
+      userKey = (await getCurrentAuthUser())?.id ?? "local";
+    } catch {
+      userKey = "system";
+    }
   }
   const projectKey = options.projectId?.trim() || "unscoped";
   const requestedOutputTokens = options.maxOutputTokens ?? config.maxOutputTokens;
@@ -217,9 +184,15 @@ export async function callAI(options: CallAIOptions): Promise<CallAIResult> {
     task,
     reservedTokens,
   });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   let completed = false;
 
   try {
+    const client = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
+    });
     const responseFormat = isReportJsonTask(task) && !options.disableJsonResponseFormat
       ? ({ type: "json_object" } as const)
       : undefined;

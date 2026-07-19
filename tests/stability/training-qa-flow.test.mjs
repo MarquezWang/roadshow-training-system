@@ -216,7 +216,6 @@ test("动态追问独立计时并计入会话总时长", () => {
 test("QA 结束请求体保留可选字段和文本揭示状态", () => {
   assert.deepEqual(
     buildQaEndRequestBody({
-      answerStartedAt: new Date("2026-01-01T00:00:00.000Z"),
       qaDurationSec: 91,
       questionId: "question-1",
       recordingId: "recording-1",
@@ -224,7 +223,6 @@ test("QA 结束请求体保留可选字段和文本揭示状态", () => {
     }),
     {
       questionId: "question-1",
-      answerStartedAt: "2026-01-01T00:00:00.000Z",
       revealedQuestionText: true,
       recordingId: "recording-1",
       qaDurationSec: 91,
@@ -235,7 +233,6 @@ test("QA 结束请求体保留可选字段和文本揭示状态", () => {
 test("保存回答请求体显式传递完成和目标题策略", () => {
   assert.deepEqual(
     buildQaAnswerRequestBody({
-      answerStartedAt: null,
       finish: false,
       preferredNextQuestionId: "dynamic-question",
       qaDurationSec: 120,
@@ -243,7 +240,6 @@ test("保存回答请求体显式传递完成和目标题策略", () => {
       revealedQuestionText: false,
     }),
     {
-      answerStartedAt: undefined,
       revealedQuestionText: false,
       recordingId: undefined,
       qaDurationSec: 120,

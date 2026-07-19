@@ -224,6 +224,7 @@ export async function prepareDynamicFollowupGeneration(params: {
     kind: "ready",
     input: {
       sessionId,
+      userId: session.project.ownerId,
       projectId: session.projectId,
       pitchTranscriptText: pitchTranscript.text,
       transcriptText,

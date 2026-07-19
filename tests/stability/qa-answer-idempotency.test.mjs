@@ -52,6 +52,17 @@ async function postAnswer(sessionId, questionId, body) {
   return { response, body: responseBody };
 }
 
+async function postAnswerStart(sessionId, questionId) {
+  const response = await fetch(
+    `${baseUrl}/training/${sessionId}/qa/questions/${questionId}/start`,
+    { method: "POST" },
+  );
+  return {
+    response,
+    body: await response.json().catch(() => null),
+  };
+}
+
 const safetySkipReason = getSafetySkipReason();
 
 test(
@@ -76,6 +87,7 @@ test(
       answerText,
       withRecordingA = false,
       withRecordingB = false,
+      createExistingAnswer = true,
     }) {
       const sessionId = `${runPrefix}-${name}`;
       const questionId = `${sessionId}-q1`;
@@ -147,19 +159,21 @@ test(
         });
       }
 
-      await prisma.trainingAnswer.create({
-        data: {
-          id: `${questionId}-answer`,
-          sessionId,
-          questionId,
-          recordingId: withRecordingA ? recordingAId : null,
-          answerText,
-          revealedQuestionText: true,
-          startedAt,
-          endedAt,
-          durationSec,
-        },
-      });
+      if (createExistingAnswer) {
+        await prisma.trainingAnswer.create({
+          data: {
+            id: `${questionId}-answer`,
+            sessionId,
+            questionId,
+            recordingId: withRecordingA ? recordingAId : null,
+            answerText,
+            revealedQuestionText: true,
+            startedAt,
+            endedAt,
+            durationSec,
+          },
+        });
+      }
 
       return {
         sessionId,
@@ -283,6 +297,32 @@ test(
         });
 
         assert.equal(savedAnswer.recordingId, fixture.recordingAId);
+      });
+
+      await t.test("逐题时长只使用服务端开始时间", async () => {
+        const fixture = await createFixture({
+          name: "server-start-time",
+          answerText: null,
+          createExistingAnswer: false,
+        });
+        const startResult = await postAnswerStart(
+          fixture.sessionId,
+          fixture.questionId,
+        );
+        assert.equal(startResult.response.status, 200);
+        const serverStartedAt = new Date(startResult.body.startedAt);
+
+        const savedAnswer = await submitAndReadAnswer(fixture, {
+          answerText: "使用服务端计时。",
+          answerStartedAt: "2099-01-01T00:00:00.000Z",
+          finish: false,
+        });
+
+        assert.equal(
+          savedAnswer.startedAt?.getTime(),
+          serverStartedAt.getTime(),
+        );
+        assert.ok(savedAnswer.durationSec >= 0);
       });
     } finally {
       await prisma.trainingSession.deleteMany({

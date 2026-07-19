@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callAI } from "@/lib/ai";
+import { createAIResourceLimitResponse } from "@/lib/ai-http-response";
 import { loadPromptTemplate } from "@/lib/prompt-loader";
 import { renderPrompt } from "@/lib/prompt-renderer";
 import { isAuthEnabled } from "@/lib/auth";
@@ -51,6 +52,7 @@ export async function GET() {
 
     const result = await callAI({
       task: "aiConnectivityTest",
+      userId: user?.id,
       systemPrompt:
         "你是路演培训系统的开发测试助手。请严格遵守用户 Prompt 的 JSON 输出要求。",
       userPrompt,
@@ -61,6 +63,9 @@ export async function GET() {
       text: result.text,
     });
   } catch (error) {
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) return resourceLimitResponse;
+
     const message =
       error instanceof Error ? error.message : "AI 测试接口调用失败。";
 

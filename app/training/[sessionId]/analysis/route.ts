@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { acquireAsyncJob, releaseAsyncJob } from "@/lib/async-job";
+import { createAIResourceLimitResponse } from "@/lib/ai-http-response";
 import { isSessionOwnedByCurrentUser } from "@/lib/auth-server";
 import { usesExternalBackgroundWorker } from "@/lib/background-task-mode.mjs";
 import { prisma } from "@/lib/prisma";
-import { queueTrainingAnalysisJob } from "@/lib/training-analysis-job.mjs";
+import {
+  queueTrainingAnalysisJob,
+  startTrainingAnalysisLeaseRenewal,
+} from "@/lib/training-analysis-job.mjs";
 import {
   executeTrainingAnalysisGeneration,
   getFriendlyTrainingAnalysisError,
@@ -150,6 +154,10 @@ export async function POST(
   }
 
   let jobError: string | null = null;
+  const leaseRenewal = startTrainingAnalysisLeaseRenewal(prisma, {
+    sessionId,
+    ownerToken: acquiredJob.ownerToken,
+  });
   try {
     const analysis = await executeTrainingAnalysisGeneration({
       sessionId,
@@ -159,6 +167,11 @@ export async function POST(
     return NextResponse.json({ analysis: serializeTrainingAnalysis(analysis) });
   } catch (error) {
     const message = getFriendlyTrainingAnalysisError(error);
+    const resourceLimitResponse = createAIResourceLimitResponse(error);
+    if (resourceLimitResponse) {
+      jobError = message;
+      return resourceLimitResponse;
+    }
     if (error instanceof TrainingAnalysisTaskError) {
       if (shouldFailEmbeddedJob(error)) jobError = message;
       return taskErrorResponse(error);
@@ -166,6 +179,7 @@ export async function POST(
     jobError = message;
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
+    await leaseRenewal.stop();
     await releaseAsyncJob({
       jobKey: getTrainingAnalysisJobKey(sessionId),
       ownerToken: acquiredJob.ownerToken,

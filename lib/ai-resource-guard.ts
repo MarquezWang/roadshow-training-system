@@ -77,11 +77,25 @@ function quotaConfig() {
 
 export class AIResourceLimitError extends Error {
   retryAfterSec: number;
+  code:
+    | "AI_RATE_LIMITED"
+    | "AI_DAILY_BUDGET_EXHAUSTED"
+    | "AI_CONCURRENCY_LIMITED"
+    | "AI_PROVIDER_UNAVAILABLE";
 
-  constructor(message: string, retryAfterSec: number) {
+  constructor(
+    message: string,
+    retryAfterSec: number,
+    code:
+      | "AI_RATE_LIMITED"
+      | "AI_DAILY_BUDGET_EXHAUSTED"
+      | "AI_CONCURRENCY_LIMITED"
+      | "AI_PROVIDER_UNAVAILABLE",
+  ) {
     super(message);
     this.name = "AIResourceLimitError";
     this.retryAfterSec = retryAfterSec;
+    this.code = code;
   }
 }
 
@@ -113,10 +127,18 @@ async function reserveDailyBudget(params: {
     const tokenCount = usage._sum.tokenCount ?? 0;
 
     if (requestCount >= config.dailyRequests) {
-      throw new AIResourceLimitError("今日 AI 请求次数已达到上限。", 60 * 60);
+      throw new AIResourceLimitError(
+        "今日 AI 请求次数已达到上限。",
+        60 * 60,
+        "AI_DAILY_BUDGET_EXHAUSTED",
+      );
     }
     if (tokenCount + params.reservedTokens > config.dailyTokens) {
-      throw new AIResourceLimitError("今日 AI Token 预算已用尽。", 60 * 60);
+      throw new AIResourceLimitError(
+        "今日 AI Token 预算已用尽。",
+        60 * 60,
+        "AI_DAILY_BUDGET_EXHAUSTED",
+      );
     }
 
     await transaction.aiQuotaUsage.upsert({
@@ -158,6 +180,7 @@ export async function acquireAIResources(params: {
     throw new AIResourceLimitError(
       "AI 服务暂时熔断，请稍后重试。",
       Math.max(1, Math.ceil((state.providerBackoffUntil - now) / 1_000)),
+      "AI_PROVIDER_UNAVAILABLE",
     );
   }
 
@@ -168,18 +191,31 @@ export async function acquireAIResources(params: {
     throw new AIResourceLimitError(
       "AI 请求过于频繁，请稍后重试。",
       Math.max(1, Math.ceil((60_000 - (now - recent[0])) / 1_000)),
+      "AI_RATE_LIMITED",
     );
   }
 
   const scopeKey = `${params.userKey}:${params.projectKey}:${params.task}`;
   if ((state.activeByUser.get(params.userKey) ?? 0) >= config.userConcurrency) {
-    throw new AIResourceLimitError("当前用户的 AI 并发任务已达到上限。", 5);
+    throw new AIResourceLimitError(
+      "当前用户的 AI 并发任务已达到上限。",
+      5,
+      "AI_CONCURRENCY_LIMITED",
+    );
   }
   if ((state.activeByScope.get(scopeKey) ?? 0) >= config.scopeConcurrency) {
-    throw new AIResourceLimitError("同一项目的同类 AI 任务正在处理中。", 5);
+    throw new AIResourceLimitError(
+      "同一项目的同类 AI 任务正在处理中。",
+      5,
+      "AI_CONCURRENCY_LIMITED",
+    );
   }
   if (state.globalActive >= config.globalConcurrency) {
-    throw new AIResourceLimitError("AI 服务当前繁忙，请稍后重试。", 5);
+    throw new AIResourceLimitError(
+      "AI 服务当前繁忙，请稍后重试。",
+      5,
+      "AI_CONCURRENCY_LIMITED",
+    );
   }
 
   recent.push(now);

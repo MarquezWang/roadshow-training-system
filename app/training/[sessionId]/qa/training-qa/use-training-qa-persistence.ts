@@ -16,7 +16,6 @@ type SaveAndContinueOptions = Readonly<{
 type UseTrainingQaPersistenceOptions = Pick<
   TrainingQaState,
   | "answerElapsedBeforePhaseRef"
-  | "currentAnswerStartedAtRef"
   | "currentQuestionIndex"
   | "hasAutoEndedRef"
   | "isCompletingNormallyRef"
@@ -48,7 +47,6 @@ export function useTrainingQaPersistence({
   cancelSpeech,
   clearCountdownTimer,
   clearSpeechTimer,
-  currentAnswerStartedAtRef,
   currentQuestion,
   currentQuestionIndex,
   getCurrentUsedAnswerSec,
@@ -92,7 +90,6 @@ export function useTrainingQaPersistence({
           body: JSON.stringify(
             buildQaEndRequestBody({
               questionId: question?.id,
-              answerStartedAt: currentAnswerStartedAtRef.current,
               revealedQuestionText: question
                 ? revealedQuestionIds.has(question.id)
                 : false,
@@ -125,7 +122,6 @@ export function useTrainingQaPersistence({
       cancelSpeech,
       clearCountdownTimer,
       clearSpeechTimer,
-      currentAnswerStartedAtRef,
       getSessionQaDurationSec,
       hasAutoEndedRef,
       isCompletingNormallyRef,
@@ -170,7 +166,6 @@ export function useTrainingQaPersistence({
             },
             body: JSON.stringify(
               buildQaAnswerRequestBody({
-                answerStartedAt: currentAnswerStartedAtRef.current,
                 revealedQuestionText: revealedQuestionIds.has(
                   currentQuestion.id,
                 ),
@@ -243,7 +238,6 @@ export function useTrainingQaPersistence({
     [
       answerElapsedBeforePhaseRef,
       beginJudgeQuestion,
-      currentAnswerStartedAtRef,
       currentQuestion,
       currentQuestionIndex,
       getCurrentUsedAnswerSec,

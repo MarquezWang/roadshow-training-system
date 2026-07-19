@@ -4,6 +4,7 @@ import {
   acquireTrainingAnalysisJob,
   completeTrainingAnalysisJob,
   failTrainingAnalysisJob,
+  startTrainingAnalysisLeaseRenewal,
   TRAINING_ANALYSIS_JOB_TYPE,
 } from "@/lib/training-analysis-job.mjs";
 import {
@@ -50,6 +51,22 @@ export async function recoverDueTrainingAnalyses() {
       const payload = acquired.payload;
       if (!ownerToken || !payload) continue;
       acquiredCount += 1;
+      const leaseRenewal = startTrainingAnalysisLeaseRenewal(prisma, {
+        sessionId: job.resourceId,
+        ownerToken,
+        onError(error: unknown) {
+          devError("[training-analysis-worker] lease renewal failed", {
+            sessionId: job.resourceId,
+            message:
+              error instanceof Error ? error.message : String(error),
+          });
+        },
+        onOwnershipLost() {
+          devError("[training-analysis-worker] lease ownership lost", {
+            sessionId: job.resourceId,
+          });
+        },
+      });
 
       try {
         await executeTrainingAnalysisGeneration({
@@ -83,6 +100,8 @@ export async function recoverDueTrainingAnalyses() {
           retryable,
           message: message.slice(0, 300),
         });
+      } finally {
+        await leaseRenewal.stop();
       }
     }
     return acquiredCount;

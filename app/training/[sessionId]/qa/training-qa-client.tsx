@@ -65,7 +65,6 @@ export function TrainingQaClient({
     beginJudgeQuestionRef,
     beginPreAnswerCountdownRef,
     countdownIntervalRef,
-    currentAnswerStartedAtRef,
     currentQuestionIndex,
     dynamicFollowupIntroQuestion,
     dynamicFollowupIntroShownQuestionIdsRef,
@@ -163,6 +162,29 @@ export function TrainingQaClient({
     startQuestionRecording,
     stopAndUploadCurrentRecording,
   } = useQaRecording({ sessionId });
+  const markQuestionStarted = useCallback(
+    (questionId: string) => {
+      void fetch(
+        `/training/${sessionId}/qa/questions/${questionId}/start`,
+        { method: "POST" },
+      )
+        .then(async (response) => {
+          if (response.ok) return;
+          const body = (await response.json().catch(() => null)) as {
+            error?: string;
+          } | null;
+          throw new Error(body?.error ?? "记录本题开始时间失败。");
+        })
+        .catch((error) => {
+          setMessage(
+            error instanceof Error
+              ? error.message
+              : "记录本题开始时间失败。",
+          );
+        });
+    },
+    [sessionId, setMessage],
+  );
 
   const { isGenerating } = useQaQuestionGeneration({
     sessionId,
@@ -181,7 +203,6 @@ export function TrainingQaClient({
     cancelSpeech,
     clearSpeechTimer,
     countdownIntervalRef,
-    currentAnswerStartedAtRef,
     setDynamicFollowupUsedSec,
     setPreAnswerOverlay,
     setQaPhase,
@@ -212,6 +233,7 @@ export function TrainingQaClient({
     dynamicFollowupIntroShownQuestionIdsRef,
     dynamicFollowupIntroTimerRef,
     markQuestionTextRevealed,
+    markQuestionStarted,
     questions,
     setCurrentQuestionIndex,
     setDynamicFollowupIntroQuestion,
@@ -231,7 +253,6 @@ export function TrainingQaClient({
       cancelSpeech,
       clearCountdownTimer,
       clearSpeechTimer,
-      currentAnswerStartedAtRef,
       currentQuestion,
       currentQuestionIndex,
       getCurrentUsedAnswerSec,
